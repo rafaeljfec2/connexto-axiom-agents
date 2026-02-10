@@ -6,6 +6,7 @@ export interface Goal {
   readonly description: string | null;
   readonly status: string;
   readonly priority: number;
+  readonly project_id: string | null;
   readonly created_at: string;
   readonly updated_at: string;
 }
@@ -14,4 +15,15 @@ export function loadGoals(db: BetterSqlite3.Database): readonly Goal[] {
   return db
     .prepare("SELECT * FROM goals WHERE status = 'active' ORDER BY priority DESC")
     .all() as Goal[];
+}
+
+export function loadGoalsByProject(
+  db: BetterSqlite3.Database,
+  projectId: string,
+): readonly Goal[] {
+  return db
+    .prepare(
+      "SELECT * FROM goals WHERE status = 'active' AND project_id = ? ORDER BY priority DESC",
+    )
+    .all(projectId) as Goal[];
 }

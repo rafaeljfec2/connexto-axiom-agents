@@ -59,6 +59,7 @@ src/bot.ts           Telegram bot entry point (persistent long-polling)
 | 17    | Marketing Metrics & Feedback     | Engagement metrics influence KAIROS decisions         | Done   |
 | 18    | Governed Code Changes            | FORGE modifies code with PR virtual cycle             | Done   |
 | 22    | NEXUS Technical Research         | Research agent reduces uncertainty before coding      | Done   |
+| 23.1  | Multi-Project Manifest           | Project manifests, isolation by project_id, structure | Done   |
 
 ## Key Features
 
@@ -99,6 +100,7 @@ src/bot.ts           Telegram bot entry point (persistent long-polling)
 | `marketing_metrics`  | Engagement data (stub/manual/api)                     |
 | `marketing_feedback` | Content performance grades (STRONG/AVERAGE/WEAK)      |
 | `nexus_research`     | Technical research outputs with structured analysis   |
+| `projects`           | Registered project manifests with runtime state       |
 
 ## Project Structure
 
@@ -110,9 +112,13 @@ execution/           FORGE/VECTOR executors, OpenClaw adapters, publisher, sandb
 interfaces/          Telegram sender + bot (long-polling)
 llm/                 LLM client with failover
 orchestration/       Kairos cycle, decision filter, feedback adjusters, briefing
+projects/            Project manifests and multi-project support
+  default/           Default project (retrocompatibility)
+  <project-id>/      Per-project directories (forge/, workspace/, state/)
 runtime/openclaw/    OpenClaw agent configs and skills
-scripts/             Bootstrap, cron runner, seed data
+scripts/             Bootstrap, cron runner, seed data, register-project
 services/            Approval service, metrics collector
+shared/policies/     Cross-project policies (risk limits)
 src/                 Entry points (main.ts, bot.ts)
 state/               SQLite schema, migrations, all table CRUD modules
 ```

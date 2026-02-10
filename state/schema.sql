@@ -239,3 +239,21 @@ CREATE TABLE IF NOT EXISTS nexus_research (
 
 CREATE INDEX IF NOT EXISTS idx_nexus_research_goal_id ON nexus_research(goal_id);
 CREATE INDEX IF NOT EXISTS idx_nexus_research_created_at ON nexus_research(created_at);
+
+CREATE TABLE IF NOT EXISTS projects (
+  id                    TEXT PRIMARY KEY,
+  project_id            TEXT NOT NULL UNIQUE,
+  repo_source           TEXT NOT NULL,
+  language              TEXT NOT NULL,
+  framework             TEXT NOT NULL,
+  risk_profile          TEXT NOT NULL CHECK (risk_profile IN ('low', 'medium', 'high')),
+  autonomy_level        INTEGER NOT NULL CHECK (autonomy_level BETWEEN 1 AND 3),
+  token_budget_monthly  INTEGER NOT NULL,
+  status                TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'maintenance', 'paused')),
+  tokens_used_month     INTEGER NOT NULL DEFAULT 0,
+  created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_projects_project_id ON projects(project_id);
+CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);

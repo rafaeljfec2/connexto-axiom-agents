@@ -342,3 +342,43 @@ O ciclo PR virtual foi testado com sucesso:
 - NEXUS nao escreve codigo, nao cria arquivos, nao altera repositorio
 - NEXUS nao decide implementacao final
 - KAIROS e o unico orquestrador
+
+---
+
+## FASE 23.1 -- Manifesto de Projeto e Estrutura Base
+
+**Objetivo:** Introduzir suporte a multiplos projetos como camada sobre a arquitetura existente, sem mover arquivos ou quebrar imports. O conceito de `project_id` e adicionado progressivamente nas tabelas e fluxos.
+
+**Abordagem:** Camada por cima (layer on top) com banco unico e coluna `project_id`.
+
+### Componentes Implementados
+
+1. **Manifest Schema** (`projects/manifest.schema.ts`): interface `ProjectManifest`, validacao rigorosa (`projectId` kebab-case, budget positivo, risk profile valido), tipo `ManifestValidationError`
+2. **Manifest Loader** (`projects/manifestLoader.ts`): `loadManifest(projectId)` e `loadAllManifests()` para carregar e parsear YAML
+3. **Tabela `projects`** (`state/schema.sql`): armazena manifestos com campos de runtime (`tokens_used_month`, `created_at`, `updated_at`)
+4. **Migration** (`state/db.ts`): `migrateGoalsProjectId()` adiciona coluna `project_id` na tabela `goals` e migra existentes para `"default"`
+5. **Projects CRUD** (`state/projects.ts`): `saveProject`, `getActiveProject`, `getAllProjects`, `getProjectById`, `updateProjectStatus`, `getProjectTokenUsage`, `incrementProjectTokens`, `syncProjectsFromManifests`
+6. **Project Limits** (`shared/policies/project-limits.ts`): mapeia `riskProfile` para limites concretos (`maxRiskLevel`, `maxFilesPerChange`, `approvalRequiredAboveRisk`)
+7. **Goals por Projeto** (`state/goals.ts`): `loadGoalsByProject(db, projectId)` filtra goals por projeto
+8. **Default Manifest** (`projects/default/manifest.yaml`): projeto existente registrado como `"default"` com `status: active`
+9. **Register Script** (`scripts/register-project.ts`): CLI para criar estrutura de projeto e manifesto template
+10. **Seed Goal** (`scripts/seed-goal.ts`): aceita `--project <id>` para associar goals a projetos
+
+### Integracao
+
+- **main.ts**: carrega manifestos, sincroniza com DB, resolve projeto ativo, passa `projectId` para `runKairos`
+- **runKairos**: aceita `projectId` opcional, filtra goals por projeto quando informado
+
+### Retrocompatibilidade
+
+- Se `projects/` nao existir ou estiver vazio, o sistema usa `projectId = "default"`
+- Goals existentes sem `project_id` sao migrados automaticamente para `"default"`
+- `runKairos(db)` sem segundo argumento continua funcionando como antes
+- Nenhum fluxo existente quebra
+
+### Regra de Ouro
+
+No maximo 1 projeto `active` por ciclo. Se houver mais de 1, o sistema loga warning e usa o primeiro por ordem de criacao.
+
+**Tabelas criadas:** `projects`
+**Colunas adicionadas:** `goals.project_id`

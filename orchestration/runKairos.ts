@@ -25,7 +25,7 @@ import { getPublicationCount7d } from "../state/publications.js";
 import { getCurrentBudget, incrementUsedTokens } from "../state/budgets.js";
 import { saveDecision, loadRecentDecisions } from "../state/decisions.js";
 import { getAverageTokensPerDecision7d } from "../state/efficiencyMetrics.js";
-import { loadGoals } from "../state/goals.js";
+import { loadGoals, loadGoalsByProject } from "../state/goals.js";
 import { saveOutcome } from "../state/outcomes.js";
 import { recordTokenUsage } from "../state/tokenUsage.js";
 import { callKairosLLM } from "./kairosLLM.js";
@@ -44,13 +44,16 @@ import type {
 } from "./types.js";
 import { validateKairosOutput } from "./validateKairos.js";
 
-export async function runKairos(db: BetterSqlite3.Database): Promise<void> {
-  logger.info("Starting cycle...");
+export async function runKairos(
+  db: BetterSqlite3.Database,
+  projectId?: string,
+): Promise<void> {
+  logger.info({ projectId: projectId ?? "all" }, "Starting cycle...");
 
   await trySyncPRs(db);
 
-  const goals = loadGoals(db);
-  logger.info({ goalsCount: goals.length }, "Active goals loaded");
+  const goals = projectId ? loadGoalsByProject(db, projectId) : loadGoals(db);
+  logger.info({ goalsCount: goals.length, projectId: projectId ?? "all" }, "Active goals loaded");
 
   if (goals.length === 0) {
     logger.warn("No active goals found. Ending cycle.");

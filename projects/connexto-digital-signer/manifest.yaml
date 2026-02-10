@@ -1,0 +1,9 @@
+project_id: connexto-digital-signer
+repo_source: /home/rafael/dev-rafael/connexto-digital-signer
+stack:
+  language: typescript
+  framework: nestjs-nextjs-turbo
+risk_profile: high
+autonomy_level: 2
+token_budget_monthly: 200000
+status: active
