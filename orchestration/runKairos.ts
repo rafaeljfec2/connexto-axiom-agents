@@ -1,15 +1,18 @@
 import type BetterSqlite3 from "better-sqlite3";
+import { loadBudgetConfig } from "../config/budget.js";
 import { logger } from "../config/logger.js";
+import { checkBudget } from "../execution/budgetGate.js";
 import { executeForge } from "../execution/forgeExecutor.js";
 import type { ExecutionResult } from "../execution/types.js";
 import { sendTelegramMessage } from "../interfaces/telegram.js";
+import { getCurrentBudget } from "../state/budgets.js";
 import { saveDecision, loadRecentDecisions } from "../state/decisions.js";
 import { loadGoals } from "../state/goals.js";
 import { saveOutcome } from "../state/outcomes.js";
 import { callKairosLLM } from "./kairosLLM.js";
 import { formatDailyBriefing } from "./dailyBriefing.js";
 import { filterDelegations } from "./decisionFilter.js";
-import type { KairosOutput, KairosDelegation } from "./types.js";
+import type { KairosOutput, KairosDelegation, BlockedTask, BudgetInfo } from "./types.js";
 import { validateKairosOutput } from "./validateKairos.js";
 
 export async function runKairos(db: BetterSqlite3.Database): Promise<void> {
@@ -50,31 +53,55 @@ export async function runKairos(db: BetterSqlite3.Database): Promise<void> {
     "Delegations filtered",
   );
 
-  const forgeResults = await executeApprovedForge(db, filtered.approved);
+  const { results: forgeResults, blocked: blockedTasks } = await executeApprovedForge(
+    db,
+    filtered.approved,
+  );
 
-  const briefingText = formatDailyBriefing(output, filtered, forgeResults);
+  const budgetInfo = buildBudgetInfo(db, blockedTasks);
+
+  const briefingText = formatDailyBriefing(output, filtered, forgeResults, budgetInfo);
   await sendTelegramMessage(briefingText);
   logger.info("Daily briefing sent");
 
   logger.info("Cycle complete.");
 }
 
+interface ForgeExecutionOutput {
+  readonly results: readonly ExecutionResult[];
+  readonly blocked: readonly BlockedTask[];
+}
+
 async function executeApprovedForge(
   db: BetterSqlite3.Database,
   approved: readonly KairosDelegation[],
-): Promise<readonly ExecutionResult[]> {
+): Promise<ForgeExecutionOutput> {
   const forgeDelegations = approved.filter((d) => d.agent === "forge");
 
   if (forgeDelegations.length === 0) {
     logger.info("No forge delegations to execute");
-    return [];
+    return { results: [], blocked: [] };
   }
 
   logger.info({ count: forgeDelegations.length }, "Executing forge delegations");
 
   const results: ExecutionResult[] = [];
+  const blocked: BlockedTask[] = [];
 
   for (const delegation of forgeDelegations) {
+    const budgetCheck = checkBudget(db, delegation.agent);
+    if (!budgetCheck.allowed) {
+      logger.warn(
+        { task: delegation.task, reason: budgetCheck.reason },
+        "Budget gate blocked execution",
+      );
+      blocked.push({
+        task: delegation.task,
+        reason: budgetCheck.reason ?? "Orcamento insuficiente",
+      });
+      continue;
+    }
+
     const result = await executeForge(db, delegation);
     saveOutcome(db, result);
     results.push(result);
@@ -88,7 +115,28 @@ async function executeApprovedForge(
     }
   }
 
-  return results;
+  return { results, blocked };
+}
+
+function buildBudgetInfo(
+  db: BetterSqlite3.Database,
+  blockedTasks: readonly BlockedTask[],
+): BudgetInfo {
+  const budget = getCurrentBudget(db);
+  const config = loadBudgetConfig();
+
+  const usedTokens = budget?.used_tokens ?? 0;
+  const totalTokens = budget?.total_tokens ?? config.monthlyTokenLimit;
+  const percentRemaining = totalTokens > 0 ? ((totalTokens - usedTokens) / totalTokens) * 100 : 0;
+  const isExhausted = budget ? budget.hard_limit === 1 && usedTokens >= totalTokens : false;
+
+  return {
+    usedTokens,
+    totalTokens,
+    percentRemaining: Math.max(0, percentRemaining),
+    isExhausted,
+    blockedTasks,
+  };
 }
 
 function buildFallbackOutput(errorMessage: string): KairosOutput {

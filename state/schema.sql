@@ -74,3 +74,27 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 CREATE INDEX IF NOT EXISTS idx_audit_log_agent_id ON audit_log(agent_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_runtime ON audit_log(runtime);
+
+CREATE TABLE IF NOT EXISTS budgets (
+  id           TEXT PRIMARY KEY,
+  period       TEXT NOT NULL UNIQUE,
+  total_tokens INTEGER NOT NULL,
+  used_tokens  INTEGER NOT NULL DEFAULT 0,
+  hard_limit   INTEGER NOT NULL DEFAULT 1,
+  created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_budgets_period ON budgets(period);
+
+CREATE TABLE IF NOT EXISTS token_usage (
+  id            TEXT PRIMARY KEY,
+  agent_id      TEXT NOT NULL,
+  task_id       TEXT NOT NULL,
+  input_tokens  INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL,
+  total_tokens  INTEGER NOT NULL,
+  created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_token_usage_agent_id ON token_usage(agent_id);
+CREATE INDEX IF NOT EXISTS idx_token_usage_created_at ON token_usage(created_at);

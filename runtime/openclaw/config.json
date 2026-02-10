@@ -3,7 +3,7 @@
     "profiles": {
       "openai:api": {
         "provider": "openai",
-        "mode": "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"
+        "mode": "api_key"
       }
     },
     "order": {

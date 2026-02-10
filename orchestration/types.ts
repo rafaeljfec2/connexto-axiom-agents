@@ -38,3 +38,16 @@ export interface FilteredDelegations {
   readonly needsApproval: readonly KairosDelegation[];
   readonly rejected: readonly RejectedDelegation[];
 }
+
+export interface BlockedTask {
+  readonly task: string;
+  readonly reason: string;
+}
+
+export interface BudgetInfo {
+  readonly usedTokens: number;
+  readonly totalTokens: number;
+  readonly percentRemaining: number;
+  readonly isExhausted: boolean;
+  readonly blockedTasks: readonly BlockedTask[];
+}

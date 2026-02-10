@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
 import type BetterSqlite3 from "better-sqlite3";
+import { loadBudgetConfig } from "../config/budget.js";
 import { logger } from "../config/logger.js";
 import type { KairosDelegation } from "../orchestration/types.js";
 import { logAudit, hashContent } from "../state/auditLog.js";
+import { incrementUsedTokens } from "../state/budgets.js";
+import { recordTokenUsage } from "../state/tokenUsage.js";
 import type { ExecutionResult } from "./types.js";
 import { callOpenClaw } from "./openclawClient.js";
+import type { TokenUsageInfo } from "./openclawClient.js";
 import { sanitizeOutput } from "./outputSanitizer.js";
 import { ensureSandbox, resolveSandboxPath, validateSandboxLimits } from "./sandbox.js";
 
@@ -35,6 +39,49 @@ export async function executeForgeViaOpenClaw(
       return buildFailedResult(task, "OpenClaw returned status: failed");
     }
 
+    const usage = resolveUsage(response.usage, response.text, prompt);
+
+    const budgetConfig = loadBudgetConfig();
+    if (usage.totalTokens > budgetConfig.perTaskTokenLimit) {
+      logger.error(
+        { totalTokens: usage.totalTokens, limit: budgetConfig.perTaskTokenLimit },
+        "Per-task token limit exceeded",
+      );
+      logAudit(db, {
+        agent: "forge",
+        action: task,
+        inputHash: hashContent(prompt),
+        outputHash: null,
+        sanitizerWarnings: [
+          `per_task_limit_exceeded: ${usage.totalTokens}/${budgetConfig.perTaskTokenLimit}`,
+        ],
+        runtime: "openclaw",
+      });
+      return buildFailedResult(
+        task,
+        `Limite de tokens por task excedido (${usage.totalTokens}/${budgetConfig.perTaskTokenLimit})`,
+      );
+    }
+
+    const currentPeriod = getCurrentPeriod();
+    recordTokenUsage(db, {
+      agentId: "forge",
+      taskId: goal_id,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
+    });
+    incrementUsedTokens(db, currentPeriod, usage.totalTokens);
+
+    logger.info(
+      {
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+      },
+      "Token usage recorded",
+    );
+
     const sanitized = sanitizeOutput(response.text);
 
     if (sanitized.warnings.length > 0) {
@@ -64,6 +111,7 @@ export async function executeForgeViaOpenClaw(
       task,
       status: "success",
       output: filePath,
+      tokensUsed: usage.totalTokens,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -118,4 +166,34 @@ function slugify(text: string): string {
     .trim()
     .replaceAll(/[^a-z0-9]+/g, "-")
     .replaceAll(/(?:^-+)|(?:-+$)/g, "");
+}
+
+function getCurrentPeriod(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
+const CHARS_PER_TOKEN_ESTIMATE = 4;
+
+function resolveUsage(
+  usage: TokenUsageInfo | undefined,
+  responseText: string,
+  prompt: string,
+): TokenUsageInfo {
+  if (usage) {
+    return usage;
+  }
+
+  logger.warn("OpenClaw did not return token usage, using character-based estimate");
+
+  const inputTokens = Math.ceil(prompt.length / CHARS_PER_TOKEN_ESTIMATE);
+  const outputTokens = Math.ceil(responseText.length / CHARS_PER_TOKEN_ESTIMATE);
+
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+  };
 }

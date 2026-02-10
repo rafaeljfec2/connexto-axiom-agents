@@ -6,4 +6,5 @@ export interface ExecutionResult {
   readonly status: "success" | "failed";
   readonly output: string;
   readonly error?: string;
+  readonly tokensUsed?: number;
 }

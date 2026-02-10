@@ -1,10 +1,11 @@
 import type { ExecutionResult } from "../execution/types.js";
-import type { KairosOutput, FilteredDelegations } from "./types.js";
+import type { KairosOutput, FilteredDelegations, BudgetInfo } from "./types.js";
 
 export function formatDailyBriefing(
   output: KairosOutput,
   filtered: FilteredDelegations,
   executions: readonly ExecutionResult[],
+  budgetInfo: BudgetInfo,
 ): string {
   const decisions =
     output.decisions_needed.length > 0
@@ -47,6 +48,8 @@ export function formatDailyBriefing(
           .join("\n")
       : "- Nenhuma.";
 
+  const budgetSection = formatBudgetSection(budgetInfo);
+
   const lines = [
     String.raw`*\[KAIROS — Briefing Diario]*`,
     "",
@@ -68,9 +71,40 @@ export function formatDailyBriefing(
     String.raw`*Execucoes FORGE:*`,
     executionLines,
     "",
+    ...budgetSection,
+    "",
     "*Foco nas proximas 24h:*",
     `- ${output.next_24h_focus}`,
   ];
 
   return lines.join("\n");
+}
+
+function formatNumber(value: number): string {
+  return value.toLocaleString("pt-BR");
+}
+
+function getBudgetStatusLine(info: BudgetInfo): string {
+  if (info.isExhausted) {
+    return "- CRITICO: Kill switch ativo — FORGE em modo read-only";
+  }
+  if (info.percentRemaining < 20) {
+    return "- AVISO: Menos de 20% do orcamento restante";
+  }
+  return "- Status: OK";
+}
+
+function formatBudgetSection(info: BudgetInfo): readonly string[] {
+  const tokenLine = `- Tokens usados: ${formatNumber(info.usedTokens)} / ${formatNumber(info.totalTokens)} (${info.percentRemaining.toFixed(1)}% restante)`;
+  const statusLine = getBudgetStatusLine(info);
+
+  const header = [String.raw`*Orcamento LLM:*`, tokenLine, statusLine];
+
+  if (info.blockedTasks.length === 0) {
+    return header;
+  }
+
+  const blockedLines = info.blockedTasks.map((b) => `- ${b.task}: ${b.reason}`);
+
+  return [...header, "", String.raw`*Execucoes bloqueadas:*`, ...blockedLines];
 }
