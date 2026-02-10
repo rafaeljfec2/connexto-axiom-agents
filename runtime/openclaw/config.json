@@ -1,0 +1,28 @@
+{
+  "gateway": {
+    "mode": "local",
+    "port": 18789,
+    "bind": "loopback"
+  },
+  "agents": {
+    "list": [
+      {
+        "id": "forge",
+        "workspace": "./sandbox/forge",
+        "sandbox": {
+          "mode": "all",
+          "scope": "agent"
+        },
+        "tools": {
+          "allow": ["read", "write"],
+          "deny": ["exec", "edit", "apply_patch", "browser", "gateway"]
+        }
+      }
+    ]
+  },
+  "skills": {
+    "load": {
+      "extraDirs": ["./runtime/openclaw/skills"]
+    }
+  }
+}
