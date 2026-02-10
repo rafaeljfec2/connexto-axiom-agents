@@ -38,6 +38,24 @@ export interface PRResponse {
   readonly merged: boolean;
 }
 
+export interface PRDetails extends PRResponse {
+  readonly mergeable: boolean | null;
+  readonly mergeable_state: string;
+  readonly head_sha: string;
+  readonly base_ref: string;
+  readonly changed_files: number;
+  readonly additions: number;
+  readonly deletions: number;
+}
+
+export interface CheckRunsStatus {
+  readonly totalCount: number;
+  readonly passed: number;
+  readonly failed: number;
+  readonly pending: number;
+  readonly allPassed: boolean;
+}
+
 function loadConfig(): GitHubConfig {
   const token = process.env.GITHUB_TOKEN;
   const repo = process.env.GITHUB_REPO;
@@ -183,6 +201,97 @@ export async function getPullRequest(prNumber: number): Promise<PRResponse> {
   }
 
   return (await response.json()) as PRResponse;
+}
+
+export async function getPullRequestDetails(prNumber: number): Promise<PRDetails> {
+  const config = loadConfig();
+  const url = `${GITHUB_API_BASE}/repos/${config.repo}/pulls/${prNumber}`;
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${config.token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    signal: AbortSignal.timeout(API_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(
+      `GitHub API error fetching PR details #${prNumber}: ${response.status} ${body}`,
+    );
+  }
+
+  const data = (await response.json()) as Record<string, unknown>;
+  const head = data.head as Record<string, unknown> | undefined;
+  const base = data.base as Record<string, unknown> | undefined;
+
+  return {
+    number: data.number as number,
+    html_url: data.html_url as string,
+    state: data.state as string,
+    title: data.title as string,
+    merged: (data.merged as boolean) ?? false,
+    mergeable: (data.mergeable as boolean | null) ?? null,
+    mergeable_state: (data.mergeable_state as string) ?? "unknown",
+    head_sha: (head?.sha as string) ?? "",
+    base_ref: (base?.ref as string) ?? "main",
+    changed_files: (data.changed_files as number) ?? 0,
+    additions: (data.additions as number) ?? 0,
+    deletions: (data.deletions as number) ?? 0,
+  };
+}
+
+export async function getCheckRunsStatus(ref: string): Promise<CheckRunsStatus> {
+  const config = loadConfig();
+  const url = `${GITHUB_API_BASE}/repos/${config.repo}/commits/${ref}/check-runs`;
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${config.token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    signal: AbortSignal.timeout(API_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`GitHub API error fetching check runs for ${ref}: ${response.status} ${body}`);
+  }
+
+  const data = (await response.json()) as {
+    readonly total_count: number;
+    readonly check_runs: ReadonlyArray<{
+      readonly status: string;
+      readonly conclusion: string | null;
+    }>;
+  };
+
+  let passed = 0;
+  let failed = 0;
+  let pending = 0;
+
+  for (const run of data.check_runs) {
+    if (run.status !== "completed") {
+      pending++;
+    } else if (run.conclusion === "success" || run.conclusion === "skipped") {
+      passed++;
+    } else {
+      failed++;
+    }
+  }
+
+  return {
+    totalCount: data.total_count,
+    passed,
+    failed,
+    pending,
+    allPassed: data.total_count > 0 && failed === 0 && pending === 0,
+  };
 }
 
 export function isGitHubConfigured(): boolean {

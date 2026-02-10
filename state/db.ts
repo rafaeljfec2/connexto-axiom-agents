@@ -23,6 +23,7 @@ function applyMigrations(db: BetterSqlite3.Database): void {
   migrateOutcomesColumns(db);
   migrateArtifactsColumns(db);
   migrateCodeChangesColumns(db);
+  migratePullRequestsMergeColumns(db);
 }
 
 function migrateArtifactsColumns(db: BetterSqlite3.Database): void {
@@ -49,6 +50,21 @@ function migrateCodeChangesColumns(db: BetterSqlite3.Database): void {
   }
   if (!columnNames.has("pending_files")) {
     db.exec("ALTER TABLE code_changes ADD COLUMN pending_files TEXT");
+  }
+}
+
+function migratePullRequestsMergeColumns(db: BetterSqlite3.Database): void {
+  const columns = db.pragma("table_info(pull_requests)") as ReadonlyArray<{ name: string }>;
+  const columnNames = new Set(columns.map((c) => c.name));
+
+  if (!columnNames.has("merge_status")) {
+    db.exec("ALTER TABLE pull_requests ADD COLUMN merge_status TEXT");
+  }
+  if (!columnNames.has("merge_report")) {
+    db.exec("ALTER TABLE pull_requests ADD COLUMN merge_report TEXT");
+  }
+  if (!columnNames.has("merge_checked_at")) {
+    db.exec("ALTER TABLE pull_requests ADD COLUMN merge_checked_at TEXT");
   }
 }
 

@@ -213,6 +213,9 @@ CREATE TABLE IF NOT EXISTS pull_requests (
   status          TEXT NOT NULL DEFAULT 'pending_push'
     CHECK (status IN ('pending_push', 'pending_approval', 'open', 'closed', 'merged')),
   risk            INTEGER NOT NULL,
+  merge_status    TEXT,
+  merge_report    TEXT,
+  merge_checked_at TEXT,
   created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );

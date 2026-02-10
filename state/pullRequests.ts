@@ -3,6 +3,8 @@ import type BetterSqlite3 from "better-sqlite3";
 
 export type PullRequestStatus = "pending_push" | "pending_approval" | "open" | "closed" | "merged";
 
+export type MergeStatus = "unchecked" | "ready" | "blocked" | "confirmed";
+
 export interface PullRequestEntry {
   readonly codeChangeId: string;
   readonly repo: string;
@@ -23,6 +25,9 @@ export interface PullRequest {
   readonly body: string;
   readonly status: PullRequestStatus;
   readonly risk: number;
+  readonly merge_status: MergeStatus | null;
+  readonly merge_report: string | null;
+  readonly merge_checked_at: string | null;
   readonly created_at: string;
   readonly updated_at: string;
 }
@@ -33,14 +38,21 @@ export interface PullRequestStatusUpdate {
   readonly prUrl?: string;
 }
 
+export interface MergeStatusUpdate {
+  readonly mergeStatus: MergeStatus;
+  readonly mergeReport?: string;
+}
+
 export interface PRStats7d {
   readonly openCount: number;
   readonly closedCount7d: number;
   readonly mergedCount7d: number;
   readonly pendingApprovalCount: number;
+  readonly readyForMergeCount: number;
+  readonly stalePRCount: number;
 }
 
-const COLUMNS = `id, code_change_id, repo, branch_name, pr_number, pr_url, title, body, status, risk, created_at, updated_at`;
+const COLUMNS = `id, code_change_id, repo, branch_name, pr_number, pr_url, title, body, status, risk, merge_status, merge_report, merge_checked_at, created_at, updated_at`;
 
 export function savePullRequest(db: BetterSqlite3.Database, entry: PullRequestEntry): string {
   const id = crypto.randomUUID();
@@ -115,6 +127,49 @@ export function updatePullRequestStatus(
   db.prepare(`UPDATE pull_requests SET ${sets.join(", ")} WHERE id = ?`).run(...values);
 }
 
+export function updateMergeStatus(
+  db: BetterSqlite3.Database,
+  id: string,
+  update: MergeStatusUpdate,
+): void {
+  const sets: string[] = [
+    "merge_status = ?",
+    "merge_checked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+    "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+  ];
+  const values: (string | null)[] = [update.mergeStatus];
+
+  if (update.mergeReport !== undefined) {
+    sets.push("merge_report = ?");
+    values.push(update.mergeReport);
+  }
+
+  values.push(id);
+
+  db.prepare(`UPDATE pull_requests SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+export function getReadyForMergePRs(db: BetterSqlite3.Database): readonly PullRequest[] {
+  return db
+    .prepare(
+      `SELECT ${COLUMNS} FROM pull_requests
+       WHERE status = 'open' AND merge_status IN ('ready', 'confirmed')
+       ORDER BY created_at DESC`,
+    )
+    .all() as PullRequest[];
+}
+
+export function getStalePRs(db: BetterSqlite3.Database, staleDays: number): readonly PullRequest[] {
+  return db
+    .prepare(
+      `SELECT ${COLUMNS} FROM pull_requests
+       WHERE status = 'open'
+         AND created_at < datetime('now', ? || ' days')
+       ORDER BY created_at ASC`,
+    )
+    .all(`-${staleDays}`) as PullRequest[];
+}
+
 export function getPRStats7d(db: BetterSqlite3.Database): PRStats7d {
   const open = db
     .prepare(`SELECT COUNT(*) as count FROM pull_requests WHERE status = 'open'`)
@@ -138,10 +193,28 @@ export function getPRStats7d(db: BetterSqlite3.Database): PRStats7d {
     .prepare(`SELECT COUNT(*) as count FROM pull_requests WHERE status = 'pending_approval'`)
     .get() as { count: number };
 
+  const readyForMerge = db
+    .prepare(
+      `SELECT COUNT(*) as count FROM pull_requests
+       WHERE status = 'open' AND merge_status IN ('ready', 'confirmed')`,
+    )
+    .get() as { count: number };
+
+  const defaultStaleDays = Number(process.env.PR_STALE_DAYS ?? "7");
+  const stale = db
+    .prepare(
+      `SELECT COUNT(*) as count FROM pull_requests
+       WHERE status = 'open'
+         AND created_at < datetime('now', ? || ' days')`,
+    )
+    .get(`-${defaultStaleDays}`) as { count: number };
+
   return {
     openCount: open.count,
     closedCount7d: closed.count,
     mergedCount7d: merged.count,
     pendingApprovalCount: pendingApproval.count,
+    readyForMergeCount: readyForMerge.count,
+    stalePRCount: stale.count,
   };
 }

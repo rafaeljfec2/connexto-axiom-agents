@@ -14,6 +14,8 @@ import {
   getAverageEngagement7d,
   getMarketingPerformanceSummary,
 } from "../state/marketingFeedback.js";
+import { isGitHubConfigured } from "../execution/githubClient.js";
+import { syncOpenPRsStatus } from "../services/mergeReadinessService.js";
 import { getCodeChangeStats7d, getBranchStats7d } from "../state/codeChanges.js";
 import { getPRStats7d } from "../state/pullRequests.js";
 import { getPublicationCount7d } from "../state/publications.js";
@@ -40,6 +42,8 @@ import { validateKairosOutput } from "./validateKairos.js";
 
 export async function runKairos(db: BetterSqlite3.Database): Promise<void> {
   logger.info("Starting cycle...");
+
+  await trySyncPRs(db);
 
   const goals = loadGoals(db);
   logger.info({ goalsCount: goals.length }, "Active goals loaded");
@@ -371,6 +375,16 @@ function findProblematicTasks(db: BetterSqlite3.Database): readonly string[] {
   return rows.map((r) => `${r.agent_id}/${r.task_type} (${r.failure_count} falhas)`);
 }
 
+async function trySyncPRs(db: BetterSqlite3.Database): Promise<void> {
+  if (!isGitHubConfigured()) return;
+  try {
+    await syncOpenPRsStatus(db);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.warn({ error: msg }, "Failed to sync PR statuses from GitHub");
+  }
+}
+
 function buildForgeCodeInfo(db: BetterSqlite3.Database): ForgeCodeInfo {
   const stats = getCodeChangeStats7d(db);
   const branchStats = getBranchStats7d(db);
@@ -388,6 +402,8 @@ function buildForgeCodeInfo(db: BetterSqlite3.Database): ForgeCodeInfo {
     pendingApprovalPRs: prStats.pendingApprovalCount,
     closedPRs7d: prStats.closedCount7d,
     mergedPRs7d: prStats.mergedCount7d,
+    readyForMergePRs: prStats.readyForMergeCount,
+    stalePRs: prStats.stalePRCount,
   };
 }
 

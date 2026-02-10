@@ -9,10 +9,15 @@ import {
   rejectCodeChange,
 } from "../services/codeChangeService.js";
 import { saveManualMetrics } from "../services/metricsCollector.js";
+import {
+  checkMergeReadiness,
+  confirmMerge,
+  markPRMerged,
+} from "../services/mergeReadinessService.js";
 import { approvePR, rejectPR } from "../services/pullRequestService.js";
 import { getArtifactById } from "../state/artifacts.js";
 import { getCodeChangeById } from "../state/codeChanges.js";
-import { getPendingApprovalPRs, getOpenPRs } from "../state/pullRequests.js";
+import { getPendingApprovalPRs, getOpenPRs, getReadyForMergePRs } from "../state/pullRequests.js";
 import type { PullRequest } from "../state/pullRequests.js";
 
 const POLLING_TIMEOUT_SECONDS = 30;
@@ -144,6 +149,18 @@ async function handleCommand(
       break;
     case "/reject_pr":
       await handleRejectPR(db, token, chatId, args[0]);
+      break;
+    case "/merge_check":
+      await handleMergeCheck(db, token, chatId, args[0]);
+      break;
+    case "/merge_status":
+      await handleMergeStatus(db, token, chatId);
+      break;
+    case "/confirm_merge":
+      await handleConfirmMerge(db, token, chatId, args[0]);
+      break;
+    case "/mark_merged":
+      await handleMarkMerged(db, token, chatId, args[0]);
       break;
     case "/help":
     case "/start":
@@ -492,6 +509,115 @@ function resolvePullRequestId(db: BetterSqlite3.Database, partialId: string): st
   return undefined;
 }
 
+async function handleMergeCheck(
+  db: BetterSqlite3.Database,
+  token: string,
+  chatId: number,
+  idArg: string | undefined,
+): Promise<void> {
+  if (!idArg) {
+    await sendMessage(token, chatId, "Uso: /merge_check <pr_id>\nExemplo: /merge_check abc12345");
+    return;
+  }
+
+  const prId = resolvePullRequestId(db, idArg);
+  if (!prId) {
+    await sendMessage(token, chatId, `PR com ID "${idArg}" nao encontrado.`);
+    return;
+  }
+
+  await sendMessage(token, chatId, "Verificando merge readiness...");
+
+  const result = await checkMergeReadiness(db, prId);
+  await sendMessage(token, chatId, result.message);
+}
+
+async function handleMergeStatus(
+  db: BetterSqlite3.Database,
+  token: string,
+  chatId: number,
+): Promise<void> {
+  const ready = getReadyForMergePRs(db);
+  const open = getOpenPRs(db);
+  const blocked = open.filter(
+    (pr) => pr.merge_status === "blocked" || pr.merge_status === "unchecked" || !pr.merge_status,
+  );
+
+  if (ready.length === 0 && blocked.length === 0) {
+    await sendMessage(token, chatId, "Nenhum PR aberto para merge.");
+    return;
+  }
+
+  const lines: string[] = [];
+
+  if (ready.length > 0) {
+    lines.push(`Prontos para merge (${ready.length}):`);
+    for (const pr of ready) {
+      const status = pr.merge_status === "confirmed" ? " [CONFIRMADO]" : "";
+      lines.push(`${formatPRLine(pr)}${status}`);
+    }
+    lines.push("");
+  }
+
+  if (blocked.length > 0) {
+    lines.push(`Aguardando acao (${blocked.length}):`);
+    for (const pr of blocked) {
+      const tag = pr.merge_status === "blocked" ? " [BLOQUEADO]" : " [NAO VERIFICADO]";
+      lines.push(`${formatPRLine(pr)}${tag}`);
+    }
+  }
+
+  lines.push("", "Use /merge_check <id> para verificar um PR.");
+
+  await sendMessage(token, chatId, lines.join("\n"));
+}
+
+async function handleConfirmMerge(
+  db: BetterSqlite3.Database,
+  token: string,
+  chatId: number,
+  idArg: string | undefined,
+): Promise<void> {
+  if (!idArg) {
+    await sendMessage(
+      token,
+      chatId,
+      "Uso: /confirm_merge <pr_id>\nExemplo: /confirm_merge abc12345",
+    );
+    return;
+  }
+
+  const prId = resolvePullRequestId(db, idArg);
+  if (!prId) {
+    await sendMessage(token, chatId, `PR com ID "${idArg}" nao encontrado.`);
+    return;
+  }
+
+  const result = await confirmMerge(db, prId, `telegram:${chatId}`);
+  await sendMessage(token, chatId, result.message);
+}
+
+async function handleMarkMerged(
+  db: BetterSqlite3.Database,
+  token: string,
+  chatId: number,
+  idArg: string | undefined,
+): Promise<void> {
+  if (!idArg) {
+    await sendMessage(token, chatId, "Uso: /mark_merged <pr_id>\nExemplo: /mark_merged abc12345");
+    return;
+  }
+
+  const prId = resolvePullRequestId(db, idArg);
+  if (!prId) {
+    await sendMessage(token, chatId, `PR com ID "${idArg}" nao encontrado.`);
+    return;
+  }
+
+  const result = await markPRMerged(db, prId);
+  await sendMessage(token, chatId, result.message);
+}
+
 async function handleHelp(token: string, chatId: number): Promise<void> {
   const helpText = [
     "Comandos disponiveis:",
@@ -508,6 +634,10 @@ async function handleHelp(token: string, chatId: number): Promise<void> {
     "/prs — Lista PRs pendentes e abertos",
     "/approve_pr <id> — Aprova push e criacao de PR",
     "/reject_pr <id> — Cancela um PR pendente",
+    "/merge_check <id> — Verifica se PR esta pronto para merge",
+    "/merge_status — Lista PRs prontos e bloqueados para merge",
+    "/confirm_merge <id> — Confirma merge de PR de alto risco",
+    "/mark_merged <id> — Marca PR como mergeado apos acao no GitHub",
     "/help — Mostra esta mensagem",
     "",
     "IDs podem ser parciais (primeiros 8 caracteres).",

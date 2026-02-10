@@ -93,4 +93,6 @@ export interface ForgeCodeInfo {
   readonly pendingApprovalPRs: number;
   readonly closedPRs7d: number;
   readonly mergedPRs7d: number;
+  readonly readyForMergePRs: number;
+  readonly stalePRs: number;
 }

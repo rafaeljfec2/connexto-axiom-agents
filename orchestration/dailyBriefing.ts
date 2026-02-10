@@ -202,10 +202,11 @@ function formatForgeCodeSection(info: ForgeCodeInfo): readonly string[] {
   const prHeader = String.raw`*Pull Requests (FORGE):*`;
   const openPRsLine = `- PRs abertos: ${formatNumber(info.openPRs)}`;
   const pendingPRsLine = `- Aguardando aprovacao: ${formatNumber(info.pendingApprovalPRs)}`;
+  const readyLine = `- Prontos para merge: ${formatNumber(info.readyForMergePRs)}`;
   const closedPRsLine = `- Fechados (7d): ${formatNumber(info.closedPRs7d)}`;
   const mergedPRsLine = `- Mergeados (7d): ${formatNumber(info.mergedPRs7d)}`;
 
-  return [
+  const lines = [
     header,
     appliedLine,
     pendingLine,
@@ -220,9 +221,16 @@ function formatForgeCodeSection(info: ForgeCodeInfo): readonly string[] {
     prHeader,
     openPRsLine,
     pendingPRsLine,
+    readyLine,
     closedPRsLine,
     mergedPRsLine,
   ];
+
+  if (info.stalePRs > 0) {
+    lines.push(`- ALERTA: ${formatNumber(info.stalePRs)} PR(s) stale (aberto(s) ha muito tempo)`);
+  }
+
+  return lines;
 }
 
 function formatFeedbackSection(info: FeedbackInfo): readonly string[] {
