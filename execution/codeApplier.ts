@@ -5,6 +5,16 @@ import { promisify } from "node:util";
 import type BetterSqlite3 from "better-sqlite3";
 import { logger } from "../config/logger.js";
 import { updateCodeChangeStatus, getCodeChangeById } from "../state/codeChanges.js";
+import {
+  buildBranchName,
+  createBranch,
+  switchToMain,
+  stageFiles,
+  commitChanges,
+  getBranchDiff,
+  getBranchCommits,
+  deleteBranch,
+} from "./gitManager.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -312,6 +322,119 @@ export async function applyCodeChange(
     });
 
     return { success: false, diff, lintOutput: "", error: message };
+  }
+}
+
+export async function applyCodeChangeWithBranch(
+  db: BetterSqlite3.Database,
+  changeId: string,
+  files: readonly FileChange[],
+): Promise<ApplyResult> {
+  const change = getCodeChangeById(db, changeId);
+  if (!change) {
+    return {
+      success: false,
+      diff: "",
+      lintOutput: "",
+      error: `Code change not found: ${changeId}`,
+    };
+  }
+
+  const branchName = buildBranchName(changeId);
+
+  try {
+    await switchToMain();
+    await createBranch(branchName);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error({ changeId, branchName, error: message }, "Failed to create git branch");
+    return {
+      success: false,
+      diff: "",
+      lintOutput: "",
+      error: `Git branch creation failed: ${message}`,
+    };
+  }
+
+  const backups = await backupFiles(files);
+
+  try {
+    await writeFiles(files);
+
+    const filePaths = files.map((f) => f.path);
+    const lintResult = await runLint(filePaths);
+
+    if (lintResult.success) {
+      await stageFiles(filePaths);
+      const commitMessage = `forge: ${change.description.slice(0, 120)}`;
+      const hash = await commitChanges(commitMessage);
+
+      const diff = await getBranchDiff(branchName);
+      const commits = await getBranchCommits(branchName);
+      const commitsJson = JSON.stringify(commits);
+
+      await switchToMain();
+
+      updateCodeChangeStatus(db, changeId, {
+        status: "applied",
+        diff,
+        testOutput: lintResult.output,
+        appliedAt: new Date().toISOString(),
+        branchName,
+        commits: commitsJson,
+      });
+
+      logger.info(
+        { changeId, branchName, commitHash: hash },
+        "Code change applied with branch successfully",
+      );
+
+      return { success: true, diff, lintOutput: lintResult.output };
+    }
+
+    logger.warn({ changeId, branchName }, "Lint failed, rolling back branch code change");
+    await restoreBackups(backups);
+    await switchToMain();
+    await deleteBranch(branchName);
+
+    updateCodeChangeStatus(db, changeId, {
+      status: "failed",
+      diff: "",
+      testOutput: lintResult.output,
+      error: "Lint validation failed",
+    });
+
+    return {
+      success: false,
+      diff: "",
+      lintOutput: lintResult.output,
+      error: "Lint validation failed",
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error(
+      { changeId, branchName, error: message },
+      "Branch code change failed, rolling back",
+    );
+
+    await restoreBackups(backups);
+
+    try {
+      await switchToMain();
+      await deleteBranch(branchName);
+    } catch (cleanupError) {
+      const cleanupMsg =
+        cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      logger.error({ branchName, error: cleanupMsg }, "Failed to cleanup branch after error");
+    }
+
+    updateCodeChangeStatus(db, changeId, {
+      status: "failed",
+      diff: "",
+      error: message,
+    });
+
+    return { success: false, diff: "", lintOutput: "", error: message };
   }
 }
 

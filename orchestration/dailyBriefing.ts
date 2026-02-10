@@ -194,7 +194,23 @@ function formatForgeCodeSection(info: ForgeCodeInfo): readonly string[] {
   const failedLine = `- Falhas revertidas (7d): ${formatNumber(info.failedCount7d)}`;
   const riskLine = `- Risco tecnico acumulado: ${formatNumber(info.totalRisk7d)}`;
 
-  return [header, appliedLine, pendingLine, failedLine, riskLine];
+  const branchHeader = String.raw`*Branches Locais (FORGE):*`;
+  const activeLine = `- Branches ativas: ${formatNumber(info.activeBranches)}`;
+  const commitsLine = `- Commits (7d): ${formatNumber(info.totalCommits7d)}`;
+  const reviewLine = `- Aguardando revisao: ${formatNumber(info.pendingReviewBranches)}`;
+
+  return [
+    header,
+    appliedLine,
+    pendingLine,
+    failedLine,
+    riskLine,
+    "",
+    branchHeader,
+    activeLine,
+    commitsLine,
+    reviewLine,
+  ];
 }
 
 function formatFeedbackSection(info: FeedbackInfo): readonly string[] {

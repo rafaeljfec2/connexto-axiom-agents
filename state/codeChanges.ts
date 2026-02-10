@@ -15,6 +15,7 @@ export interface CodeChangeEntry {
   readonly description: string;
   readonly filesChanged: readonly string[];
   readonly risk: number;
+  readonly pendingFiles?: string;
 }
 
 export interface CodeChange {
@@ -30,6 +31,9 @@ export interface CodeChange {
   readonly approved_by: string | null;
   readonly approved_at: string | null;
   readonly applied_at: string | null;
+  readonly branch_name: string | null;
+  readonly commits: string | null;
+  readonly pending_files: string | null;
   readonly created_at: string;
 }
 
@@ -40,17 +44,26 @@ export interface CodeChangeStatusUpdate {
   readonly error?: string;
   readonly approvedBy?: string;
   readonly appliedAt?: string;
+  readonly branchName?: string;
+  readonly commits?: string;
 }
 
-const COLUMNS = `id, task_id, description, files_changed, diff, risk, status, test_output, error, approved_by, approved_at, applied_at, created_at`;
+const COLUMNS = `id, task_id, description, files_changed, diff, risk, status, test_output, error, approved_by, approved_at, applied_at, branch_name, commits, pending_files, created_at`;
 
 export function saveCodeChange(db: BetterSqlite3.Database, entry: CodeChangeEntry): string {
   const id = crypto.randomUUID();
 
   db.prepare(
-    `INSERT INTO code_changes (id, task_id, description, files_changed, risk)
-     VALUES (?, ?, ?, ?, ?)`,
-  ).run(id, entry.taskId, entry.description, JSON.stringify(entry.filesChanged), entry.risk);
+    `INSERT INTO code_changes (id, task_id, description, files_changed, risk, pending_files)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    entry.taskId,
+    entry.description,
+    JSON.stringify(entry.filesChanged),
+    entry.risk,
+    entry.pendingFiles ?? null,
+  );
 
   return id;
 }
@@ -115,6 +128,14 @@ export function updateCodeChangeStatus(
     sets.push("applied_at = ?");
     values.push(update.appliedAt);
   }
+  if (update.branchName !== undefined) {
+    sets.push("branch_name = ?");
+    values.push(update.branchName);
+  }
+  if (update.commits !== undefined) {
+    sets.push("commits = ?");
+    values.push(update.commits);
+  }
 
   values.push(id);
 
@@ -157,5 +178,56 @@ export function getCodeChangeStats7d(db: BetterSqlite3.Database): {
     failedCount: failed.count,
     pendingApprovalCount: pendingApproval.count,
     totalRisk: riskSum.total,
+  };
+}
+
+export function savePendingFiles(db: BetterSqlite3.Database, id: string, files: string): void {
+  db.prepare("UPDATE code_changes SET pending_files = ? WHERE id = ?").run(files, id);
+}
+
+export function getBranchStats7d(db: BetterSqlite3.Database): {
+  readonly activeBranches: number;
+  readonly totalCommits7d: number;
+  readonly pendingReviewBranches: number;
+} {
+  const active = db
+    .prepare(
+      `SELECT COUNT(*) as count FROM code_changes
+       WHERE branch_name IS NOT NULL
+         AND status IN ('applied', 'pending_approval')
+         AND created_at >= datetime('now', '-7 days')`,
+    )
+    .get() as { count: number };
+
+  const commitsResult = db
+    .prepare(
+      `SELECT commits FROM code_changes
+       WHERE commits IS NOT NULL
+         AND created_at >= datetime('now', '-7 days')`,
+    )
+    .all() as ReadonlyArray<{ commits: string }>;
+
+  let totalCommits = 0;
+  for (const row of commitsResult) {
+    try {
+      const parsed = JSON.parse(row.commits) as readonly unknown[];
+      totalCommits += parsed.length;
+    } catch {
+      totalCommits += 1;
+    }
+  }
+
+  const pendingReview = db
+    .prepare(
+      `SELECT COUNT(*) as count FROM code_changes
+       WHERE branch_name IS NOT NULL
+         AND status = 'pending_approval'`,
+    )
+    .get() as { count: number };
+
+  return {
+    activeBranches: active.count,
+    totalCommits7d: totalCommits,
+    pendingReviewBranches: pendingReview.count,
   };
 }

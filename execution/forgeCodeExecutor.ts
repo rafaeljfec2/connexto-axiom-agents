@@ -10,7 +10,7 @@ import { incrementUsedTokens } from "../state/budgets.js";
 import { saveCodeChange, updateCodeChangeStatus } from "../state/codeChanges.js";
 import { recordTokenUsage } from "../state/tokenUsage.js";
 import type { FileChange } from "./codeApplier.js";
-import { validateFilePaths, calculateRisk, applyCodeChange } from "./codeApplier.js";
+import { validateFilePaths, calculateRisk, applyCodeChangeWithBranch } from "./codeApplier.js";
 import { callOpenClaw } from "./openclawClient.js";
 import type { TokenUsageInfo } from "./openclawClient.js";
 import type { ExecutionResult } from "./types.js";
@@ -148,11 +148,15 @@ export async function executeForgeCode(
     const effectiveRisk = Math.max(risk, parsed.risk);
 
     const filePaths = parsed.files.map((f) => f.path);
+    const pendingFilesJson = JSON.stringify(
+      parsed.files.map((f) => ({ path: f.path, action: f.action, content: f.content })),
+    );
     const changeId = saveCodeChange(db, {
       taskId: goal_id,
       description: parsed.description,
       filesChanged: filePaths,
       risk: effectiveRisk,
+      pendingFiles: pendingFilesJson,
     });
 
     logAudit(db, {
@@ -186,7 +190,7 @@ export async function executeForgeCode(
       );
     }
 
-    const applyResult = await applyCodeChange(db, changeId, parsed.files);
+    const applyResult = await applyCodeChangeWithBranch(db, changeId, parsed.files);
     const executionTimeMs = Math.round(performance.now() - startTime);
 
     if (applyResult.success) {

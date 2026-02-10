@@ -86,4 +86,7 @@ export interface ForgeCodeInfo {
   readonly pendingApprovalCount: number;
   readonly failedCount7d: number;
   readonly totalRisk7d: number;
+  readonly activeBranches: number;
+  readonly totalCommits7d: number;
+  readonly pendingReviewBranches: number;
 }

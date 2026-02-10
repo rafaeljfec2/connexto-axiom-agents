@@ -192,6 +192,9 @@ CREATE TABLE IF NOT EXISTS code_changes (
   approved_by      TEXT,
   approved_at      TEXT,
   applied_at       TEXT,
+  branch_name      TEXT,
+  commits          TEXT,
+  pending_files    TEXT,
   created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 

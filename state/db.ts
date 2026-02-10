@@ -22,6 +22,7 @@ export function openDatabase(): BetterSqlite3.Database {
 function applyMigrations(db: BetterSqlite3.Database): void {
   migrateOutcomesColumns(db);
   migrateArtifactsColumns(db);
+  migrateCodeChangesColumns(db);
 }
 
 function migrateArtifactsColumns(db: BetterSqlite3.Database): void {
@@ -33,6 +34,21 @@ function migrateArtifactsColumns(db: BetterSqlite3.Database): void {
   }
   if (!columnNames.has("approved_at")) {
     db.exec("ALTER TABLE artifacts ADD COLUMN approved_at TEXT");
+  }
+}
+
+function migrateCodeChangesColumns(db: BetterSqlite3.Database): void {
+  const columns = db.pragma("table_info(code_changes)") as ReadonlyArray<{ name: string }>;
+  const columnNames = new Set(columns.map((c) => c.name));
+
+  if (!columnNames.has("branch_name")) {
+    db.exec("ALTER TABLE code_changes ADD COLUMN branch_name TEXT");
+  }
+  if (!columnNames.has("commits")) {
+    db.exec("ALTER TABLE code_changes ADD COLUMN commits TEXT");
+  }
+  if (!columnNames.has("pending_files")) {
+    db.exec("ALTER TABLE code_changes ADD COLUMN pending_files TEXT");
   }
 }
 

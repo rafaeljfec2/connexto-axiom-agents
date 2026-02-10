@@ -1,5 +1,6 @@
 import type BetterSqlite3 from "better-sqlite3";
 import { logger } from "../config/logger.js";
+import { listForgeBranches, getBranchCommits } from "../execution/gitManager.js";
 import { publishArtifact } from "../execution/publisher.js";
 import { listPendingDrafts, approveDraft, rejectDraft } from "../services/approvalService.js";
 import {
@@ -128,6 +129,9 @@ async function handleCommand(
       break;
     case "/reject_change":
       await handleRejectChange(db, token, chatId, args[0]);
+      break;
+    case "/branches":
+      await handleBranches(token, chatId);
       break;
     case "/help":
     case "/start":
@@ -302,7 +306,8 @@ async function handleChanges(
       c.description.length > TITLE_MAX_LENGTH
         ? `${c.description.slice(0, TITLE_MAX_LENGTH)}...`
         : c.description;
-    return `- [${shortId}] R:${c.risk} (${fileCount} arquivo${fileCount > 1 ? "s" : ""}) ${truncatedDesc}`;
+    const branchTag = c.branch_name ? ` [${c.branch_name}]` : "";
+    return `- [${shortId}] R:${c.risk} (${fileCount} arquivo${fileCount > 1 ? "s" : ""})${branchTag} ${truncatedDesc}`;
   });
 
   const message = `Mudancas de codigo pendentes (${changes.length}):\n\n${lines.join("\n")}\n\nUse /approve_change <id> ou /reject_change <id>`;
@@ -351,8 +356,36 @@ async function handleRejectChange(
     return;
   }
 
-  const result = rejectCodeChange(db, changeId, `telegram:${chatId}`);
+  const result = await rejectCodeChange(db, changeId, `telegram:${chatId}`);
   await sendMessage(token, chatId, result.message);
+}
+
+async function handleBranches(token: string, chatId: number): Promise<void> {
+  try {
+    const branches = await listForgeBranches();
+
+    if (branches.length === 0) {
+      await sendMessage(token, chatId, "Nenhuma branch local do FORGE encontrada.");
+      return;
+    }
+
+    const lines: string[] = [];
+    for (const branch of branches) {
+      const commits = await getBranchCommits(branch);
+      const commitCount = commits.length;
+      const lastCommit = commits[0]?.message ?? "sem commits";
+      lines.push(
+        `- ${branch} (${commitCount} commit${commitCount === 1 ? "" : "s"}) — ${lastCommit}`,
+      );
+    }
+
+    const message = `Branches locais FORGE (${branches.length}):\n\n${lines.join("\n")}`;
+    await sendMessage(token, chatId, message);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error({ error: message }, "Failed to list forge branches");
+    await sendMessage(token, chatId, `Erro ao listar branches: ${message}`);
+  }
 }
 
 async function handleHelp(token: string, chatId: number): Promise<void> {
@@ -367,6 +400,7 @@ async function handleHelp(token: string, chatId: number): Promise<void> {
     "/changes — Lista mudancas de codigo pendentes",
     "/approve_change <id> — Aprova e aplica uma mudanca de codigo",
     "/reject_change <id> — Rejeita uma mudanca de codigo",
+    "/branches — Lista branches locais do FORGE",
     "/help — Mostra esta mensagem",
     "",
     "IDs podem ser parciais (primeiros 8 caracteres).",

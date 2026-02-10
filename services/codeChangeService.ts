@@ -1,7 +1,8 @@
 import type BetterSqlite3 from "better-sqlite3";
 import { logger } from "../config/logger.js";
-import { applyCodeChange } from "../execution/codeApplier.js";
+import { applyCodeChangeWithBranch } from "../execution/codeApplier.js";
 import type { FileChange } from "../execution/codeApplier.js";
+import { deleteBranch } from "../execution/gitManager.js";
 import {
   getCodeChangeById,
   getPendingApprovalChanges,
@@ -43,7 +44,7 @@ export async function approveCodeChange(
 
   logger.info({ changeId, approvedBy }, "Code change approved, applying...");
 
-  const files = reconstructFilesFromChange(change);
+  const files = reconstructFilesFromPendingFiles(change);
 
   if (!files) {
     updateCodeChangeStatus(db, changeId, {
@@ -56,7 +57,7 @@ export async function approveCodeChange(
     };
   }
 
-  const result = await applyCodeChange(db, changeId, files);
+  const result = await applyCodeChangeWithBranch(db, changeId, files);
 
   if (result.success) {
     return {
@@ -71,11 +72,11 @@ export async function approveCodeChange(
   };
 }
 
-export function rejectCodeChange(
+export async function rejectCodeChange(
   db: BetterSqlite3.Database,
   changeId: string,
   rejectedBy: string,
-): CodeChangeActionResult {
+): Promise<CodeChangeActionResult> {
   const change = getCodeChangeById(db, changeId);
 
   if (!change) {
@@ -89,6 +90,16 @@ export function rejectCodeChange(
     };
   }
 
+  if (change.branch_name) {
+    try {
+      await deleteBranch(change.branch_name);
+      logger.info({ changeId, branchName: change.branch_name }, "Branch deleted on rejection");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn({ changeId, error: message }, "Failed to delete branch on rejection");
+    }
+  }
+
   updateCodeChangeStatus(db, changeId, { status: "rejected" });
 
   logger.info({ changeId, rejectedBy }, "Code change rejected");
@@ -99,9 +110,27 @@ export function rejectCodeChange(
   };
 }
 
-function reconstructFilesFromChange(change: CodeChange): readonly FileChange[] | null {
-  try {
-    if (change.diff) {
+function reconstructFilesFromPendingFiles(change: CodeChange): readonly FileChange[] | null {
+  if (change.pending_files) {
+    try {
+      const files = JSON.parse(change.pending_files) as ReadonlyArray<{
+        readonly path: string;
+        readonly action: string;
+        readonly content: string;
+      }>;
+      return files.map((entry) => ({
+        path: entry.path,
+        action: entry.action as "create" | "modify",
+        content: entry.content,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error({ changeId: change.id, error: message }, "Failed to parse pending_files JSON");
+    }
+  }
+
+  if (change.diff) {
+    try {
       const diffEntries = JSON.parse(change.diff) as ReadonlyArray<{
         readonly path: string;
         readonly action: string;
@@ -112,16 +141,18 @@ function reconstructFilesFromChange(change: CodeChange): readonly FileChange[] |
         action: entry.action as "create" | "modify",
         content: entry.after,
       }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error(
+        { changeId: change.id, error: message },
+        "Failed to reconstruct files from diff",
+      );
     }
-
-    logger.warn(
-      { changeId: change.id },
-      "No diff available; code change files cannot be reconstructed from stored data alone",
-    );
-    return null;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error({ changeId: change.id, error: message }, "Failed to reconstruct files from diff");
-    return null;
   }
+
+  logger.warn(
+    { changeId: change.id },
+    "No pending_files or diff available; files cannot be reconstructed",
+  );
+  return null;
 }
