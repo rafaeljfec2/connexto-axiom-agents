@@ -163,7 +163,7 @@ export async function applyProjectCodeChange(
       logger.error({ branchName, error: cleanupMsg }, "Failed to cleanup branch after error");
     }
 
-    return { success: false, diff: "", lintOutput: "", error: message };
+    return { success: false, diff: "", lintOutput: message, error: message };
   }
 }
 
@@ -218,79 +218,120 @@ async function applySearchReplaceEdits(
   let content = await fs.readFile(fullPath, "utf-8");
 
   for (const edit of edits) {
-    const index = content.indexOf(edit.search);
-    if (index === -1) {
-      const trimmedSearch = edit.search.trim();
-      const trimmedIndex = findTrimmedMatch(content, trimmedSearch);
-
-      if (trimmedIndex === -1) {
-        logger.error(
-          {
-            path: relativePath,
-            searchPreview: edit.search.slice(0, 100),
-            searchLength: edit.search.length,
-          },
-          "Search string not found in file for edit",
-        );
-        throw new Error(
-          `Search/replace failed: search string not found in ${relativePath}`,
-        );
-      }
-
-      logger.debug({ path: relativePath }, "Search matched with trimmed whitespace fallback");
-      const matchEnd = findTrimmedMatchEnd(content, trimmedSearch, trimmedIndex);
-      content = content.slice(0, trimmedIndex) + edit.replace + content.slice(matchEnd);
-    } else {
-      content = content.slice(0, index) + edit.replace + content.slice(index + edit.search.length);
-    }
+    const result = applyOneEdit(content, edit, relativePath);
+    content = result;
   }
 
   await fs.writeFile(fullPath, content, "utf-8");
 }
 
-function findTrimmedMatch(content: string, trimmedSearch: string): number {
-  const lines = content.split("\n");
-  const searchLines = trimmedSearch.split("\n").map((l) => l.trim());
-
-  for (let i = 0; i <= lines.length - searchLines.length; i++) {
-    let match = true;
-    for (let j = 0; j < searchLines.length; j++) {
-      if (lines[i + j].trim() !== searchLines[j]) {
-        match = false;
-        break;
-      }
-    }
-    if (match) {
-      let charIndex = 0;
-      for (let k = 0; k < i; k++) {
-        charIndex += lines[k].length + 1;
-      }
-      return charIndex;
-    }
+function applyOneEdit(content: string, edit: FileEdit, relativePath: string): string {
+  const exactIndex = content.indexOf(edit.search);
+  if (exactIndex !== -1) {
+    return content.slice(0, exactIndex) + edit.replace + content.slice(exactIndex + edit.search.length);
   }
-  return -1;
+
+  const fuzzyResult = fuzzyLineMatch(content, edit.search);
+  if (fuzzyResult) {
+    logger.debug({ path: relativePath, matchType: fuzzyResult.type }, "Search matched with fuzzy fallback");
+    return content.slice(0, fuzzyResult.start) + edit.replace + content.slice(fuzzyResult.end);
+  }
+
+  logger.error(
+    {
+      path: relativePath,
+      searchPreview: edit.search.slice(0, 150),
+      searchLength: edit.search.length,
+    },
+    "Search string not found in file for edit",
+  );
+  throw new Error(`Search/replace failed: search string not found in ${relativePath}`);
 }
 
-function findTrimmedMatchEnd(content: string, trimmedSearch: string, startIndex: number): number {
-  const lines = content.split("\n");
-  const searchLines = trimmedSearch.split("\n").map((l) => l.trim());
+interface FuzzyMatchResult {
+  readonly start: number;
+  readonly end: number;
+  readonly type: string;
+}
 
-  let charIndex = 0;
-  let lineIndex = 0;
-  for (let k = 0; k < lines.length; k++) {
-    if (charIndex <= startIndex && startIndex < charIndex + lines[k].length + 1) {
-      lineIndex = k;
-      break;
+function fuzzyLineMatch(content: string, search: string): FuzzyMatchResult | null {
+  const contentLines = content.split("\n");
+  const searchLines = search.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+
+  if (searchLines.length === 0) return null;
+
+  const multiLineResult = findMultiLineTrimMatch(contentLines, searchLines);
+  if (multiLineResult) return multiLineResult;
+
+  if (searchLines.length === 1) {
+    return findSingleLineMatch(contentLines, searchLines[0]);
+  }
+
+  return null;
+}
+
+function findMultiLineTrimMatch(
+  contentLines: readonly string[],
+  searchLines: readonly string[],
+): FuzzyMatchResult | null {
+  for (let i = 0; i <= contentLines.length - searchLines.length; i++) {
+    if (matchesAtPosition(contentLines, searchLines, i)) {
+      const start = sumLineLengths(contentLines, 0, i);
+      const end = sumLineLengths(contentLines, 0, i + searchLines.length);
+      return { start, end: end > 0 ? end - 1 : 0, type: "trimmed-lines" };
     }
-    charIndex += lines[k].length + 1;
+  }
+  return null;
+}
+
+function findSingleLineMatch(
+  contentLines: readonly string[],
+  singleSearch: string,
+): FuzzyMatchResult | null {
+  for (let i = 0; i < contentLines.length; i++) {
+    if (contentLines[i].trim() === singleSearch) {
+      const start = sumLineLengths(contentLines, 0, i);
+      return { start, end: start + contentLines[i].length, type: "single-line-trim" };
+    }
   }
 
-  let endIndex = 0;
-  for (let k = 0; k < lineIndex + searchLines.length; k++) {
-    endIndex += lines[k].length + 1;
+  for (let i = 0; i < contentLines.length; i++) {
+    const trimmedLine = contentLines[i].trim();
+    if (trimmedLine.includes(singleSearch)) {
+      const lineStart = sumLineLengths(contentLines, 0, i);
+      const withinLine = contentLines[i].indexOf(singleSearch);
+      if (withinLine !== -1) {
+        return {
+          start: lineStart + withinLine,
+          end: lineStart + withinLine + singleSearch.length,
+          type: "substring-match",
+        };
+      }
+    }
   }
 
-  return endIndex - 1;
+  return null;
+}
+
+function matchesAtPosition(
+  contentLines: readonly string[],
+  searchLines: readonly string[],
+  startIndex: number,
+): boolean {
+  for (let j = 0; j < searchLines.length; j++) {
+    if (contentLines[startIndex + j].trim() !== searchLines[j]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function sumLineLengths(lines: readonly string[], from: number, to: number): number {
+  let sum = 0;
+  for (let i = from; i < to; i++) {
+    sum += lines[i].length + 1;
+  }
+  return sum;
 }
 
 async function restoreBackups(

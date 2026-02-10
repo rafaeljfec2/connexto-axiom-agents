@@ -147,3 +147,4 @@ vite.config.ts.timestamp-*
 
 # Sandbox (FORGE execution output)
 sandbox/
+workspaces/
