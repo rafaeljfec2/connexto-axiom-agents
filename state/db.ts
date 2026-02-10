@@ -26,6 +26,7 @@ function applyMigrations(db: BetterSqlite3.Database): void {
   migratePullRequestsMergeColumns(db);
   migrateGoalsProjectId(db);
   migrateCodeChangesProjectId(db);
+  migrateOutcomesProjectId(db);
 }
 
 function migrateArtifactsColumns(db: BetterSqlite3.Database): void {
@@ -88,6 +89,17 @@ function migrateGoalsProjectId(db: BetterSqlite3.Database): void {
     db.exec("ALTER TABLE goals ADD COLUMN project_id TEXT");
     db.exec("UPDATE goals SET project_id = 'connexto-digital-signer' WHERE project_id IS NULL");
     db.exec("CREATE INDEX IF NOT EXISTS idx_goals_project_id ON goals(project_id)");
+  }
+}
+
+function migrateOutcomesProjectId(db: BetterSqlite3.Database): void {
+  const columns = db.pragma("table_info(outcomes)") as ReadonlyArray<{ name: string }>;
+  const columnNames = new Set(columns.map((c) => c.name));
+
+  if (!columnNames.has("project_id")) {
+    db.exec("ALTER TABLE outcomes ADD COLUMN project_id TEXT");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_outcomes_project_id ON outcomes(project_id)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_outcomes_created_at ON outcomes(created_at)");
   }
 }
 

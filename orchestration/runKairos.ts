@@ -28,6 +28,11 @@ import { getAverageTokensPerDecision7d } from "../state/efficiencyMetrics.js";
 import { loadGoals, loadGoalsByProject } from "../state/goals.js";
 import { saveOutcome } from "../state/outcomes.js";
 import { recordTokenUsage } from "../state/tokenUsage.js";
+import {
+  getAgentSummary,
+  getRecurrentFailurePatterns,
+  getFrequentFiles,
+} from "../state/executionHistory.js";
 import { callKairosLLM } from "./kairosLLM.js";
 import { formatDailyBriefing } from "./dailyBriefing.js";
 import { filterDelegations } from "./decisionFilter.js";
@@ -41,6 +46,7 @@ import type {
   VectorInfo,
   ForgeCodeInfo,
   NexusInfo,
+  HistoricalPatternInfo,
 } from "./types.js";
 import { validateKairosOutput } from "./validateKairos.js";
 
@@ -67,7 +73,7 @@ export async function runKairos(
   let kairosUsage: LLMUsage | null = null;
 
   try {
-    const result = await callKairosLLM(goals, recentDecisions);
+    const result = await callKairosLLM(goals, recentDecisions, db);
     output = validateKairosOutput(result.output);
     kairosUsage = result.usage;
     logger.info("Output validated successfully");
@@ -112,6 +118,7 @@ export async function runKairos(
   const vectorInfo = buildVectorInfo(db, vectorOutput.results);
   const forgeCodeInfo = buildForgeCodeInfo(db);
   const nexusInfo = buildNexusInfo(db, nexusOutput.results);
+  const historicalInfo = buildHistoricalInfo(db);
 
   const briefingText = formatDailyBriefing({
     output,
@@ -123,6 +130,7 @@ export async function runKairos(
     vectorInfo,
     forgeCodeInfo,
     nexusInfo,
+    historicalInfo,
     projectId,
   });
   await sendTelegramMessage(briefingText);
@@ -482,6 +490,20 @@ function buildNexusInfo(
     researchCount7d: stats.researchCount,
     recentTopics: stats.recentTopics,
     identifiedRisks: stats.identifiedRisks,
+  };
+}
+
+function buildHistoricalInfo(db: BetterSqlite3.Database): HistoricalPatternInfo {
+  const summary = getAgentSummary(db, "forge", 7);
+  const persistentFailures = getRecurrentFailurePatterns(db, "forge", 7);
+  const frequentFiles = getFrequentFiles(db, 7, 5);
+
+  return {
+    forgeSuccessRate7d: summary.successRate,
+    forgeTotalExecutions7d: summary.totalExecutions,
+    persistentFailures,
+    frequentFiles,
+    historicalContextUsed: summary.totalExecutions > 0,
   };
 }
 

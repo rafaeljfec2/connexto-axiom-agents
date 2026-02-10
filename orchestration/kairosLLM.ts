@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type BetterSqlite3 from "better-sqlite3";
 import { loadBudgetConfig } from "../config/budget.js";
 import { logger } from "../config/logger.js";
 import { callLLM, createLLMConfig } from "../llm/client.js";
@@ -7,6 +8,7 @@ import type { LLMUsage } from "../llm/client.js";
 import type { Goal } from "../state/goals.js";
 import type { RecentDecision } from "../state/decisions.js";
 import { compressState } from "./stateCompressor.js";
+import { buildHistoricalContext } from "./historicalContext.js";
 import type { KairosOutput } from "./types.js";
 
 const SYSTEM_PROMPT_PATH = resolve("agents/kairos/SYSTEM.md");
@@ -33,14 +35,23 @@ function estimateTokens(text: string): number {
 export async function callKairosLLM(
   goals: readonly Goal[],
   recentDecisions: readonly RecentDecision[],
+  db: BetterSqlite3.Database,
 ): Promise<KairosLLMResult> {
   const systemPrompt = loadSystemPrompt();
   logger.info({ chars: systemPrompt.length }, "System prompt loaded");
 
   const compressed = compressState(goals, recentDecisions);
-  const userMessage = compressed.inputText;
+  const historicalBlock = buildHistoricalContext(db, "forge");
+  const userMessage = injectHistoricalContext(compressed.inputText, historicalBlock);
 
-  logger.info({ goalsCount: goals.length, decisionsCount: recentDecisions.length }, "Prompt built");
+  logger.info(
+    {
+      goalsCount: goals.length,
+      decisionsCount: recentDecisions.length,
+      historicalChars: historicalBlock.length,
+    },
+    "Prompt built with historical context",
+  );
 
   const budgetConfig = loadBudgetConfig();
   const estimatedInputTokens = estimateTokens(systemPrompt + userMessage);
@@ -63,6 +74,12 @@ export async function callKairosLLM(
   const output = parseJSON(response.text);
 
   return { output, usage: response.usage };
+}
+
+function injectHistoricalContext(inputText: string, historicalBlock: string): string {
+  if (historicalBlock.length === 0) return inputText;
+
+  return inputText.replace("CONSTRAINTS:", `${historicalBlock}\n\nCONSTRAINTS:`);
 }
 
 function parseJSON(text: string): KairosOutput {

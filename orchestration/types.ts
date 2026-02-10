@@ -105,3 +105,11 @@ export interface NexusInfo {
   readonly recentTopics: readonly string[];
   readonly identifiedRisks: readonly string[];
 }
+
+export interface HistoricalPatternInfo {
+  readonly forgeSuccessRate7d: number;
+  readonly forgeTotalExecutions7d: number;
+  readonly persistentFailures: readonly string[];
+  readonly frequentFiles: readonly string[];
+  readonly historicalContextUsed: boolean;
+}

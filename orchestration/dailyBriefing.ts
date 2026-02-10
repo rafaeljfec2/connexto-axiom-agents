@@ -8,6 +8,7 @@ import type {
   VectorInfo,
   ForgeCodeInfo,
   NexusInfo,
+  HistoricalPatternInfo,
 } from "./types.js";
 
 export interface DailyBriefingInput {
@@ -20,6 +21,7 @@ export interface DailyBriefingInput {
   readonly vectorInfo: VectorInfo;
   readonly forgeCodeInfo: ForgeCodeInfo;
   readonly nexusInfo: NexusInfo;
+  readonly historicalInfo: HistoricalPatternInfo;
   readonly projectId?: string;
 }
 
@@ -34,6 +36,7 @@ export function formatDailyBriefing(input: DailyBriefingInput): string {
     vectorInfo,
     forgeCodeInfo,
     nexusInfo,
+    historicalInfo,
     projectId,
   } = input;
   const decisions =
@@ -74,6 +77,7 @@ export function formatDailyBriefing(input: DailyBriefingInput): string {
   const budgetSection = formatBudgetSection(budgetInfo);
   const efficiencySection = formatEfficiencySection(efficiencyInfo);
   const feedbackSection = formatFeedbackSection(feedbackInfo);
+  const historicalSection = formatHistoricalSection(historicalInfo);
 
   const projectLine = projectId ? `*Projeto ativo:* ${projectId}` : "";
 
@@ -110,6 +114,8 @@ export function formatDailyBriefing(input: DailyBriefingInput): string {
     ...efficiencySection,
     "",
     ...feedbackSection,
+    "",
+    ...historicalSection,
     "",
     "*Foco nas proximas 24h:*",
     `- ${output.next_24h_focus}`,
@@ -301,6 +307,24 @@ function formatFeedbackSection(info: FeedbackInfo): readonly string[] {
 
   if (info.problematicTasks.length > 0) {
     lines.push(`- Tasks problematicas: ${info.problematicTasks.join(", ")}`);
+  }
+
+  return lines;
+}
+
+function formatHistoricalSection(info: HistoricalPatternInfo): readonly string[] {
+  const header = String.raw`*Contexto Historico (KAIROS):*`;
+  const usedLine = `- Historico injetado no prompt: ${info.historicalContextUsed ? "Sim" : "Nao"}`;
+  const successLine = `- FORGE sucesso (7d): ${info.forgeSuccessRate7d.toFixed(1)}% (${formatNumber(info.forgeTotalExecutions7d)} exec)`;
+
+  const lines: string[] = [header, usedLine, successLine];
+
+  if (info.persistentFailures.length > 0) {
+    lines.push(`- ALERTA padroes de falha: ${info.persistentFailures.join("; ")}`);
+  }
+
+  if (info.frequentFiles.length > 0) {
+    lines.push(`- Arquivos mais modificados: ${info.frequentFiles.join(", ")}`);
   }
 
   return lines;

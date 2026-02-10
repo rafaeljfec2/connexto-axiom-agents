@@ -58,11 +58,14 @@ CREATE TABLE IF NOT EXISTS outcomes (
   execution_time_ms   INTEGER,
   tokens_used         INTEGER,
   artifact_size_bytes INTEGER,
+  project_id          TEXT,
   created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_outcomes_agent_id ON outcomes(agent_id);
 CREATE INDEX IF NOT EXISTS idx_outcomes_status ON outcomes(status);
+CREATE INDEX IF NOT EXISTS idx_outcomes_project_id ON outcomes(project_id);
+CREATE INDEX IF NOT EXISTS idx_outcomes_created_at ON outcomes(created_at);
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id                 TEXT PRIMARY KEY,
