@@ -235,3 +235,42 @@ export async function deleteBranch(branchName: string, cwd: string): Promise<voi
     logger.warn({ branchName, cwd, error: message }, "Failed to delete branch (may not exist)");
   }
 }
+
+export async function pushBranchToSource(
+  branchName: string,
+  repoSource: string,
+  cwd: string,
+): Promise<void> {
+  validateBranchName(branchName);
+
+  logger.info({ branchName, repoSource, cwd }, "Pushing forge branch to source repo");
+
+  try {
+    const { stderr } = await execFileAsync(
+      GIT_BINARY,
+      ["push", repoSource, `${branchName}:${branchName}`],
+      {
+        cwd,
+        timeout: GIT_TIMEOUT_MS * 2,
+        env: {
+          ...process.env,
+          HUSKY: "0",
+          GIT_TERMINAL_PROMPT: "0",
+        },
+      },
+    );
+
+    if (stderr && !stderr.includes("->")) {
+      logger.debug({ stderr: stderr.trim() }, "Push stderr output");
+    }
+
+    logger.info({ branchName, repoSource }, "Branch pushed to source repo");
+  } catch (error: unknown) {
+    const execError = error as { stderr?: string; message?: string };
+    logger.error(
+      { branchName, repoSource, stderr: execError.stderr?.trim() },
+      "Failed to push branch to source repo",
+    );
+    throw new Error(`Push failed: ${execError.message ?? "unknown"}`);
+  }
+}

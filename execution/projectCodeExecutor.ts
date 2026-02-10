@@ -54,6 +54,13 @@ function buildProjectSystemPrompt(
     '   Para remover uma linha do meio, inclua as linhas ao redor no search E no replace (sem a linha removida).',
     '   NUNCA use "content" para modify. Sempre use "edits".',
     "",
+    "REGRA IMPORTANTE - Efeitos cascata:",
+    "Ao remover codigo, verifique se a mudanca cria efeitos colaterais:",
+    "- Se remover o uso de um import, ADICIONE um edit para remover esse import tambem.",
+    "- Se remover uma variavel, remova declaracao e todos os usos.",
+    "- Se remover um item de um objeto/array, ajuste virgulas se necessario.",
+    "- Cada edit deve deixar o codigo sintaticamente valido e sem imports/variaveis nao usadas.",
+    "",
     "Formato de saida OBRIGATORIO (JSON puro, sem fences):",
     "{",
     '  "description": "Descricao curta da mudanca (max 200 chars)",',
@@ -150,7 +157,7 @@ async function executeInWorkspace(
   delegation: KairosDelegation,
   projectId: string,
   workspacePath: string,
-  project: { readonly language: string; readonly framework: string },
+  project: { readonly language: string; readonly framework: string; readonly repo_source: string },
   startTime: number,
 ): Promise<ExecutionResult> {
   const { task, goal_id, expected_output } = delegation;
@@ -283,7 +290,7 @@ async function executeInWorkspace(
     );
   }
 
-  const applyResult = await applyProjectCodeChange(db, changeId, parsed.files, workspacePath);
+  const applyResult = await applyProjectCodeChange(db, changeId, parsed.files, workspacePath, project.repo_source);
 
   if (applyResult.success) {
     const executionTimeMs = Math.round(performance.now() - startTime);
@@ -316,6 +323,7 @@ async function executeInWorkspace(
     lintOutput: applyResult.lintOutput,
     previousUsage: usage,
     startTime,
+    repoSource: project.repo_source,
   });
 
   if (retryResult) return retryResult;
@@ -355,10 +363,11 @@ interface RetryContext {
   readonly lintOutput: string;
   readonly previousUsage: TokenUsageInfo;
   readonly startTime: number;
+  readonly repoSource: string;
 }
 
 async function retryWithLintFeedback(ctx: RetryContext): Promise<ExecutionResult | null> {
-  const { db, delegation, projectId, workspacePath, systemPrompt, relevantFiles, allowedDirs, fileTree, lintOutput, previousUsage, startTime } = ctx;
+  const { db, delegation, projectId, workspacePath, systemPrompt, relevantFiles, allowedDirs, fileTree, lintOutput, previousUsage, startTime, repoSource } = ctx;
   const { task, goal_id, expected_output } = delegation;
 
   const lintErrors = lintOutput.slice(0, 1500);
@@ -403,7 +412,7 @@ async function retryWithLintFeedback(ctx: RetryContext): Promise<ExecutionResult
     projectId,
   });
 
-  const retryApplyResult = await applyProjectCodeChange(db, retryChangeId, retryParsed.files, workspacePath);
+  const retryApplyResult = await applyProjectCodeChange(db, retryChangeId, retryParsed.files, workspacePath, repoSource);
 
   if (retryApplyResult.success) {
     const executionTimeMs = Math.round(performance.now() - startTime);

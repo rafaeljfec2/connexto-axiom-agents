@@ -14,6 +14,7 @@ import {
   getBranchDiff,
   getBranchCommits,
   deleteBranch,
+  pushBranchToSource,
 } from "./projectGitManager.js";
 import {
   validateProjectFilePaths,
@@ -66,6 +67,7 @@ export async function applyProjectCodeChange(
   changeId: string,
   files: readonly FileChange[],
   workspacePath: string,
+  repoSource?: string,
 ): Promise<ProjectApplyResult> {
   const change = getCodeChangeById(db, changeId);
   if (!change) {
@@ -99,37 +101,15 @@ export async function applyProjectCodeChange(
     await writeFiles(files, workspacePath);
 
     const filePaths = files.map((f) => f.path);
-
-    await runEslintFix(filePaths, workspacePath);
-
-    const lintResult = await runLint(filePaths, workspacePath);
+    const lintResult = await lintAndAutoFix(filePaths, workspacePath);
 
     if (lintResult.success) {
-      await stageFiles(filePaths, workspacePath);
-      const commitMessage = `forge: ${change.description.slice(0, 120)}`;
-      const hash = await commitChanges(commitMessage, workspacePath);
-
-      const diff = await getBranchDiff(branchName, workspacePath);
-      const commits = await getBranchCommits(branchName, workspacePath);
-      const commitsJson = JSON.stringify(commits);
-
-      await switchToMain(workspacePath);
-
-      updateCodeChangeStatus(db, changeId, {
-        status: "applied",
-        diff,
-        testOutput: lintResult.output,
-        appliedAt: new Date().toISOString(),
+      return await commitAndFinalize(db, changeId, change.description, filePaths, {
         branchName,
-        commits: commitsJson,
+        workspacePath,
+        lintResult,
+        repoSource,
       });
-
-      logger.info(
-        { changeId, branchName, commitHash: hash, workspacePath },
-        "Project code change applied with branch",
-      );
-
-      return { success: true, diff, lintOutput: lintResult.output };
     }
 
     logger.warn(
@@ -165,6 +145,72 @@ export async function applyProjectCodeChange(
 
     return { success: false, diff: "", lintOutput: message, error: message };
   }
+}
+
+async function lintAndAutoFix(
+  filePaths: readonly string[],
+  workspacePath: string,
+): Promise<LintResult> {
+  await runEslintFix(filePaths, workspacePath);
+
+  const preLintResult = await runLint(filePaths, workspacePath);
+
+  if (!preLintResult.success) {
+    const unusedImportsFixed = await fixUnusedImports(filePaths, workspacePath, preLintResult.output);
+    if (unusedImportsFixed) {
+      await runEslintFix(filePaths, workspacePath);
+      return runLint(filePaths, workspacePath);
+    }
+  }
+
+  return preLintResult;
+}
+
+interface CommitContext {
+  readonly branchName: string;
+  readonly workspacePath: string;
+  readonly lintResult: LintResult;
+  readonly repoSource?: string;
+}
+
+async function commitAndFinalize(
+  db: BetterSqlite3.Database,
+  changeId: string,
+  description: string,
+  filePaths: readonly string[],
+  ctx: CommitContext,
+): Promise<ProjectApplyResult> {
+  const { branchName, workspacePath, lintResult, repoSource } = ctx;
+
+  await stageFiles(filePaths, workspacePath);
+  const commitMessage = `forge: ${description.slice(0, 120)}`;
+  const hash = await commitChanges(commitMessage, workspacePath);
+
+  const diff = await getBranchDiff(branchName, workspacePath);
+  const commits = await getBranchCommits(branchName, workspacePath);
+  const commitsJson = JSON.stringify(commits);
+
+  if (repoSource) {
+    await pushBranchToSource(branchName, repoSource, workspacePath);
+  }
+
+  await switchToMain(workspacePath);
+
+  updateCodeChangeStatus(db, changeId, {
+    status: "applied",
+    diff,
+    testOutput: lintResult.output,
+    appliedAt: new Date().toISOString(),
+    branchName,
+    commits: commitsJson,
+  });
+
+  logger.info(
+    { changeId, branchName, commitHash: hash, workspacePath, pushedToSource: !!repoSource },
+    "Project code change applied with branch",
+  );
+
+  return { success: true, diff, lintOutput: lintResult.output };
 }
 
 async function backupFiles(
@@ -332,6 +378,132 @@ function sumLineLengths(lines: readonly string[], from: number, to: number): num
     sum += lines[i].length + 1;
   }
   return sum;
+}
+
+async function fixUnusedImports(
+  filePaths: readonly string[],
+  workspacePath: string,
+  lintOutput: string,
+): Promise<boolean> {
+  const unusedByFile = parseUnusedImportsFromLint(lintOutput);
+  if (unusedByFile.size === 0) return false;
+
+  let anyFixed = false;
+
+  for (const filePath of filePaths) {
+    const fixed = await fixUnusedImportsInFile(filePath, workspacePath, unusedByFile);
+    if (fixed) anyFixed = true;
+  }
+
+  return anyFixed;
+}
+
+function parseUnusedImportsFromLint(lintOutput: string): Map<string, string[]> {
+  const unusedByFile = new Map<string, string[]>();
+  let currentFile = "";
+
+  for (const line of lintOutput.split("\n")) {
+    const fileMatch = /\/([^/\s]+\.tsx?)$/.exec(line.trim());
+    if (fileMatch) {
+      currentFile = line.trim();
+      continue;
+    }
+
+    const unusedMatch = /^\s*\d+:\d+\s+error\s+'(\w+)' is defined but never used/.exec(line);
+    if (unusedMatch && currentFile) {
+      const existing = unusedByFile.get(currentFile) ?? [];
+      existing.push(unusedMatch[1]);
+      unusedByFile.set(currentFile, existing);
+    }
+  }
+
+  return unusedByFile;
+}
+
+async function fixUnusedImportsInFile(
+  filePath: string,
+  workspacePath: string,
+  unusedByFile: ReadonlyMap<string, readonly string[]>,
+): Promise<boolean> {
+  const fullPath = sanitizeWorkspacePath(workspacePath, filePath);
+  const matchingKey = [...unusedByFile.keys()].find((k) => k.endsWith(filePath));
+  if (!matchingKey) return false;
+
+  const unusedNames = unusedByFile.get(matchingKey);
+  if (!unusedNames || unusedNames.length === 0) return false;
+
+  const content = await fs.readFile(fullPath, "utf-8");
+  const fixed = removeUnusedImportNames(content, unusedNames);
+
+  if (fixed === content) return false;
+
+  await fs.writeFile(fullPath, fixed, "utf-8");
+  logger.info({ path: filePath, removedImports: unusedNames }, "Auto-removed unused imports");
+  return true;
+}
+
+function removeUnusedImportNames(content: string, unusedNames: readonly string[]): string {
+  const lines = content.split("\n");
+  const result: string[] = [];
+  const unusedSet = new Set(unusedNames);
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (!line.trimStart().startsWith("import")) {
+      result.push(line);
+      i++;
+      continue;
+    }
+
+    let importBlock = line;
+    let endIdx = i;
+    while (!importBlock.includes("from") && endIdx < lines.length - 1) {
+      endIdx++;
+      importBlock += "\n" + lines[endIdx];
+    }
+
+    const cleaned = cleanImportStatement(importBlock, unusedSet);
+    if (cleaned !== null) {
+      result.push(cleaned);
+    }
+
+    i = endIdx + 1;
+  }
+
+  return result.join("\n");
+}
+
+function cleanImportStatement(importBlock: string, unusedSet: ReadonlySet<string>): string | null {
+  const namedMatch = /\{([^}]+)\}/.exec(importBlock);
+  if (!namedMatch) return importBlock;
+
+  const specifiers = namedMatch[1]
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  const remaining = specifiers.filter((spec) => {
+    const name = spec.includes(" as ") ? spec.split(" as ")[1].trim() : spec.replace("type ", "").trim();
+    return !unusedSet.has(name);
+  });
+
+  if (remaining.length === specifiers.length) return importBlock;
+
+  if (remaining.length === 0) {
+    const hasDefault = /^import\s+\w+\s*,/.test(importBlock.trim());
+    if (hasDefault) {
+      return importBlock.replace(/,\s*\{[^}]*\}/, "");
+    }
+    return null;
+  }
+
+  const newSpecifiers = remaining.length <= 2
+    ? `{ ${remaining.join(", ")} }`
+    : `{\n  ${remaining.join(",\n  ")}\n}`;
+
+  return importBlock.replace(/\{[^}]*\}/, newSpecifiers);
 }
 
 async function restoreBackups(
