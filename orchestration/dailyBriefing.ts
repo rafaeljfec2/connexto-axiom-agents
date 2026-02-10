@@ -9,7 +9,7 @@ export function formatDailyBriefing(
   const decisions =
     output.decisions_needed.length > 0
       ? output.decisions_needed.map((d) => `- ${d.action}: ${d.reasoning}`).join("\n")
-      : "- None.";
+      : "- Nenhuma.";
 
   const approved =
     filtered.approved.length > 0
@@ -19,7 +19,7 @@ export function formatDailyBriefing(
             return `- ${d.agent}: ${d.task} [I:${m.impact} C:${m.cost} R:${m.risk}]`;
           })
           .join("\n")
-      : "- None.";
+      : "- Nenhuma.";
 
   const pending =
     filtered.needsApproval.length > 0
@@ -29,46 +29,46 @@ export function formatDailyBriefing(
             return `- ${d.agent}: ${d.task} [R:${m.risk} C:${m.cost}]`;
           })
           .join("\n")
-      : "- None.";
+      : "- Nenhuma.";
 
   const rejected =
     filtered.rejected.length > 0
       ? filtered.rejected.map((r) => `- ${r.delegation.task}: ${r.reason}`).join("\n")
-      : "- None.";
+      : "- Nenhuma.";
 
   const executionLines =
     executions.length > 0
       ? executions
           .map((e) => {
-            const tag = e.status === "success" ? "SUCCESS" : "FAILED";
+            const tag = e.status === "success" ? "SUCESSO" : "FALHA";
             const detail = e.status === "success" ? e.output : e.error;
             return `- [${tag}] ${e.task} -> ${detail}`;
           })
           .join("\n")
-      : "- None.";
+      : "- Nenhuma.";
 
   const lines = [
-    String.raw`*\[KAIROS — Daily Briefing]*`,
+    String.raw`*\[KAIROS — Briefing Diario]*`,
     "",
     "*Resumo:*",
     `- ${output.briefing}`,
     "",
-    "*Decisoes:*",
+    String.raw`*Decisoes pendentes:*`,
     decisions,
     "",
-    "*Delegacoes aprovadas:*",
+    String.raw`*Delegacoes aprovadas:*`,
     approved,
     "",
-    "*Aguardando aprovacao:*",
+    String.raw`*Aguardando aprovacao:*`,
     pending,
     "",
     "*Descartadas:*",
     rejected,
     "",
-    "*Execucoes FORGE:*",
+    String.raw`*Execucoes FORGE:*`,
     executionLines,
     "",
-    "*Foco 24h:*",
+    "*Foco nas proximas 24h:*",
     `- ${output.next_24h_focus}`,
   ];
 
