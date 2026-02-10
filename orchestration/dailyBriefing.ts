@@ -158,8 +158,28 @@ function formatVectorSection(info: VectorInfo): readonly string[] {
   const draftsLine = `- Drafts aguardando aprovacao: ${formatNumber(info.pendingDraftsCount)}`;
   const approvedLine = `- Drafts aprovados (nao publicados): ${formatNumber(info.approvedDraftsCount)}`;
   const publishedLine = `- Publicacoes (7d): ${formatNumber(info.publishedCount7d)}`;
+  const engagementLine = `- Performance media (7d): ${info.avgEngagement7d.toFixed(1)}`;
 
-  return [header, executionLines, draftsLine, approvedLine, publishedLine];
+  const strongLine =
+    info.strongMessageTypes.length > 0
+      ? `- Mensagens fortes: ${info.strongMessageTypes.join(", ")}`
+      : "- Mensagens fortes: nenhuma";
+
+  const weakLine =
+    info.weakMessageTypes.length > 0
+      ? `- Mensagens fracas: ${info.weakMessageTypes.join(", ")}`
+      : "- Mensagens fracas: nenhuma";
+
+  return [
+    header,
+    executionLines,
+    draftsLine,
+    approvedLine,
+    publishedLine,
+    engagementLine,
+    strongLine,
+    weakLine,
+  ];
 }
 
 function formatFeedbackSection(info: FeedbackInfo): readonly string[] {

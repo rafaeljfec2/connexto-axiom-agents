@@ -150,3 +150,30 @@ CREATE TABLE IF NOT EXISTS publications (
 CREATE INDEX IF NOT EXISTS idx_publications_artifact_id ON publications(artifact_id);
 CREATE INDEX IF NOT EXISTS idx_publications_channel ON publications(channel);
 CREATE INDEX IF NOT EXISTS idx_publications_status ON publications(status);
+
+CREATE TABLE IF NOT EXISTS marketing_metrics (
+  id               TEXT PRIMARY KEY,
+  artifact_id      TEXT NOT NULL REFERENCES artifacts(id),
+  channel          TEXT NOT NULL,
+  impressions      INTEGER NOT NULL DEFAULT 0,
+  clicks           INTEGER NOT NULL DEFAULT 0,
+  engagement_score REAL NOT NULL DEFAULT 0,
+  source           TEXT NOT NULL CHECK (source IN ('stub', 'manual', 'api')),
+  collected_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_marketing_metrics_artifact_id ON marketing_metrics(artifact_id);
+CREATE INDEX IF NOT EXISTS idx_marketing_metrics_collected_at ON marketing_metrics(collected_at);
+
+CREATE TABLE IF NOT EXISTS marketing_feedback (
+  id               TEXT PRIMARY KEY,
+  artifact_id      TEXT NOT NULL REFERENCES artifacts(id),
+  message_type     TEXT NOT NULL,
+  grade            TEXT NOT NULL CHECK (grade IN ('STRONG', 'AVERAGE', 'WEAK')),
+  engagement_score REAL NOT NULL,
+  created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_marketing_feedback_message_type ON marketing_feedback(message_type);
+CREATE INDEX IF NOT EXISTS idx_marketing_feedback_grade ON marketing_feedback(grade);
+CREATE INDEX IF NOT EXISTS idx_marketing_feedback_created_at ON marketing_feedback(created_at);

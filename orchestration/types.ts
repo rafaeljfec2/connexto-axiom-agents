@@ -76,4 +76,7 @@ export interface VectorInfo {
   readonly pendingDraftsCount: number;
   readonly approvedDraftsCount: number;
   readonly publishedCount7d: number;
+  readonly avgEngagement7d: number;
+  readonly strongMessageTypes: readonly string[];
+  readonly weakMessageTypes: readonly string[];
 }

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type BetterSqlite3 from "better-sqlite3";
 import { logger } from "../config/logger.js";
+import { generateStubMetrics } from "../services/metricsCollector.js";
 import { getArtifactById, updateArtifactStatus } from "../state/artifacts.js";
 import { savePublication } from "../state/publications.js";
 
@@ -48,6 +49,8 @@ export function publishArtifact(
   });
 
   updateArtifactStatus(db, artifactId, "published");
+
+  generateStubMetrics(db, artifactId, channel);
 
   logger.info(
     { artifactId, publicationId, channel, externalId: stubResult.externalId },

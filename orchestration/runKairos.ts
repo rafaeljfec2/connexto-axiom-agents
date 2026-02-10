@@ -10,6 +10,10 @@ import type { LLMUsage } from "../llm/client.js";
 import { sendTelegramMessage } from "../interfaces/telegram.js";
 import { saveFeedback, normalizeTaskType, getFeedbackSummary } from "../state/agentFeedback.js";
 import { getPendingArtifacts, getApprovedArtifacts } from "../state/artifacts.js";
+import {
+  getAverageEngagement7d,
+  getMarketingPerformanceSummary,
+} from "../state/marketingFeedback.js";
 import { getPublicationCount7d } from "../state/publications.js";
 import { getCurrentBudget, incrementUsedTokens } from "../state/budgets.js";
 import { saveDecision, loadRecentDecisions } from "../state/decisions.js";
@@ -309,12 +313,24 @@ function buildVectorInfo(
   const pendingDrafts = getPendingArtifacts(db, "vector");
   const approvedDrafts = getApprovedArtifacts(db, "vector");
   const publishedCount7d = getPublicationCount7d(db);
+  const avgEngagement7d = getAverageEngagement7d(db);
+
+  const performanceSummary = getMarketingPerformanceSummary(db, 7);
+  const strongMessageTypes = performanceSummary
+    .filter((s) => s.strongCount > s.weakCount)
+    .map((s) => s.messageType);
+  const weakMessageTypes = performanceSummary
+    .filter((s) => s.weakCount > s.strongCount)
+    .map((s) => s.messageType);
 
   return {
     executionResults: vectorResults,
     pendingDraftsCount: pendingDrafts.length,
     approvedDraftsCount: approvedDrafts.length,
     publishedCount7d,
+    avgEngagement7d,
+    strongMessageTypes,
+    weakMessageTypes,
   };
 }
 

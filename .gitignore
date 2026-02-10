@@ -142,6 +142,8 @@ vite.config.ts.timestamp-*
 # SQLite databases
 *.sqlite
 *.db
+*.db-shm
+*.db-wal
 
 # Sandbox (FORGE execution output)
 sandbox/

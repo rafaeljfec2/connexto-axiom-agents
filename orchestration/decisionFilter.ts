@@ -3,6 +3,7 @@ import type { BudgetConfig } from "../config/budget.js";
 import { logger } from "../config/logger.js";
 import { normalizeTaskType } from "../state/agentFeedback.js";
 import { computeAdjustment } from "./feedbackAdjuster.js";
+import { computeMarketingAdjustment } from "./marketingFeedbackAdjuster.js";
 import type { KairosDelegation, FilteredDelegations, RejectedDelegation } from "./types.js";
 
 const MAX_APPROVED_PER_CYCLE = 3;
@@ -73,21 +74,31 @@ function applyFeedbackAdjustment(
   budgetConfig: BudgetConfig,
 ): AdjustedMetrics {
   const taskType = normalizeTaskType(delegation.task);
-  const adjustment = computeAdjustment(db, delegation.agent, taskType, budgetConfig);
+  const executionAdj = computeAdjustment(db, delegation.agent, taskType, budgetConfig);
 
-  const wasAdjusted =
-    adjustment.impactDelta !== 0 || adjustment.costDelta !== 0 || adjustment.riskDelta !== 0;
+  let totalImpactDelta = executionAdj.impactDelta;
+  let totalCostDelta = executionAdj.costDelta;
+  let totalRiskDelta = executionAdj.riskDelta;
+
+  if (delegation.agent === "vector") {
+    const marketingAdj = computeMarketingAdjustment(db, taskType);
+    totalImpactDelta += marketingAdj.impactDelta;
+    totalCostDelta += marketingAdj.costDelta;
+    totalRiskDelta += marketingAdj.riskDelta;
+  }
+
+  const wasAdjusted = totalImpactDelta !== 0 || totalCostDelta !== 0 || totalRiskDelta !== 0;
 
   if (wasAdjusted) {
     logger.info(
-      { agent: delegation.agent, taskType, adjustment },
+      { agent: delegation.agent, taskType, totalImpactDelta, totalCostDelta, totalRiskDelta },
       "Feedback adjustment applied to delegation",
     );
   }
 
-  const impact = clamp(delegation.decision_metrics.impact + adjustment.impactDelta, 1, 5);
-  const cost = clamp(delegation.decision_metrics.cost + adjustment.costDelta, 1, 5);
-  const risk = clamp(delegation.decision_metrics.risk + adjustment.riskDelta, 1, 5);
+  const impact = clamp(delegation.decision_metrics.impact + totalImpactDelta, 1, 5);
+  const cost = clamp(delegation.decision_metrics.cost + totalCostDelta, 1, 5);
+  const risk = clamp(delegation.decision_metrics.risk + totalRiskDelta, 1, 5);
 
   return { metrics: { impact, cost, risk }, wasAdjusted };
 }

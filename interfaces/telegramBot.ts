@@ -2,6 +2,7 @@ import type BetterSqlite3 from "better-sqlite3";
 import { logger } from "../config/logger.js";
 import { publishArtifact } from "../execution/publisher.js";
 import { listPendingDrafts, approveDraft, rejectDraft } from "../services/approvalService.js";
+import { saveManualMetrics } from "../services/metricsCollector.js";
 import { getArtifactById } from "../state/artifacts.js";
 
 const POLLING_TIMEOUT_SECONDS = 30;
@@ -109,6 +110,9 @@ async function handleCommand(
       break;
     case "/publish":
       await handlePublish(db, token, chatId, args[0]);
+      break;
+    case "/metrics":
+      await handleMetrics(db, token, chatId, args);
       break;
     case "/help":
     case "/start":
@@ -218,6 +222,51 @@ async function handlePublish(
   }
 }
 
+async function handleMetrics(
+  db: BetterSqlite3.Database,
+  token: string,
+  chatId: number,
+  args: readonly string[],
+): Promise<void> {
+  if (args.length < 4) {
+    await sendMessage(
+      token,
+      chatId,
+      "Uso: /metrics <id> <impressions> <clicks> <engagement>\nExemplo: /metrics abc12345 500 50 85.0",
+    );
+    return;
+  }
+
+  const [idArg, impressionsStr, clicksStr, engagementStr] = args;
+
+  const artifactId = resolveArtifactId(db, idArg);
+  if (!artifactId) {
+    await sendMessage(token, chatId, `Artifact com ID "${idArg}" nao encontrado.`);
+    return;
+  }
+
+  const impressions = Number(impressionsStr);
+  const clicks = Number(clicksStr);
+  const engagement = Number(engagementStr);
+
+  if (Number.isNaN(impressions) || Number.isNaN(clicks) || Number.isNaN(engagement)) {
+    await sendMessage(token, chatId, "Valores invalidos. Todos devem ser numericos.");
+    return;
+  }
+
+  if (impressions < 0 || clicks < 0 || engagement < 0 || engagement > 100) {
+    await sendMessage(
+      token,
+      chatId,
+      "Valores fora do intervalo. Impressions e clicks >= 0, engagement entre 0 e 100.",
+    );
+    return;
+  }
+
+  const result = saveManualMetrics(db, artifactId, impressions, clicks, engagement);
+  await sendMessage(token, chatId, result.message);
+}
+
 async function handleHelp(token: string, chatId: number): Promise<void> {
   const helpText = [
     "Comandos disponiveis:",
@@ -226,6 +275,7 @@ async function handleHelp(token: string, chatId: number): Promise<void> {
     "/approve <id> — Aprova um draft",
     "/reject <id> — Rejeita um draft",
     "/publish <id> — Publica um artifact aprovado (stub v1)",
+    "/metrics <id> <impressions> <clicks> <engagement> — Registra metricas manuais",
     "/help — Mostra esta mensagem",
     "",
     "IDs podem ser parciais (primeiros 8 caracteres).",
