@@ -6,7 +6,7 @@ logger.info("connexto-axiom initializing...");
 
 const db = openDatabase();
 try {
-  runKairos(db);
+  await runKairos(db);
 } finally {
   db.close();
 }
