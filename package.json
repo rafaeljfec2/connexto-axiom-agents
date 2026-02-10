@@ -17,7 +17,8 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
-    "better-sqlite3": "^12.6.2"
+    "better-sqlite3": "^12.6.2",
+    "pino": "^10.3.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",

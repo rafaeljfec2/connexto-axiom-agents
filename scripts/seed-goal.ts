@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { logger } from "../config/logger.js";
 import { openDatabase } from "../state/db.js";
 
 const db = openDatabase();
@@ -10,14 +11,12 @@ try {
     "INSERT INTO goals (id, title, description, status, priority) VALUES (?, ?, ?, ?, ?)",
   ).run(id, "Launch MVP", "Deliver the minimum viable product for connexto-axiom", "active", 10);
 
-  console.log(`[seed] Goal inserted: ${id}`);
-  console.log("[seed] Title: Launch MVP");
-  console.log("[seed] Status: active | Priority: 10");
+  logger.info({ id, title: "Launch MVP", status: "active", priority: 10 }, "Goal inserted");
 
   const count = db.prepare("SELECT COUNT(*) as total FROM goals WHERE status = 'active'").get() as {
     total: number;
   };
-  console.log(`[seed] Total active goals: ${count.total}`);
+  logger.info({ total: count.total }, "Total active goals");
 } finally {
   db.close();
 }

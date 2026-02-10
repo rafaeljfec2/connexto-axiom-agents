@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { logger } from "../config/logger.js";
 import type { Goal } from "../state/goals.js";
 import type { KairosOutput } from "./types.js";
 
@@ -7,8 +8,8 @@ const SYSTEM_PROMPT_PATH = resolve("agents/kairos/SYSTEM.md");
 
 export function callKairosLLM(goals: readonly Goal[]): KairosOutput {
   const systemPrompt = readFileSync(SYSTEM_PROMPT_PATH, "utf-8");
-  console.log(`[kairos-llm] System prompt loaded (${systemPrompt.length} chars)`);
-  console.log(`[kairos-llm] Evaluating ${goals.length} active goal(s)`);
+  logger.info({ chars: systemPrompt.length }, "System prompt loaded");
+  logger.info({ goalsCount: goals.length }, "Evaluating active goals");
 
   const topGoal = goals[0];
 
