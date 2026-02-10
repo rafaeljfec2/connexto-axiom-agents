@@ -3,5 +3,5 @@ import type { AgentConfig } from "../types.js";
 export const config: AgentConfig = {
   name: "forge",
   llmModel: "placeholder",
-  permissions: [],
+  permissions: ["fs.write", "fs.mkdir", "fs.read"],
 };

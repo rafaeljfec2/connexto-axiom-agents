@@ -21,7 +21,8 @@
     "state/**/*",
     "config/**/*",
     "interfaces/**/*",
-    "llm/**/*"
+    "llm/**/*",
+    "execution/**/*"
   ],
   "exclude": ["node_modules", "dist"]
 }

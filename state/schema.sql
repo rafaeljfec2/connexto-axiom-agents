@@ -47,3 +47,16 @@ CREATE INDEX IF NOT EXISTS idx_decisions_agent_id ON decisions(agent_id);
 CREATE INDEX IF NOT EXISTS idx_decisions_task_id ON decisions(task_id);
 CREATE INDEX IF NOT EXISTS idx_metrics_agent_id ON metrics(agent_id);
 CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics(metric_name);
+
+CREATE TABLE IF NOT EXISTS outcomes (
+  id         TEXT PRIMARY KEY,
+  agent_id   TEXT NOT NULL,
+  task       TEXT NOT NULL,
+  status     TEXT NOT NULL CHECK (status IN ('success', 'failed')),
+  output     TEXT,
+  error      TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_outcomes_agent_id ON outcomes(agent_id);
+CREATE INDEX IF NOT EXISTS idx_outcomes_status ON outcomes(status);

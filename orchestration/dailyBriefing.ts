@@ -1,6 +1,11 @@
+import type { ExecutionResult } from "../execution/types.js";
 import type { KairosOutput, FilteredDelegations } from "./types.js";
 
-export function formatDailyBriefing(output: KairosOutput, filtered: FilteredDelegations): string {
+export function formatDailyBriefing(
+  output: KairosOutput,
+  filtered: FilteredDelegations,
+  executions: readonly ExecutionResult[],
+): string {
   const decisions =
     output.decisions_needed.length > 0
       ? output.decisions_needed.map((d) => `- ${d.action}: ${d.reasoning}`).join("\n")
@@ -31,6 +36,17 @@ export function formatDailyBriefing(output: KairosOutput, filtered: FilteredDele
       ? filtered.rejected.map((r) => `- ${r.delegation.task}: ${r.reason}`).join("\n")
       : "- None.";
 
+  const executionLines =
+    executions.length > 0
+      ? executions
+          .map((e) => {
+            const tag = e.status === "success" ? "SUCCESS" : "FAILED";
+            const detail = e.status === "success" ? e.output : e.error;
+            return `- [${tag}] ${e.task} -> ${detail}`;
+          })
+          .join("\n")
+      : "- None.";
+
   const lines = [
     String.raw`*\[KAIROS — Daily Briefing]*`,
     "",
@@ -48,6 +64,9 @@ export function formatDailyBriefing(output: KairosOutput, filtered: FilteredDele
     "",
     "*Descartadas:*",
     rejected,
+    "",
+    "*Execucoes FORGE:*",
+    executionLines,
     "",
     "*Foco 24h:*",
     `- ${output.next_24h_focus}`,
