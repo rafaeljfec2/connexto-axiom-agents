@@ -8,6 +8,22 @@ const MAX_TOTAL_CONTEXT_CHARS = 12_000;
 const MAX_TREE_DEPTH = 8;
 const MAX_FILE_SIZE_BYTES = 50_000;
 
+const GREP_MAX_FILES = 50;
+const GREP_MAX_LINES = 200;
+const GREP_MAX_FILE_SIZE = 30_000;
+const IMPORT_MAX_PER_FILE = 10;
+const REVERSE_IMPORT_MAX_FILES = 30;
+
+const GREPPABLE_DIRS: ReadonlySet<string> = new Set([
+  "src", "app", "apps", "shared", "components", "lib", "features",
+  "packages", "pages", "views", "routes", "modules", "hooks", "utils",
+  "layouts", "middleware", "services", "helpers",
+]);
+
+const GREPPABLE_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".ts", ".tsx", ".js", ".jsx",
+]);
+
 const IGNORED_DIRS: ReadonlySet<string> = new Set([
   "node_modules",
   ".git",
@@ -147,7 +163,11 @@ export async function findRelevantFiles(
     return [];
   }
 
-  const scored: Array<{ readonly file: ProjectFile; readonly score: number }> = [];
+  const allFilePaths = new Set(structure.files.map((f) => f.relativePath));
+  const allFilesMap = new Map(structure.files.map((f) => [f.relativePath, f]));
+  const scoredPaths = new Set<string>();
+
+  const scored: ScoredFile[] = [];
 
   for (const file of structure.files) {
     if (file.size > MAX_FILE_SIZE_BYTES) continue;
@@ -156,14 +176,34 @@ export async function findRelevantFiles(
     const score = calculateFileRelevance(file.relativePath, keywords);
     if (score > 0) {
       scored.push({ file, score });
+      scoredPaths.add(file.relativePath);
     }
   }
+
+  const grepResults = await grepFilesForKeywords(workspacePath, structure.files, keywords, scoredPaths);
+  mergeScored(scored, grepResults, scoredPaths);
+
+  const importedFiles = await followImports(workspacePath, scored, allFilePaths, scoredPaths, allFilesMap);
+  mergeScored(scored, importedFiles, scoredPaths);
+
+  const reverseFiles = await findReverseImports(workspacePath, structure.files, scored, scoredPaths);
+  mergeScored(scored, reverseFiles, scoredPaths);
 
   expandWithNeighborFiles(scored, structure.files, maxFiles);
 
   scored.sort((a, b) => b.score - a.score);
   const topFiles = scored.slice(0, maxFiles);
 
+  return readAndAssembleContext(workspacePath, topFiles, task, keywords, scored.length);
+}
+
+async function readAndAssembleContext(
+  workspacePath: string,
+  topFiles: readonly ScoredFile[],
+  task: string,
+  keywords: readonly string[],
+  totalCandidates: number,
+): Promise<readonly FileContext[]> {
   const results: FileContext[] = [];
   let totalChars = 0;
 
@@ -189,7 +229,7 @@ export async function findRelevantFiles(
     {
       task: task.slice(0, 80),
       keywords,
-      candidateFiles: scored.length,
+      candidateFiles: totalCandidates,
       selectedFiles: results.length,
       totalContextChars: totalChars,
     },
@@ -285,6 +325,230 @@ function expandWithNeighborFiles(
     }
 
     if (scored.length >= maxFiles * 2) break;
+  }
+}
+
+interface ScoredFile {
+  readonly file: ProjectFile;
+  readonly score: number;
+}
+
+function isGreppableFile(file: ProjectFile): boolean {
+  if (file.size > GREP_MAX_FILE_SIZE || file.size === 0) return false;
+
+  const ext = path.extname(file.relativePath);
+  if (!GREPPABLE_EXTENSIONS.has(ext)) return false;
+
+  const firstDir = file.relativePath.split(path.sep)[0];
+  return GREPPABLE_DIRS.has(firstDir);
+}
+
+export async function grepFilesForKeywords(
+  workspacePath: string,
+  files: readonly ProjectFile[],
+  keywords: readonly string[],
+  alreadyScored: ReadonlySet<string>,
+): Promise<readonly ScoredFile[]> {
+  const results: ScoredFile[] = [];
+  let scannedCount = 0;
+
+  const candidates = files.filter(
+    (f) => isGreppableFile(f) && !alreadyScored.has(f.relativePath),
+  );
+
+  for (const file of candidates) {
+    if (scannedCount >= GREP_MAX_FILES) break;
+    scannedCount++;
+
+    const fullPath = path.join(workspacePath, file.relativePath);
+    try {
+      const content = await readFirstLines(fullPath, GREP_MAX_LINES);
+      const lowerContent = content.toLowerCase();
+
+      let score = 0;
+      for (const keyword of keywords) {
+        if (lowerContent.includes(keyword)) {
+          score += 4;
+        }
+      }
+
+      if (score > 0) {
+        results.push({ file, score });
+      }
+    } catch {
+      /* skip unreadable files */
+    }
+  }
+
+  logger.debug(
+    { scannedFiles: scannedCount, matchedFiles: results.length },
+    "Content grep completed",
+  );
+
+  return results;
+}
+
+async function readFirstLines(filePath: string, maxLines: number): Promise<string> {
+  const content = await fsPromises.readFile(filePath, "utf-8");
+  const lines = content.split("\n");
+  return lines.slice(0, maxLines).join("\n");
+}
+
+const IMPORT_REGEX = /import\s+.*?\s+from\s+['"]([^'"]+)['"]/g;
+const REQUIRE_REGEX = /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+
+function parseImportPaths(content: string): readonly string[] {
+  const imports: string[] = [];
+
+  for (const match of content.matchAll(IMPORT_REGEX)) {
+    imports.push(match[1]);
+    if (imports.length >= IMPORT_MAX_PER_FILE) break;
+  }
+
+  if (imports.length < IMPORT_MAX_PER_FILE) {
+    for (const match of content.matchAll(REQUIRE_REGEX)) {
+      imports.push(match[1]);
+      if (imports.length >= IMPORT_MAX_PER_FILE) break;
+    }
+  }
+
+  return imports.filter((p) => p.startsWith("."));
+}
+
+function resolveImportPath(
+  importerRelativePath: string,
+  importSpecifier: string,
+  allFilePaths: ReadonlySet<string>,
+): string | null {
+  const importerDir = path.dirname(importerRelativePath);
+  const rawResolved = path.join(importerDir, importSpecifier);
+  const normalized = path.normalize(rawResolved);
+
+  const candidates = [
+    normalized,
+    `${normalized}.ts`,
+    `${normalized}.tsx`,
+    `${normalized}.js`,
+    `${normalized}.jsx`,
+    path.join(normalized, "index.ts"),
+    path.join(normalized, "index.tsx"),
+    path.join(normalized, "index.js"),
+  ];
+
+  for (const candidate of candidates) {
+    if (allFilePaths.has(candidate)) return candidate;
+  }
+
+  return null;
+}
+
+export async function followImports(
+  workspacePath: string,
+  scoredFiles: readonly ScoredFile[],
+  allFilePaths: ReadonlySet<string>,
+  alreadyScored: ReadonlySet<string>,
+  allFilesMap: ReadonlyMap<string, ProjectFile>,
+): Promise<readonly ScoredFile[]> {
+  const results: ScoredFile[] = [];
+  const seen = new Set(alreadyScored);
+
+  for (const { file } of scoredFiles) {
+    const fullPath = path.join(workspacePath, file.relativePath);
+    try {
+      const content = await fsPromises.readFile(fullPath, "utf-8");
+      const importPaths = parseImportPaths(content);
+
+      for (const importSpec of importPaths) {
+        const resolved = resolveImportPath(file.relativePath, importSpec, allFilePaths);
+        if (!resolved || seen.has(resolved)) continue;
+
+        const importedFile = allFilesMap.get(resolved);
+        if (!importedFile || importedFile.size > MAX_FILE_SIZE_BYTES) continue;
+
+        results.push({ file: importedFile, score: 2 });
+        seen.add(resolved);
+      }
+    } catch {
+      /* skip unreadable files */
+    }
+  }
+
+  logger.debug({ importedFiles: results.length }, "Import following completed");
+  return results;
+}
+
+export async function findReverseImports(
+  workspacePath: string,
+  allFiles: readonly ProjectFile[],
+  targetFiles: readonly ScoredFile[],
+  alreadyScored: ReadonlySet<string>,
+): Promise<readonly ScoredFile[]> {
+  if (targetFiles.length === 0) return [];
+
+  const targetPatterns = buildImportPatterns(targetFiles);
+  const results: ScoredFile[] = [];
+  const seen = new Set(alreadyScored);
+  let scannedCount = 0;
+
+  const candidates = allFiles.filter(
+    (f) => isGreppableFile(f) && !seen.has(f.relativePath),
+  );
+
+  for (const file of candidates) {
+    if (scannedCount >= REVERSE_IMPORT_MAX_FILES) break;
+    scannedCount++;
+
+    const fullPath = path.join(workspacePath, file.relativePath);
+    try {
+      const content = await readFirstLines(fullPath, GREP_MAX_LINES);
+      const hasImport = targetPatterns.some((pattern) => content.includes(pattern));
+
+      if (hasImport) {
+        results.push({ file, score: 3 });
+        seen.add(file.relativePath);
+      }
+    } catch {
+      /* skip */
+    }
+  }
+
+  logger.debug(
+    { scannedFiles: scannedCount, reverseImportFiles: results.length },
+    "Reverse import tracking completed",
+  );
+
+  return results;
+}
+
+function buildImportPatterns(targetFiles: readonly ScoredFile[]): readonly string[] {
+  const patterns: string[] = [];
+
+  for (const { file } of targetFiles) {
+    const basename = path.basename(file.relativePath);
+    const nameWithoutExt = basename.replace(/\.[^.]+$/, "");
+    const parentDir = path.basename(path.dirname(file.relativePath));
+
+    patterns.push(`/${nameWithoutExt}'`, `/${nameWithoutExt}"`);
+
+    if (nameWithoutExt === "index") {
+      patterns.push(`/${parentDir}'`, `/${parentDir}"`);
+    } else {
+      patterns.push(`/${parentDir}/${nameWithoutExt}'`, `/${parentDir}/${nameWithoutExt}"`);
+    }
+  }
+
+  return patterns;
+}
+
+function mergeScored(
+  target: ScoredFile[],
+  source: readonly ScoredFile[],
+  existingPaths: Set<string>,
+): void {
+  for (const item of source) {
+    if (existingPaths.has(item.file.relativePath)) continue;
+    target.push(item);
+    existingPaths.add(item.file.relativePath);
   }
 }
 
