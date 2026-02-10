@@ -199,6 +199,12 @@ function formatForgeCodeSection(info: ForgeCodeInfo): readonly string[] {
   const commitsLine = `- Commits (7d): ${formatNumber(info.totalCommits7d)}`;
   const reviewLine = `- Aguardando revisao: ${formatNumber(info.pendingReviewBranches)}`;
 
+  const prHeader = String.raw`*Pull Requests (FORGE):*`;
+  const openPRsLine = `- PRs abertos: ${formatNumber(info.openPRs)}`;
+  const pendingPRsLine = `- Aguardando aprovacao: ${formatNumber(info.pendingApprovalPRs)}`;
+  const closedPRsLine = `- Fechados (7d): ${formatNumber(info.closedPRs7d)}`;
+  const mergedPRsLine = `- Mergeados (7d): ${formatNumber(info.mergedPRs7d)}`;
+
   return [
     header,
     appliedLine,
@@ -210,6 +216,12 @@ function formatForgeCodeSection(info: ForgeCodeInfo): readonly string[] {
     activeLine,
     commitsLine,
     reviewLine,
+    "",
+    prHeader,
+    openPRsLine,
+    pendingPRsLine,
+    closedPRsLine,
+    mergedPRsLine,
   ];
 }
 

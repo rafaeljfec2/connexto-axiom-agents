@@ -9,8 +9,11 @@ import {
   rejectCodeChange,
 } from "../services/codeChangeService.js";
 import { saveManualMetrics } from "../services/metricsCollector.js";
+import { approvePR, rejectPR } from "../services/pullRequestService.js";
 import { getArtifactById } from "../state/artifacts.js";
 import { getCodeChangeById } from "../state/codeChanges.js";
+import { getPendingApprovalPRs, getOpenPRs } from "../state/pullRequests.js";
+import type { PullRequest } from "../state/pullRequests.js";
 
 const POLLING_TIMEOUT_SECONDS = 30;
 const ERROR_BACKOFF_MS = 5000;
@@ -132,6 +135,15 @@ async function handleCommand(
       break;
     case "/branches":
       await handleBranches(token, chatId);
+      break;
+    case "/prs":
+      await handlePRs(db, token, chatId);
+      break;
+    case "/approve_pr":
+      await handleApprovePR(db, token, chatId, args[0]);
+      break;
+    case "/reject_pr":
+      await handleRejectPR(db, token, chatId, args[0]);
       break;
     case "/help":
     case "/start":
@@ -388,6 +400,98 @@ async function handleBranches(token: string, chatId: number): Promise<void> {
   }
 }
 
+async function handlePRs(db: BetterSqlite3.Database, token: string, chatId: number): Promise<void> {
+  const pending = getPendingApprovalPRs(db);
+  const open = getOpenPRs(db);
+
+  if (pending.length === 0 && open.length === 0) {
+    await sendMessage(token, chatId, "Nenhum PR pendente ou aberto.");
+    return;
+  }
+
+  const lines: string[] = [];
+
+  if (pending.length > 0) {
+    lines.push(`Aguardando aprovacao (${pending.length}):`);
+    for (const pr of pending) {
+      lines.push(formatPRLine(pr));
+    }
+    lines.push("");
+  }
+
+  if (open.length > 0) {
+    lines.push(`PRs abertos (${open.length}):`);
+    for (const pr of open) {
+      lines.push(formatPRLine(pr));
+    }
+  }
+
+  lines.push("", "Use /approve_pr <id> ou /reject_pr <id>");
+
+  await sendMessage(token, chatId, lines.join("\n"));
+}
+
+function formatPRLine(pr: PullRequest): string {
+  const shortId = pr.id.slice(0, 8);
+  const prLink = pr.pr_url ? ` ${pr.pr_url}` : "";
+  const prNum = pr.pr_number ? ` #${pr.pr_number}` : "";
+  return `- [${shortId}] R:${pr.risk} ${pr.branch_name}${prNum}${prLink}`;
+}
+
+async function handleApprovePR(
+  db: BetterSqlite3.Database,
+  token: string,
+  chatId: number,
+  idArg: string | undefined,
+): Promise<void> {
+  if (!idArg) {
+    await sendMessage(token, chatId, "Uso: /approve_pr <id>\nExemplo: /approve_pr abc12345");
+    return;
+  }
+
+  const prId = resolvePullRequestId(db, idArg);
+  if (!prId) {
+    await sendMessage(token, chatId, `PR com ID "${idArg}" nao encontrado.`);
+    return;
+  }
+
+  const result = await approvePR(db, prId, `telegram:${chatId}`);
+  await sendMessage(token, chatId, result.message);
+}
+
+async function handleRejectPR(
+  db: BetterSqlite3.Database,
+  token: string,
+  chatId: number,
+  idArg: string | undefined,
+): Promise<void> {
+  if (!idArg) {
+    await sendMessage(token, chatId, "Uso: /reject_pr <id>\nExemplo: /reject_pr abc12345");
+    return;
+  }
+
+  const prId = resolvePullRequestId(db, idArg);
+  if (!prId) {
+    await sendMessage(token, chatId, `PR com ID "${idArg}" nao encontrado.`);
+    return;
+  }
+
+  const result = await rejectPR(db, prId);
+  await sendMessage(token, chatId, result.message);
+}
+
+function resolvePullRequestId(db: BetterSqlite3.Database, partialId: string): string | undefined {
+  const row = db
+    .prepare("SELECT id FROM pull_requests WHERE id LIKE ? LIMIT 2")
+    .all(`${partialId}%`) as ReadonlyArray<{ id: string }>;
+
+  if (row.length === 1) {
+    return row[0].id;
+  }
+
+  return undefined;
+}
+
 async function handleHelp(token: string, chatId: number): Promise<void> {
   const helpText = [
     "Comandos disponiveis:",
@@ -401,6 +505,9 @@ async function handleHelp(token: string, chatId: number): Promise<void> {
     "/approve_change <id> — Aprova e aplica uma mudanca de codigo",
     "/reject_change <id> — Rejeita uma mudanca de codigo",
     "/branches — Lista branches locais do FORGE",
+    "/prs — Lista PRs pendentes e abertos",
+    "/approve_pr <id> — Aprova push e criacao de PR",
+    "/reject_pr <id> — Cancela um PR pendente",
     "/help — Mostra esta mensagem",
     "",
     "IDs podem ser parciais (primeiros 8 caracteres).",

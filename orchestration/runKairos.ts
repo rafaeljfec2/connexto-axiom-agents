@@ -15,6 +15,7 @@ import {
   getMarketingPerformanceSummary,
 } from "../state/marketingFeedback.js";
 import { getCodeChangeStats7d, getBranchStats7d } from "../state/codeChanges.js";
+import { getPRStats7d } from "../state/pullRequests.js";
 import { getPublicationCount7d } from "../state/publications.js";
 import { getCurrentBudget, incrementUsedTokens } from "../state/budgets.js";
 import { saveDecision, loadRecentDecisions } from "../state/decisions.js";
@@ -373,6 +374,7 @@ function findProblematicTasks(db: BetterSqlite3.Database): readonly string[] {
 function buildForgeCodeInfo(db: BetterSqlite3.Database): ForgeCodeInfo {
   const stats = getCodeChangeStats7d(db);
   const branchStats = getBranchStats7d(db);
+  const prStats = getPRStats7d(db);
 
   return {
     appliedCount7d: stats.appliedCount,
@@ -382,6 +384,10 @@ function buildForgeCodeInfo(db: BetterSqlite3.Database): ForgeCodeInfo {
     activeBranches: branchStats.activeBranches,
     totalCommits7d: branchStats.totalCommits7d,
     pendingReviewBranches: branchStats.pendingReviewBranches,
+    openPRs: prStats.openCount,
+    pendingApprovalPRs: prStats.pendingApprovalCount,
+    closedPRs7d: prStats.closedCount7d,
+    mergedPRs7d: prStats.mergedCount7d,
   };
 }
 

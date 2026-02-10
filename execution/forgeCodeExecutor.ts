@@ -14,7 +14,9 @@ import { validateFilePaths, calculateRisk, applyCodeChangeWithBranch } from "./c
 import type { ApplyResult } from "./codeApplier.js";
 import { callOpenClaw } from "./openclawClient.js";
 import type { TokenUsageInfo } from "./openclawClient.js";
+import { isGitHubConfigured } from "./githubClient.js";
 import type { ExecutionResult } from "./types.js";
+import { createPRForCodeChange } from "../services/pullRequestService.js";
 
 const CODING_KEYWORDS: readonly string[] = [
   "implementar",
@@ -198,6 +200,9 @@ export async function executeForgeCode(
     if (applyResult.success) {
       const executionTimeMs = Math.round(performance.now() - startTime);
       logger.info({ changeId, files: filePaths }, "Code change applied automatically (low risk)");
+
+      await tryCreatePR(db, changeId);
+
       return buildResult(
         task,
         "success",
@@ -222,6 +227,9 @@ export async function executeForgeCode(
 
       if (correctionResult) {
         const executionTimeMs = Math.round(performance.now() - startTime);
+
+        await tryCreatePR(db, changeId);
+
         return buildResult(
           task,
           "success",
@@ -569,6 +577,25 @@ function resolveUsage(
   const inputTokens = Math.ceil(prompt.length / CHARS_PER_TOKEN_ESTIMATE);
   const outputTokens = Math.ceil(responseText.length / CHARS_PER_TOKEN_ESTIMATE);
   return { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
+}
+
+async function tryCreatePR(db: BetterSqlite3.Database, changeId: string): Promise<void> {
+  if (!isGitHubConfigured()) {
+    logger.debug({ changeId }, "GitHub not configured, skipping PR creation");
+    return;
+  }
+
+  try {
+    const result = await createPRForCodeChange(db, changeId);
+    if (result.success) {
+      logger.info({ changeId, message: result.message }, "PR flow triggered after code apply");
+    } else {
+      logger.warn({ changeId, message: result.message }, "PR flow could not be triggered");
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error({ changeId, error: message }, "Failed to trigger PR flow");
+  }
 }
 
 function recordUsage(db: BetterSqlite3.Database, goalId: string, usage: TokenUsageInfo): void {

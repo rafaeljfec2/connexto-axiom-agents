@@ -2,7 +2,9 @@ import type BetterSqlite3 from "better-sqlite3";
 import { logger } from "../config/logger.js";
 import { applyCodeChangeWithBranch } from "../execution/codeApplier.js";
 import type { FileChange } from "../execution/codeApplier.js";
+import { isGitHubConfigured } from "../execution/githubClient.js";
 import { deleteBranch } from "../execution/gitManager.js";
+import { createPRForCodeChange } from "./pullRequestService.js";
 import {
   getCodeChangeById,
   getPendingApprovalChanges,
@@ -60,6 +62,16 @@ export async function approveCodeChange(
   const result = await applyCodeChangeWithBranch(db, changeId, files);
 
   if (result.success) {
+    if (isGitHubConfigured()) {
+      try {
+        const prResult = await createPRForCodeChange(db, changeId);
+        logger.info({ changeId, prResult: prResult.message }, "PR flow triggered after approve");
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        logger.error({ changeId, error: msg }, "Failed to trigger PR after approve");
+      }
+    }
+
     return {
       success: true,
       message: `Mudanca ${changeId.slice(0, 8)} aprovada e aplicada com sucesso.`,

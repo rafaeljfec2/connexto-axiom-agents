@@ -200,3 +200,23 @@ CREATE TABLE IF NOT EXISTS code_changes (
 
 CREATE INDEX IF NOT EXISTS idx_code_changes_status ON code_changes(status);
 CREATE INDEX IF NOT EXISTS idx_code_changes_created_at ON code_changes(created_at);
+
+CREATE TABLE IF NOT EXISTS pull_requests (
+  id              TEXT PRIMARY KEY,
+  code_change_id  TEXT NOT NULL REFERENCES code_changes(id),
+  repo            TEXT NOT NULL,
+  branch_name     TEXT NOT NULL,
+  pr_number       INTEGER,
+  pr_url          TEXT,
+  title           TEXT NOT NULL,
+  body            TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'pending_push'
+    CHECK (status IN ('pending_push', 'pending_approval', 'open', 'closed', 'merged')),
+  risk            INTEGER NOT NULL,
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_pull_requests_status ON pull_requests(status);
+CREATE INDEX IF NOT EXISTS idx_pull_requests_code_change_id ON pull_requests(code_change_id);
+CREATE INDEX IF NOT EXISTS idx_pull_requests_created_at ON pull_requests(created_at);
