@@ -67,6 +67,27 @@ function validateDelegations(items: unknown[]): void {
     assertStringField(record, "agent", ctx);
     assertStringField(record, "task", ctx);
     assertStringField(record, "goal_id", ctx);
+    assertStringField(record, "expected_output", ctx);
+    assertStringField(record, "deadline", ctx);
+    validateDecisionMetrics(record["decision_metrics"], ctx);
+  }
+}
+
+function validateDecisionMetrics(metrics: unknown, context: string): void {
+  if (metrics === null || typeof metrics !== "object") {
+    throw new TypeError(`${context} "decision_metrics" must be an object`);
+  }
+
+  const record = metrics as Record<string, unknown>;
+  const fields = ["impact", "cost", "risk", "confidence"] as const;
+
+  for (const field of fields) {
+    const value = record[field];
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 5) {
+      throw new TypeError(
+        `${context} decision_metrics.${field} must be an integer between 1 and 5, got: ${String(value)}`,
+      );
+    }
   }
 }
 

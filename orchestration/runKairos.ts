@@ -5,6 +5,7 @@ import { loadGoals } from "../state/goals.js";
 import { saveDecision, loadRecentDecisions } from "../state/decisions.js";
 import { callKairosLLM } from "./kairosLLM.js";
 import { formatDailyBriefing } from "./dailyBriefing.js";
+import { filterDelegations } from "./decisionFilter.js";
 import type { KairosOutput } from "./types.js";
 import { validateKairosOutput } from "./validateKairos.js";
 
@@ -36,7 +37,17 @@ export async function runKairos(db: BetterSqlite3.Database): Promise<void> {
   saveDecision(db, output);
   logger.info("Decision persisted to database");
 
-  const briefingText = formatDailyBriefing(output);
+  const filtered = filterDelegations(output.delegations);
+  logger.info(
+    {
+      approved: filtered.approved.length,
+      needsApproval: filtered.needsApproval.length,
+      rejected: filtered.rejected.length,
+    },
+    "Delegations filtered",
+  );
+
+  const briefingText = formatDailyBriefing(output, filtered);
   await sendTelegramMessage(briefingText);
   logger.info("Daily briefing sent");
 
