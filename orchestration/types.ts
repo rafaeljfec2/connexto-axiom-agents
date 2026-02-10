@@ -74,4 +74,6 @@ export interface FeedbackInfo {
 export interface VectorInfo {
   readonly executionResults: readonly ExecutionResult[];
   readonly pendingDraftsCount: number;
+  readonly approvedDraftsCount: number;
+  readonly publishedCount7d: number;
 }

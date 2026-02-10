@@ -9,7 +9,8 @@ import { executeVector } from "../execution/vectorExecutor.js";
 import type { LLMUsage } from "../llm/client.js";
 import { sendTelegramMessage } from "../interfaces/telegram.js";
 import { saveFeedback, normalizeTaskType, getFeedbackSummary } from "../state/agentFeedback.js";
-import { getPendingArtifacts } from "../state/artifacts.js";
+import { getPendingArtifacts, getApprovedArtifacts } from "../state/artifacts.js";
+import { getPublicationCount7d } from "../state/publications.js";
 import { getCurrentBudget, incrementUsedTokens } from "../state/budgets.js";
 import { saveDecision, loadRecentDecisions } from "../state/decisions.js";
 import { getAverageTokensPerDecision7d } from "../state/efficiencyMetrics.js";
@@ -306,10 +307,14 @@ function buildVectorInfo(
   vectorResults: readonly ExecutionResult[],
 ): VectorInfo {
   const pendingDrafts = getPendingArtifacts(db, "vector");
+  const approvedDrafts = getApprovedArtifacts(db, "vector");
+  const publishedCount7d = getPublicationCount7d(db);
 
   return {
     executionResults: vectorResults,
     pendingDraftsCount: pendingDrafts.length,
+    approvedDraftsCount: approvedDrafts.length,
+    publishedCount7d,
   };
 }
 

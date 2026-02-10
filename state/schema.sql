@@ -116,17 +116,37 @@ CREATE INDEX IF NOT EXISTS idx_agent_feedback_task_type ON agent_feedback(task_t
 CREATE INDEX IF NOT EXISTS idx_agent_feedback_created_at ON agent_feedback(created_at);
 
 CREATE TABLE IF NOT EXISTS artifacts (
-  id         TEXT PRIMARY KEY,
-  agent_id   TEXT NOT NULL,
-  type       TEXT NOT NULL CHECK (type IN ('post', 'newsletter', 'landing', 'editorial_calendar', 'analysis')),
-  title      TEXT NOT NULL,
-  content    TEXT NOT NULL,
-  status     TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'approved', 'rejected')),
-  metadata   TEXT,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  id          TEXT PRIMARY KEY,
+  agent_id    TEXT NOT NULL,
+  type        TEXT NOT NULL CHECK (type IN ('post', 'newsletter', 'landing', 'editorial_calendar', 'analysis')),
+  title       TEXT NOT NULL,
+  content     TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'approved', 'rejected', 'published')),
+  metadata    TEXT,
+  approved_by TEXT,
+  approved_at TEXT,
+  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_artifacts_agent_id ON artifacts(agent_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_status ON artifacts(status);
 CREATE INDEX IF NOT EXISTS idx_artifacts_type ON artifacts(type);
+
+CREATE TABLE IF NOT EXISTS publications (
+  id           TEXT PRIMARY KEY,
+  artifact_id  TEXT NOT NULL REFERENCES artifacts(id),
+  channel      TEXT NOT NULL CHECK (channel IN ('x', 'linkedin', 'stub')),
+  status       TEXT NOT NULL CHECK (status IN ('published', 'failed')),
+  external_id  TEXT,
+  published_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  error        TEXT,
+  impressions  INTEGER,
+  clicks       INTEGER,
+  likes        INTEGER,
+  created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_publications_artifact_id ON publications(artifact_id);
+CREATE INDEX IF NOT EXISTS idx_publications_channel ON publications(channel);
+CREATE INDEX IF NOT EXISTS idx_publications_status ON publications(status);

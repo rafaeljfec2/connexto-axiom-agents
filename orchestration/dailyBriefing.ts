@@ -156,8 +156,10 @@ function formatVectorSection(info: VectorInfo): readonly string[] {
       : "- Nenhuma.";
 
   const draftsLine = `- Drafts aguardando aprovacao: ${formatNumber(info.pendingDraftsCount)}`;
+  const approvedLine = `- Drafts aprovados (nao publicados): ${formatNumber(info.approvedDraftsCount)}`;
+  const publishedLine = `- Publicacoes (7d): ${formatNumber(info.publishedCount7d)}`;
 
-  return [header, executionLines, draftsLine];
+  return [header, executionLines, draftsLine, approvedLine, publishedLine];
 }
 
 function formatFeedbackSection(info: FeedbackInfo): readonly string[] {

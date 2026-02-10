@@ -21,6 +21,19 @@ export function openDatabase(): BetterSqlite3.Database {
 
 function applyMigrations(db: BetterSqlite3.Database): void {
   migrateOutcomesColumns(db);
+  migrateArtifactsColumns(db);
+}
+
+function migrateArtifactsColumns(db: BetterSqlite3.Database): void {
+  const columns = db.pragma("table_info(artifacts)") as ReadonlyArray<{ name: string }>;
+  const columnNames = new Set(columns.map((c) => c.name));
+
+  if (!columnNames.has("approved_by")) {
+    db.exec("ALTER TABLE artifacts ADD COLUMN approved_by TEXT");
+  }
+  if (!columnNames.has("approved_at")) {
+    db.exec("ALTER TABLE artifacts ADD COLUMN approved_at TEXT");
+  }
 }
 
 function migrateOutcomesColumns(db: BetterSqlite3.Database): void {

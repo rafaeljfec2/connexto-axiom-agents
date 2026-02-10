@@ -13,6 +13,7 @@
     "start": "node --env-file=.env dist/src/main.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "bot": "tsx watch --env-file=.env src/bot.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
