@@ -1,11 +1,11 @@
-import fs from "node:fs";
+import type fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { logger } from "../config/logger.js";
 
 const MAX_CONTEXT_FILES = 5;
 const MAX_TOTAL_CONTEXT_CHARS = 12_000;
-const MAX_TREE_DEPTH = 4;
+const MAX_TREE_DEPTH = 8;
 const MAX_FILE_SIZE_BYTES = 50_000;
 
 const IGNORED_DIRS: ReadonlySet<string> = new Set([
@@ -159,6 +159,8 @@ export async function findRelevantFiles(
     }
   }
 
+  expandWithNeighborFiles(scored, structure.files, maxFiles);
+
   scored.sort((a, b) => b.score - a.score);
   const topFiles = scored.slice(0, maxFiles);
 
@@ -245,6 +247,45 @@ function extractKeywords(task: string): readonly string[] {
     .split(/\s+/)
     .filter((w) => w.length >= 3 && !stopWords.has(w))
     .slice(0, 10);
+}
+
+const NEIGHBOR_PATTERNS: readonly string[] = [
+  "layout", "shell", "app-shell", "navigation", "nav", "menu", "routes", "config",
+];
+
+function expandWithNeighborFiles(
+  scored: Array<{ readonly file: ProjectFile; readonly score: number }>,
+  allFiles: readonly ProjectFile[],
+  maxFiles: number,
+): void {
+  if (scored.length === 0) return;
+
+  const scoredPaths = new Set(scored.map((s) => s.file.relativePath));
+  const parentDirs = new Set<string>();
+
+  for (const s of scored) {
+    const dir = path.dirname(s.file.relativePath);
+    parentDirs.add(dir);
+    const grandparent = path.dirname(dir);
+    if (grandparent !== ".") parentDirs.add(grandparent);
+  }
+
+  for (const file of allFiles) {
+    if (scoredPaths.has(file.relativePath)) continue;
+    if (file.size > MAX_FILE_SIZE_BYTES || file.size === 0) continue;
+
+    const fileDir = path.dirname(file.relativePath);
+    const fileName = path.basename(file.relativePath).toLowerCase();
+    const isSiblingDir = [...parentDirs].some((pd) => fileDir.startsWith(pd));
+    const isRelevantName = NEIGHBOR_PATTERNS.some((p) => fileName.includes(p));
+
+    if (isSiblingDir && isRelevantName) {
+      scored.push({ file, score: 2 });
+      scoredPaths.add(file.relativePath);
+    }
+
+    if (scored.length >= maxFiles * 2) break;
+  }
 }
 
 function calculateFileRelevance(filePath: string, keywords: readonly string[]): number {
