@@ -59,3 +59,10 @@ export interface EfficiencyInfo {
   readonly tokensPerDecision: number;
   readonly avg7dTokensPerDecision: number;
 }
+
+export interface FeedbackInfo {
+  readonly successRate7d: number;
+  readonly totalExecutions7d: number;
+  readonly problematicTasks: readonly string[];
+  readonly adjustmentsApplied: number;
+}

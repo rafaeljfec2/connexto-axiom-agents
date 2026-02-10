@@ -18,6 +18,8 @@ export async function executeForgeViaOpenClaw(
 ): Promise<ExecutionResult> {
   const { task, goal_id, expected_output } = delegation;
 
+  const startTime = performance.now();
+
   try {
     const prompt = buildPrompt(task, expected_output, goal_id);
 
@@ -28,6 +30,7 @@ export async function executeForgeViaOpenClaw(
     });
 
     if (response.status === "failed") {
+      const executionTimeMs = Math.round(performance.now() - startTime);
       logAudit(db, {
         agent: "forge",
         action: task,
@@ -36,13 +39,14 @@ export async function executeForgeViaOpenClaw(
         sanitizerWarnings: [],
         runtime: "openclaw",
       });
-      return buildFailedResult(task, "OpenClaw returned status: failed");
+      return { ...buildFailedResult(task, "OpenClaw returned status: failed"), executionTimeMs };
     }
 
     const usage = resolveUsage(response.usage, response.text, prompt);
 
     const budgetConfig = loadBudgetConfig();
     if (usage.totalTokens > budgetConfig.perTaskTokenLimit) {
+      const executionTimeMs = Math.round(performance.now() - startTime);
       logger.error(
         { totalTokens: usage.totalTokens, limit: budgetConfig.perTaskTokenLimit },
         "Per-task token limit exceeded",
@@ -57,10 +61,14 @@ export async function executeForgeViaOpenClaw(
         ],
         runtime: "openclaw",
       });
-      return buildFailedResult(
-        task,
-        `Limite de tokens por task excedido (${usage.totalTokens}/${budgetConfig.perTaskTokenLimit})`,
-      );
+      return {
+        ...buildFailedResult(
+          task,
+          `Limite de tokens por task excedido (${usage.totalTokens}/${budgetConfig.perTaskTokenLimit})`,
+        ),
+        tokensUsed: usage.totalTokens,
+        executionTimeMs,
+      };
     }
 
     const currentPeriod = getCurrentPeriod();
@@ -95,7 +103,13 @@ export async function executeForgeViaOpenClaw(
     const filePath = resolveSandboxPath(filename);
     await fs.writeFile(filePath, sanitized.content, "utf-8");
 
-    logger.info({ file: filePath }, "Forge (OpenClaw) created file");
+    const executionTimeMs = Math.round(performance.now() - startTime);
+    const artifactSizeBytes = Buffer.byteLength(sanitized.content, "utf-8");
+
+    logger.info(
+      { file: filePath, executionTimeMs, artifactSizeBytes },
+      "Forge (OpenClaw) created file",
+    );
 
     logAudit(db, {
       agent: "forge",
@@ -112,10 +126,13 @@ export async function executeForgeViaOpenClaw(
       status: "success",
       output: filePath,
       tokensUsed: usage.totalTokens,
+      executionTimeMs,
+      artifactSizeBytes,
     };
   } catch (error) {
+    const executionTimeMs = Math.round(performance.now() - startTime);
     const message = error instanceof Error ? error.message : String(error);
-    logger.error({ error: message, task }, "Forge (OpenClaw) execution failed");
+    logger.error({ error: message, task, executionTimeMs }, "Forge (OpenClaw) execution failed");
 
     logAudit(db, {
       agent: "forge",
@@ -126,7 +143,7 @@ export async function executeForgeViaOpenClaw(
       runtime: "openclaw",
     });
 
-    return buildFailedResult(task, message);
+    return { ...buildFailedResult(task, message), executionTimeMs };
   }
 }
 

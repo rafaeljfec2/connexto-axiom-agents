@@ -1,11 +1,13 @@
 import type BetterSqlite3 from "better-sqlite3";
 import { loadBudgetConfig } from "../config/budget.js";
 import { logger } from "../config/logger.js";
+import { evaluateForgeExecution } from "../evaluation/forgeEvaluator.js";
 import { checkBudget } from "../execution/budgetGate.js";
 import { executeForge } from "../execution/forgeExecutor.js";
 import type { ExecutionResult } from "../execution/types.js";
 import type { LLMUsage } from "../llm/client.js";
 import { sendTelegramMessage } from "../interfaces/telegram.js";
+import { saveFeedback, normalizeTaskType, getFeedbackSummary } from "../state/agentFeedback.js";
 import { getCurrentBudget, incrementUsedTokens } from "../state/budgets.js";
 import { saveDecision, loadRecentDecisions } from "../state/decisions.js";
 import { getAverageTokensPerDecision7d } from "../state/efficiencyMetrics.js";
@@ -21,6 +23,7 @@ import type {
   BlockedTask,
   BudgetInfo,
   EfficiencyInfo,
+  FeedbackInfo,
 } from "./types.js";
 import { validateKairosOutput } from "./validateKairos.js";
 
@@ -59,12 +62,15 @@ export async function runKairos(db: BetterSqlite3.Database): Promise<void> {
   saveDecision(db, output);
   logger.info("Decision persisted to database");
 
-  const filtered = filterDelegations(output.delegations);
+  const budgetConfig = loadBudgetConfig();
+  const filterResult = filterDelegations(output.delegations, db, budgetConfig);
+  const filtered = filterResult.delegations;
   logger.info(
     {
       approved: filtered.approved.length,
       needsApproval: filtered.needsApproval.length,
       rejected: filtered.rejected.length,
+      adjustmentsApplied: filterResult.adjustmentsApplied,
     },
     "Delegations filtered",
   );
@@ -74,8 +80,11 @@ export async function runKairos(db: BetterSqlite3.Database): Promise<void> {
     filtered.approved,
   );
 
+  evaluateAndRecordFeedback(db, forgeResults, filtered.approved, budgetConfig);
+
   const budgetInfo = buildBudgetInfo(db, blockedTasks);
   const efficiencyInfo = buildEfficiencyInfo(db, kairosUsage, output);
+  const feedbackInfo = buildFeedbackInfo(db, filterResult.adjustmentsApplied);
 
   const briefingText = formatDailyBriefing(
     output,
@@ -83,6 +92,7 @@ export async function runKairos(db: BetterSqlite3.Database): Promise<void> {
     forgeResults,
     budgetInfo,
     efficiencyInfo,
+    feedbackInfo,
   );
   await sendTelegramMessage(briefingText);
   logger.info("Daily briefing sent");
@@ -207,6 +217,61 @@ function buildBudgetInfo(
     isExhausted,
     blockedTasks,
   };
+}
+
+function evaluateAndRecordFeedback(
+  db: BetterSqlite3.Database,
+  results: readonly ExecutionResult[],
+  approved: readonly KairosDelegation[],
+  budgetConfig: ReturnType<typeof loadBudgetConfig>,
+): void {
+  for (const result of results) {
+    const evaluation = evaluateForgeExecution(result, budgetConfig);
+    const delegation = approved.find((d) => d.task === result.task);
+    const taskType = normalizeTaskType(delegation?.task ?? result.task);
+
+    saveFeedback(db, {
+      agentId: result.agent,
+      taskType,
+      grade: evaluation.grade,
+      reasons: evaluation.reasons,
+    });
+
+    logger.info(
+      { task: result.task, grade: evaluation.grade, reasons: evaluation.reasons },
+      "Forge execution evaluated and feedback recorded",
+    );
+  }
+}
+
+function buildFeedbackInfo(db: BetterSqlite3.Database, adjustmentsApplied: number): FeedbackInfo {
+  const summary = getFeedbackSummary(db, "forge", 7);
+
+  const problematicTasks = findProblematicTasks(db);
+
+  return {
+    successRate7d: summary.successRate,
+    totalExecutions7d: summary.total,
+    problematicTasks,
+    adjustmentsApplied,
+  };
+}
+
+function findProblematicTasks(db: BetterSqlite3.Database): readonly string[] {
+  const rows = db
+    .prepare(
+      `SELECT task_type, COUNT(*) as failure_count
+       FROM agent_feedback
+       WHERE agent_id = 'forge'
+         AND grade = 'FAILURE'
+         AND created_at >= datetime('now', '-7 days')
+       GROUP BY task_type
+       HAVING failure_count >= 2
+       ORDER BY failure_count DESC`,
+    )
+    .all() as ReadonlyArray<{ task_type: string; failure_count: number }>;
+
+  return rows.map((r) => `${r.task_type} (${r.failure_count} falhas)`);
 }
 
 function buildFallbackOutput(errorMessage: string): KairosOutput {

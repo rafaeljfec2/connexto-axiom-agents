@@ -37,6 +37,8 @@ async function executeForgeLocal(
     return buildFailedResult(task, "forge does not have fs.write permission");
   }
 
+  const startTime = performance.now();
+
   try {
     await ensureSandbox();
     await validateSandboxLimits();
@@ -47,7 +49,13 @@ async function executeForgeLocal(
     const content = buildMarkdownContent(task, expected_output, goal_id);
     await fs.writeFile(filePath, content, "utf-8");
 
-    logger.info({ file: filePath }, "Forge (local) created file");
+    const executionTimeMs = Math.round(performance.now() - startTime);
+    const artifactSizeBytes = Buffer.byteLength(content, "utf-8");
+
+    logger.info(
+      { file: filePath, executionTimeMs, artifactSizeBytes },
+      "Forge (local) created file",
+    );
 
     logAudit(db, {
       agent: "forge",
@@ -63,10 +71,13 @@ async function executeForgeLocal(
       task,
       status: "success",
       output: filePath,
+      executionTimeMs,
+      artifactSizeBytes,
     };
   } catch (error) {
+    const executionTimeMs = Math.round(performance.now() - startTime);
     const message = error instanceof Error ? error.message : String(error);
-    logger.error({ error: message, task }, "Forge (local) execution failed");
+    logger.error({ error: message, task, executionTimeMs }, "Forge (local) execution failed");
 
     logAudit(db, {
       agent: "forge",
@@ -77,7 +88,7 @@ async function executeForgeLocal(
       runtime: "local",
     });
 
-    return buildFailedResult(task, message);
+    return { ...buildFailedResult(task, message), executionTimeMs };
   }
 }
 

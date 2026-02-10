@@ -49,13 +49,16 @@ CREATE INDEX IF NOT EXISTS idx_metrics_agent_id ON metrics(agent_id);
 CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics(metric_name);
 
 CREATE TABLE IF NOT EXISTS outcomes (
-  id         TEXT PRIMARY KEY,
-  agent_id   TEXT NOT NULL,
-  task       TEXT NOT NULL,
-  status     TEXT NOT NULL CHECK (status IN ('success', 'failed')),
-  output     TEXT,
-  error      TEXT,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  id                  TEXT PRIMARY KEY,
+  agent_id            TEXT NOT NULL,
+  task                TEXT NOT NULL,
+  status              TEXT NOT NULL CHECK (status IN ('success', 'failed')),
+  output              TEXT,
+  error               TEXT,
+  execution_time_ms   INTEGER,
+  tokens_used         INTEGER,
+  artifact_size_bytes INTEGER,
+  created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_outcomes_agent_id ON outcomes(agent_id);
@@ -98,3 +101,16 @@ CREATE TABLE IF NOT EXISTS token_usage (
 
 CREATE INDEX IF NOT EXISTS idx_token_usage_agent_id ON token_usage(agent_id);
 CREATE INDEX IF NOT EXISTS idx_token_usage_created_at ON token_usage(created_at);
+
+CREATE TABLE IF NOT EXISTS agent_feedback (
+  id         TEXT PRIMARY KEY,
+  agent_id   TEXT NOT NULL,
+  task_type  TEXT NOT NULL,
+  grade      TEXT NOT NULL CHECK (grade IN ('SUCCESS', 'PARTIAL', 'FAILURE')),
+  reasons    TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_feedback_agent_id ON agent_feedback(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_feedback_task_type ON agent_feedback(task_type);
+CREATE INDEX IF NOT EXISTS idx_agent_feedback_created_at ON agent_feedback(created_at);

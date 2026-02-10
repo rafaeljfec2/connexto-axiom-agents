@@ -7,4 +7,6 @@ export interface ExecutionResult {
   readonly output: string;
   readonly error?: string;
   readonly tokensUsed?: number;
+  readonly executionTimeMs?: number;
+  readonly artifactSizeBytes?: number;
 }

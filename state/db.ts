@@ -14,5 +14,22 @@ export function openDatabase(): BetterSqlite3.Database {
   const schema = fs.readFileSync(SCHEMA_PATH, "utf-8");
   db.exec(schema);
 
+  applyMigrations(db);
+
   return db;
+}
+
+function applyMigrations(db: BetterSqlite3.Database): void {
+  const columns = db.pragma("table_info(outcomes)") as ReadonlyArray<{ name: string }>;
+  const columnNames = new Set(columns.map((c) => c.name));
+
+  if (!columnNames.has("execution_time_ms")) {
+    db.exec("ALTER TABLE outcomes ADD COLUMN execution_time_ms INTEGER");
+  }
+  if (!columnNames.has("tokens_used")) {
+    db.exec("ALTER TABLE outcomes ADD COLUMN tokens_used INTEGER");
+  }
+  if (!columnNames.has("artifact_size_bytes")) {
+    db.exec("ALTER TABLE outcomes ADD COLUMN artifact_size_bytes INTEGER");
+  }
 }

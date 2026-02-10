@@ -9,12 +9,16 @@ export interface Outcome {
   readonly status: string;
   readonly output: string | null;
   readonly error: string | null;
+  readonly execution_time_ms: number | null;
+  readonly tokens_used: number | null;
+  readonly artifact_size_bytes: number | null;
   readonly created_at: string;
 }
 
 export function saveOutcome(db: BetterSqlite3.Database, result: ExecutionResult): void {
   db.prepare(
-    "INSERT INTO outcomes (id, agent_id, task, status, output, error) VALUES (?, ?, ?, ?, ?, ?)",
+    `INSERT INTO outcomes (id, agent_id, task, status, output, error, execution_time_ms, tokens_used, artifact_size_bytes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     crypto.randomUUID(),
     result.agent,
@@ -22,13 +26,17 @@ export function saveOutcome(db: BetterSqlite3.Database, result: ExecutionResult)
     result.status,
     result.output ?? null,
     result.error ?? null,
+    result.executionTimeMs ?? null,
+    result.tokensUsed ?? null,
+    result.artifactSizeBytes ?? null,
   );
 }
 
 export function loadRecentOutcomes(db: BetterSqlite3.Database, limit: number): readonly Outcome[] {
   return db
     .prepare(
-      "SELECT id, agent_id, task, status, output, error, created_at FROM outcomes ORDER BY created_at DESC LIMIT ?",
+      `SELECT id, agent_id, task, status, output, error, execution_time_ms, tokens_used, artifact_size_bytes, created_at
+       FROM outcomes ORDER BY created_at DESC LIMIT ?`,
     )
     .all(limit) as Outcome[];
 }

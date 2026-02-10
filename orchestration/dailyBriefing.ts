@@ -1,5 +1,11 @@
 import type { ExecutionResult } from "../execution/types.js";
-import type { KairosOutput, FilteredDelegations, BudgetInfo, EfficiencyInfo } from "./types.js";
+import type {
+  KairosOutput,
+  FilteredDelegations,
+  BudgetInfo,
+  EfficiencyInfo,
+  FeedbackInfo,
+} from "./types.js";
 
 export function formatDailyBriefing(
   output: KairosOutput,
@@ -7,6 +13,7 @@ export function formatDailyBriefing(
   executions: readonly ExecutionResult[],
   budgetInfo: BudgetInfo,
   efficiencyInfo: EfficiencyInfo,
+  feedbackInfo: FeedbackInfo,
 ): string {
   const decisions =
     output.decisions_needed.length > 0
@@ -51,6 +58,7 @@ export function formatDailyBriefing(
 
   const budgetSection = formatBudgetSection(budgetInfo);
   const efficiencySection = formatEfficiencySection(efficiencyInfo);
+  const feedbackSection = formatFeedbackSection(feedbackInfo);
 
   const lines = [
     String.raw`*\[KAIROS — Briefing Diario]*`,
@@ -76,6 +84,8 @@ export function formatDailyBriefing(
     ...budgetSection,
     "",
     ...efficiencySection,
+    "",
+    ...feedbackSection,
     "",
     "*Foco nas proximas 24h:*",
     `- ${output.next_24h_focus}`,
@@ -119,4 +129,17 @@ function formatEfficiencySection(info: EfficiencyInfo): readonly string[] {
   const avg7dLine = `- Media 7d: ${formatNumber(info.avg7dTokensPerDecision)} tokens/decisao`;
 
   return [String.raw`*Eficiencia LLM:*`, cycleLine, perDecisionLine, avg7dLine];
+}
+
+function formatFeedbackSection(info: FeedbackInfo): readonly string[] {
+  const rateLine = `- Taxa de sucesso: ${info.successRate7d.toFixed(1)}% (${formatNumber(info.totalExecutions7d)} execucoes)`;
+  const adjustmentsLine = `- Ajustes aplicados: ${formatNumber(info.adjustmentsApplied)}`;
+
+  const lines: string[] = [String.raw`*Feedback FORGE (7d):*`, rateLine, adjustmentsLine];
+
+  if (info.problematicTasks.length > 0) {
+    lines.push(`- Tasks problematicas: ${info.problematicTasks.join(", ")}`);
+  }
+
+  return lines;
 }
