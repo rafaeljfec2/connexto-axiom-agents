@@ -60,3 +60,17 @@ CREATE TABLE IF NOT EXISTS outcomes (
 
 CREATE INDEX IF NOT EXISTS idx_outcomes_agent_id ON outcomes(agent_id);
 CREATE INDEX IF NOT EXISTS idx_outcomes_status ON outcomes(status);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id                 TEXT PRIMARY KEY,
+  agent_id           TEXT NOT NULL,
+  action             TEXT NOT NULL,
+  input_hash         TEXT NOT NULL,
+  output_hash        TEXT,
+  sanitizer_warnings TEXT,
+  runtime            TEXT NOT NULL CHECK (runtime IN ('local', 'openclaw')),
+  created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_agent_id ON audit_log(agent_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_runtime ON audit_log(runtime);

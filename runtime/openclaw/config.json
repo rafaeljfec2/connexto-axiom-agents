@@ -1,21 +1,45 @@
 {
+  "auth": {
+    "profiles": {
+      "openai:api": {
+        "provider": "openai",
+        "mode": "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"
+      }
+    },
+    "order": {
+      "openai": ["openai:api"]
+    }
+  },
   "gateway": {
     "mode": "local",
     "port": 18789,
-    "bind": "loopback"
+    "bind": "loopback",
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        }
+      }
+    }
   },
   "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai/gpt-4o-mini"
+      }
+    },
     "list": [
       {
         "id": "forge",
         "workspace": "./sandbox/forge",
         "sandbox": {
           "mode": "all",
-          "scope": "agent"
+          "scope": "agent",
+          "workspaceAccess": "rw"
         },
         "tools": {
           "allow": ["read", "write"],
-          "deny": ["exec", "edit", "apply_patch", "browser", "gateway"]
+          "deny": ["exec", "edit", "apply_patch", "browser", "gateway", "process"]
         }
       }
     ]

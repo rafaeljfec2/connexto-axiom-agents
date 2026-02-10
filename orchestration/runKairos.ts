@@ -75,7 +75,7 @@ async function executeApprovedForge(
   const results: ExecutionResult[] = [];
 
   for (const delegation of forgeDelegations) {
-    const result = await executeForge(delegation);
+    const result = await executeForge(db, delegation);
     saveOutcome(db, result);
     results.push(result);
 
