@@ -38,25 +38,25 @@ src/bot.ts           Telegram bot entry point (persistent long-polling)
 
 ## Agents
 
-| Agent | Role | Status |
-|-------|------|--------|
-| **KAIROS** | Strategic orchestrator — decides what to do, delegates, evaluates | Active |
-| **FORGE** | Technical executor — generates code, docs, configs via OpenClaw | Active |
-| **VECTOR** | Marketing executor — generates posts, newsletters, landing copy | Active |
-| **SENTINEL** | Security & compliance monitor | Planned |
-| **NEXUS** | Integration & data connector | Planned |
-| **COVENANT** | Governance & policy enforcer | Planned |
+| Agent        | Role                                                              | Status  |
+| ------------ | ----------------------------------------------------------------- | ------- |
+| **KAIROS**   | Strategic orchestrator — decides what to do, delegates, evaluates | Active  |
+| **FORGE**    | Technical executor — generates code, docs, configs via OpenClaw   | Active  |
+| **VECTOR**   | Marketing executor — generates posts, newsletters, landing copy   | Active  |
+| **SENTINEL** | Security & compliance monitor                                     | Planned |
+| **NEXUS**    | Integration & data connector                                      | Planned |
+| **COVENANT** | Governance & policy enforcer                                      | Planned |
 
 ## Evolution
 
-| Phase | Name | Description | Status |
-|-------|------|-------------|--------|
-| 12 | Controlled Forge Execution | FORGE executes real tasks in sandbox with permissions | Done |
-| 13 | OpenClaw Integration | LLM execution runtime via OpenClaw with hardening | Done |
-| 14 | Automatic Feedback Loop | System learns from outcomes, adjusts decision scores | Done |
-| 15 | VECTOR Real Execution | Marketing agent generates drafts via OpenClaw | Done |
-| 16 | Approval & Semi-Auto Publication | Telegram bot for human approval + stub publication | Done |
-| 17 | Marketing Metrics & Feedback | Engagement metrics influence KAIROS decisions | Done |
+| Phase | Name                             | Description                                           | Status |
+| ----- | -------------------------------- | ----------------------------------------------------- | ------ |
+| 12    | Controlled Forge Execution       | FORGE executes real tasks in sandbox with permissions | Done   |
+| 13    | OpenClaw Integration             | LLM execution runtime via OpenClaw with hardening     | Done   |
+| 14    | Automatic Feedback Loop          | System learns from outcomes, adjusts decision scores  | Done   |
+| 15    | VECTOR Real Execution            | Marketing agent generates drafts via OpenClaw         | Done   |
+| 16    | Approval & Semi-Auto Publication | Telegram bot for human approval + stub publication    | Done   |
+| 17    | Marketing Metrics & Feedback     | Engagement metrics influence KAIROS decisions         | Done   |
 
 ## Key Features
 
@@ -69,33 +69,33 @@ src/bot.ts           Telegram bot entry point (persistent long-polling)
 
 ## Tech Stack
 
-| Component | Technology |
-|-----------|------------|
-| Runtime | Node.js >= 24 + TypeScript 5.9 |
-| Database | SQLite (WAL mode, better-sqlite3) |
-| LLM Runtime | OpenClaw (isolated agent execution) |
-| Scheduling | Cron (one-shot cycles) |
-| Human Interface | Telegram Bot (long-polling) |
-| Logging | Pino (structured JSON) |
-| Linting | ESLint 9 + Prettier 3 |
+| Component       | Technology                          |
+| --------------- | ----------------------------------- |
+| Runtime         | Node.js >= 24 + TypeScript 5.9      |
+| Database        | SQLite (WAL mode, better-sqlite3)   |
+| LLM Runtime     | OpenClaw (isolated agent execution) |
+| Scheduling      | Cron (one-shot cycles)              |
+| Human Interface | Telegram Bot (long-polling)         |
+| Logging         | Pino (structured JSON)              |
+| Linting         | ESLint 9 + Prettier 3               |
 
 ## Database Tables
 
-| Table | Purpose |
-|-------|---------|
-| `goals` | Active strategic objectives |
-| `tasks` | Tasks linked to goals |
-| `decisions` | KAIROS decision history |
-| `metrics` | Generic agent metrics |
-| `outcomes` | Execution results with timing/token/size data |
-| `audit_log` | Security audit trail |
-| `budgets` | Monthly token budgets |
-| `token_usage` | Granular per-agent token tracking |
-| `agent_feedback` | Execution evaluation grades (SUCCESS/PARTIAL/FAILURE) |
-| `artifacts` | Content drafts with approval workflow |
-| `publications` | Published artifact records |
-| `marketing_metrics` | Engagement data (stub/manual/api) |
-| `marketing_feedback` | Content performance grades (STRONG/AVERAGE/WEAK) |
+| Table                | Purpose                                               |
+| -------------------- | ----------------------------------------------------- |
+| `goals`              | Active strategic objectives                           |
+| `tasks`              | Tasks linked to goals                                 |
+| `decisions`          | KAIROS decision history                               |
+| `metrics`            | Generic agent metrics                                 |
+| `outcomes`           | Execution results with timing/token/size data         |
+| `audit_log`          | Security audit trail                                  |
+| `budgets`            | Monthly token budgets                                 |
+| `token_usage`        | Granular per-agent token tracking                     |
+| `agent_feedback`     | Execution evaluation grades (SUCCESS/PARTIAL/FAILURE) |
+| `artifacts`          | Content drafts with approval workflow                 |
+| `publications`       | Published artifact records                            |
+| `marketing_metrics`  | Engagement data (stub/manual/api)                     |
+| `marketing_feedback` | Content performance grades (STRONG/AVERAGE/WEAK)      |
 
 ## Project Structure
 
@@ -146,14 +146,14 @@ Starts the persistent Telegram bot for human commands. Runs in parallel with the
 
 ### Commands
 
-| Command | Description |
-|---------|-------------|
-| `/drafts` | List pending drafts awaiting approval |
-| `/approve <id>` | Approve a draft |
-| `/reject <id>` | Reject a draft |
-| `/publish <id>` | Publish an approved artifact (stub v1) |
-| `/metrics <id> <impressions> <clicks> <engagement>` | Register manual marketing metrics |
-| `/help` | Show available commands |
+| Command                                             | Description                            |
+| --------------------------------------------------- | -------------------------------------- |
+| `/drafts`                                           | List pending drafts awaiting approval  |
+| `/approve <id>`                                     | Approve a draft                        |
+| `/reject <id>`                                      | Reject a draft                         |
+| `/publish <id>`                                     | Publish an approved artifact (stub v1) |
+| `/metrics <id> <impressions> <clicks> <engagement>` | Register manual marketing metrics      |
+| `/help`                                             | Show available commands                |
 
 IDs can be partial (first 8 characters).
 
@@ -198,13 +198,13 @@ Logs are appended to `logs/kairos.log`. The Telegram Daily Briefing is sent auto
 
 ## Scripts
 
-| Script | Description |
-|--------|-------------|
-| `pnpm dev` | Run Kairos cycle with hot-reload and formatted logs |
-| `pnpm bot` | Start Telegram bot (persistent long-polling) |
-| `pnpm build` | Compile TypeScript |
-| `pnpm start` | Run compiled output |
-| `pnpm lint` | Check for linting errors |
-| `pnpm lint:fix` | Auto-fix linting errors |
-| `pnpm format` | Format all files |
-| `pnpm format:check` | Check formatting |
+| Script              | Description                                         |
+| ------------------- | --------------------------------------------------- |
+| `pnpm dev`          | Run Kairos cycle with hot-reload and formatted logs |
+| `pnpm bot`          | Start Telegram bot (persistent long-polling)        |
+| `pnpm build`        | Compile TypeScript                                  |
+| `pnpm start`        | Run compiled output                                 |
+| `pnpm lint`         | Check for linting errors                            |
+| `pnpm lint:fix`     | Auto-fix linting errors                             |
+| `pnpm format`       | Format all files                                    |
+| `pnpm format:check` | Check formatting                                    |

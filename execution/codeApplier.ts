@@ -215,6 +215,38 @@ function buildDiff(files: readonly FileChange[], backups: readonly FileBackup[])
   return JSON.stringify(diffEntries);
 }
 
+async function runEslintFix(filePaths: readonly string[]): Promise<void> {
+  const tsFiles = filePaths.filter((f) => f.endsWith(".ts") || f.endsWith(".js"));
+  if (tsFiles.length === 0) return;
+
+  try {
+    await execFileAsync(
+      WHITELISTED_COMMANDS[0],
+      [WHITELISTED_ARGS[0], "--fix", ...tsFiles, "--no-error-on-unmatched-pattern"],
+      { cwd: PROJECT_ROOT, timeout: LINT_TIMEOUT_MS },
+    );
+    logger.info({ fileCount: tsFiles.length }, "eslint --fix applied successfully");
+  } catch {
+    logger.debug("eslint --fix had issues (will be caught in lint check)");
+  }
+}
+
+async function reReadFiles(files: readonly FileChange[]): Promise<readonly FileChange[]> {
+  const updated: FileChange[] = [];
+
+  for (const file of files) {
+    const fullPath = path.resolve(PROJECT_ROOT, file.path);
+    try {
+      const content = await fs.readFile(fullPath, "utf-8");
+      updated.push({ path: file.path, action: file.action, content });
+    } catch {
+      updated.push(file);
+    }
+  }
+
+  return updated;
+}
+
 async function runLint(filePaths: readonly string[]): Promise<LintResult> {
   const outputs: string[] = [];
   let allSuccess = true;
@@ -278,6 +310,9 @@ export async function applyCodeChange(
     await writeFiles(files);
 
     const filePaths = files.map((f) => f.path);
+
+    await runEslintFix(filePaths);
+
     const lintResult = await runLint(filePaths);
 
     if (lintResult.success) {
@@ -293,7 +328,7 @@ export async function applyCodeChange(
       return { success: true, diff, lintOutput: lintResult.output };
     }
 
-    logger.warn({ changeId }, "Lint failed, rolling back code change");
+    logger.warn({ changeId }, "Lint failed after eslint --fix, rolling back code change");
     await restoreBackups(backups);
 
     updateCodeChangeStatus(db, changeId, {
@@ -362,6 +397,10 @@ export async function applyCodeChangeWithBranch(
     await writeFiles(files);
 
     const filePaths = files.map((f) => f.path);
+
+    await runEslintFix(filePaths);
+    const fixedFiles = await reReadFiles(files);
+
     const lintResult = await runLint(filePaths);
 
     if (lintResult.success) {
@@ -385,24 +424,17 @@ export async function applyCodeChangeWithBranch(
       });
 
       logger.info(
-        { changeId, branchName, commitHash: hash },
+        { changeId, branchName, commitHash: hash, autoFixed: files !== fixedFiles },
         "Code change applied with branch successfully",
       );
 
       return { success: true, diff, lintOutput: lintResult.output };
     }
 
-    logger.warn({ changeId, branchName }, "Lint failed, rolling back branch code change");
+    logger.warn({ changeId, branchName }, "Lint failed after eslint --fix, rolling back");
     await restoreBackups(backups);
     await switchToMain();
     await deleteBranch(branchName);
-
-    updateCodeChangeStatus(db, changeId, {
-      status: "failed",
-      diff: "",
-      testOutput: lintResult.output,
-      error: "Lint validation failed",
-    });
 
     return {
       success: false,
@@ -427,12 +459,6 @@ export async function applyCodeChangeWithBranch(
         cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
       logger.error({ branchName, error: cleanupMsg }, "Failed to cleanup branch after error");
     }
-
-    updateCodeChangeStatus(db, changeId, {
-      status: "failed",
-      diff: "",
-      error: message,
-    });
 
     return { success: false, diff: "", lintOutput: "", error: message };
   }

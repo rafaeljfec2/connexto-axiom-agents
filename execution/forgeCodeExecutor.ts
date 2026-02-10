@@ -11,6 +11,7 @@ import { saveCodeChange, updateCodeChangeStatus } from "../state/codeChanges.js"
 import { recordTokenUsage } from "../state/tokenUsage.js";
 import type { FileChange } from "./codeApplier.js";
 import { validateFilePaths, calculateRisk, applyCodeChangeWithBranch } from "./codeApplier.js";
+import type { ApplyResult } from "./codeApplier.js";
 import { callOpenClaw } from "./openclawClient.js";
 import type { TokenUsageInfo } from "./openclawClient.js";
 import type { ExecutionResult } from "./types.js";
@@ -33,6 +34,8 @@ const CODING_KEYWORDS: readonly string[] = [
 ];
 
 const MAX_FILES_PER_CHANGE = 3;
+const MAX_CORRECTION_ATTEMPTS = 1;
+const MAX_LINT_ERROR_CHARS = 2000;
 
 const FORGE_CODER_SYSTEM_PROMPT = [
   "Voce e o FORGE, agente de codificacao do sistema connexto-axiom.",
@@ -191,9 +194,9 @@ export async function executeForgeCode(
     }
 
     const applyResult = await applyCodeChangeWithBranch(db, changeId, parsed.files);
-    const executionTimeMs = Math.round(performance.now() - startTime);
 
     if (applyResult.success) {
+      const executionTimeMs = Math.round(performance.now() - startTime);
       logger.info({ changeId, files: filePaths }, "Code change applied automatically (low risk)");
       return buildResult(
         task,
@@ -205,7 +208,42 @@ export async function executeForgeCode(
       );
     }
 
-    logger.warn({ changeId, error: applyResult.error }, "Code change failed and was rolled back");
+    if (applyResult.error === "Lint validation failed" && applyResult.lintOutput) {
+      logger.info({ changeId }, "Attempting self-correction via LLM");
+
+      const correctionResult = await attemptLintCorrection(
+        db,
+        changeId,
+        parsed,
+        applyResult,
+        goal_id,
+        usage,
+      );
+
+      if (correctionResult) {
+        const executionTimeMs = Math.round(performance.now() - startTime);
+        return buildResult(
+          task,
+          "success",
+          `Mudanca aplicada (apos correcao): ${parsed.description}. Files: ${filePaths.join(", ")}`,
+          undefined,
+          executionTimeMs,
+          correctionResult.totalTokens,
+        );
+      }
+    }
+
+    const executionTimeMs = Math.round(performance.now() - startTime);
+    updateCodeChangeStatus(db, changeId, {
+      status: "failed",
+      testOutput: applyResult.lintOutput,
+      error: applyResult.error ?? "Lint validation failed",
+    });
+
+    logger.warn(
+      { changeId, error: applyResult.error },
+      "Code change failed after correction attempt",
+    );
     return buildResult(
       task,
       "failed",
@@ -400,6 +438,102 @@ function formatApprovalRequest(changeId: string, parsed: ForgeCodeOutput, risk: 
     "",
     `Use /approve\\_change ${shortId} para aprovar`,
     `Use /reject\\_change ${shortId} para rejeitar`,
+  ].join("\n");
+}
+
+interface CorrectionSuccess {
+  readonly totalTokens: number;
+}
+
+async function attemptLintCorrection(
+  db: BetterSqlite3.Database,
+  changeId: string,
+  originalParsed: ForgeCodeOutput,
+  failedResult: ApplyResult,
+  goalId: string,
+  originalUsage: TokenUsageInfo,
+): Promise<CorrectionSuccess | null> {
+  for (let attempt = 1; attempt <= MAX_CORRECTION_ATTEMPTS; attempt++) {
+    logger.info({ changeId, attempt }, "Sending lint errors to LLM for correction");
+
+    const correctionPrompt = buildCorrectionPrompt(originalParsed, failedResult.lintOutput);
+
+    const response = await callOpenClaw({
+      agentId: "forge",
+      prompt: correctionPrompt,
+      systemPrompt: FORGE_CODER_SYSTEM_PROMPT,
+    });
+
+    if (response.status === "failed") {
+      logger.warn({ changeId, attempt }, "LLM correction call failed");
+      return null;
+    }
+
+    const correctionUsage = resolveUsage(response.usage, response.text, correctionPrompt);
+    recordUsage(db, goalId, correctionUsage);
+
+    const corrected = parseCodeOutput(response.text);
+    if (!corrected) {
+      logger.warn({ changeId, attempt }, "LLM correction returned invalid JSON");
+      return null;
+    }
+
+    const validation = validateFilePaths(corrected.files);
+    if (!validation.valid) {
+      logger.warn({ changeId, attempt }, "Corrected files have invalid paths");
+      return null;
+    }
+
+    const pendingFilesJson = JSON.stringify(
+      corrected.files.map((f) => ({ path: f.path, action: f.action, content: f.content })),
+    );
+    updateCodeChangeStatus(db, changeId, { status: "pending" });
+
+    const { savePendingFiles } = await import("../state/codeChanges.js");
+    savePendingFiles(db, changeId, pendingFilesJson);
+
+    const retryResult = await applyCodeChangeWithBranch(db, changeId, corrected.files);
+
+    if (retryResult.success) {
+      const totalTokens = originalUsage.totalTokens + correctionUsage.totalTokens;
+      logger.info({ changeId, attempt, totalTokens }, "Code change applied after LLM correction");
+      return { totalTokens };
+    }
+
+    logger.warn({ changeId, attempt }, "Correction attempt still failed lint");
+  }
+
+  return null;
+}
+
+function buildCorrectionPrompt(originalParsed: ForgeCodeOutput, lintOutput: string): string {
+  const truncatedErrors =
+    lintOutput.length > MAX_LINT_ERROR_CHARS
+      ? lintOutput.slice(0, MAX_LINT_ERROR_CHARS) + "\n... (truncated)"
+      : lintOutput;
+
+  const originalFiles = originalParsed.files
+    .map((f) => `--- ${f.path} (${f.action}) ---\n${f.content}\n--- end ---`)
+    .join("\n\n");
+
+  return [
+    "CORRECAO DE CODIGO: O codigo gerado anteriormente falhou na validacao lint/tsc.",
+    "",
+    "ERROS ENCONTRADOS:",
+    truncatedErrors,
+    "",
+    "CODIGO ORIGINAL:",
+    originalFiles,
+    "",
+    "INSTRUCOES:",
+    "1. Corrija TODOS os erros listados acima",
+    "2. Mantenha a mesma estrutura de arquivos e paths",
+    "3. Use imports com extensao .js (ESM)",
+    "4. Use import type para importacoes de tipo",
+    "5. Nao use tipo any",
+    "6. Responda APENAS com JSON puro, mesmo formato de saida",
+    "",
+    "IMPORTANTE: Responda APENAS com JSON puro, sem markdown, sem explicacoes.",
   ].join("\n");
 }
 
