@@ -20,6 +20,7 @@ export interface DailyBriefingInput {
   readonly vectorInfo: VectorInfo;
   readonly forgeCodeInfo: ForgeCodeInfo;
   readonly nexusInfo: NexusInfo;
+  readonly projectId?: string;
 }
 
 export function formatDailyBriefing(input: DailyBriefingInput): string {
@@ -33,6 +34,7 @@ export function formatDailyBriefing(input: DailyBriefingInput): string {
     vectorInfo,
     forgeCodeInfo,
     nexusInfo,
+    projectId,
   } = input;
   const decisions =
     output.decisions_needed.length > 0
@@ -73,9 +75,12 @@ export function formatDailyBriefing(input: DailyBriefingInput): string {
   const efficiencySection = formatEfficiencySection(efficiencyInfo);
   const feedbackSection = formatFeedbackSection(feedbackInfo);
 
+  const projectLine = projectId ? `*Projeto ativo:* ${projectId}` : "";
+
   const lines = [
     String.raw`*\[KAIROS — Briefing Diario]*`,
     "",
+    ...(projectLine ? [projectLine, ""] : []),
     "*Resumo:*",
     `- ${output.briefing}`,
     "",

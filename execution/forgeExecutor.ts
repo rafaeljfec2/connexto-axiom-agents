@@ -7,17 +7,27 @@ import type { ExecutionResult } from "./types.js";
 import { isCodingTask, executeForgeCode } from "./forgeCodeExecutor.js";
 import { executeForgeViaOpenClaw } from "./forgeOpenClawAdapter.js";
 import { hasPermission } from "./permissions.js";
+import { executeProjectCode } from "./projectCodeExecutor.js";
 import { ensureSandbox, resolveSandboxPath, validateSandboxLimits } from "./sandbox.js";
 
 export async function executeForge(
   db: BetterSqlite3.Database,
   delegation: KairosDelegation,
+  projectId?: string,
 ): Promise<ExecutionResult> {
   if (delegation.agent !== "forge") {
     return buildFailedResult(delegation.task, `Agent "${delegation.agent}" is not forge`);
   }
 
   const useOpenClaw = process.env.USE_OPENCLAW === "true";
+
+  if (projectId && useOpenClaw && isCodingTask(delegation)) {
+    logger.info(
+      { task: delegation.task, projectId },
+      "Routing to project code executor (project-aware coding task)",
+    );
+    return executeProjectCode(db, delegation, projectId);
+  }
 
   if (useOpenClaw && isCodingTask(delegation)) {
     logger.info({ task: delegation.task }, "Routing to Forge code executor (coding task)");

@@ -16,6 +16,7 @@ export interface CodeChangeEntry {
   readonly filesChanged: readonly string[];
   readonly risk: number;
   readonly pendingFiles?: string;
+  readonly projectId?: string;
 }
 
 export interface CodeChange {
@@ -34,6 +35,7 @@ export interface CodeChange {
   readonly branch_name: string | null;
   readonly commits: string | null;
   readonly pending_files: string | null;
+  readonly project_id: string | null;
   readonly created_at: string;
 }
 
@@ -48,14 +50,14 @@ export interface CodeChangeStatusUpdate {
   readonly commits?: string;
 }
 
-const COLUMNS = `id, task_id, description, files_changed, diff, risk, status, test_output, error, approved_by, approved_at, applied_at, branch_name, commits, pending_files, created_at`;
+const COLUMNS = `id, task_id, description, files_changed, diff, risk, status, test_output, error, approved_by, approved_at, applied_at, branch_name, commits, pending_files, project_id, created_at`;
 
 export function saveCodeChange(db: BetterSqlite3.Database, entry: CodeChangeEntry): string {
   const id = crypto.randomUUID();
 
   db.prepare(
-    `INSERT INTO code_changes (id, task_id, description, files_changed, risk, pending_files)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO code_changes (id, task_id, description, files_changed, risk, pending_files, project_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     entry.taskId,
@@ -63,6 +65,7 @@ export function saveCodeChange(db: BetterSqlite3.Database, entry: CodeChangeEntr
     JSON.stringify(entry.filesChanged),
     entry.risk,
     entry.pendingFiles ?? null,
+    entry.projectId ?? null,
   );
 
   return id;
@@ -120,8 +123,7 @@ export function updateCodeChangeStatus(
     values.push(update.error);
   }
   if (update.approvedBy !== undefined) {
-    sets.push("approved_by = ?");
-    sets.push("approved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");
+    sets.push("approved_by = ?", "approved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");
     values.push(update.approvedBy);
   }
   if (update.appliedAt !== undefined) {

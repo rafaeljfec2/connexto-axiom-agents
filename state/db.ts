@@ -25,6 +25,7 @@ function applyMigrations(db: BetterSqlite3.Database): void {
   migrateCodeChangesColumns(db);
   migratePullRequestsMergeColumns(db);
   migrateGoalsProjectId(db);
+  migrateCodeChangesProjectId(db);
 }
 
 function migrateArtifactsColumns(db: BetterSqlite3.Database): void {
@@ -66,6 +67,16 @@ function migratePullRequestsMergeColumns(db: BetterSqlite3.Database): void {
   }
   if (!columnNames.has("merge_checked_at")) {
     db.exec("ALTER TABLE pull_requests ADD COLUMN merge_checked_at TEXT");
+  }
+}
+
+function migrateCodeChangesProjectId(db: BetterSqlite3.Database): void {
+  const columns = db.pragma("table_info(code_changes)") as ReadonlyArray<{ name: string }>;
+  const columnNames = new Set(columns.map((c) => c.name));
+
+  if (!columnNames.has("project_id")) {
+    db.exec("ALTER TABLE code_changes ADD COLUMN project_id TEXT");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_code_changes_project_id ON code_changes(project_id)");
   }
 }
 

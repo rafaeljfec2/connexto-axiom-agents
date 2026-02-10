@@ -98,7 +98,7 @@ export async function runKairos(
   );
 
   const nexusOutput = await executeApprovedNexus(db, filtered.approved);
-  const forgeOutput = await executeApprovedForge(db, filtered.approved);
+  const forgeOutput = await executeApprovedForge(db, filtered.approved, projectId);
   const vectorOutput = await executeApprovedVector(db, filtered.approved);
 
   const allResults = [...nexusOutput.results, ...forgeOutput.results, ...vectorOutput.results];
@@ -123,6 +123,7 @@ export async function runKairos(
     vectorInfo,
     forgeCodeInfo,
     nexusInfo,
+    projectId,
   });
   await sendTelegramMessage(briefingText);
   logger.info("Daily briefing sent");
@@ -226,6 +227,7 @@ async function executeApprovedNexus(
 async function executeApprovedForge(
   db: BetterSqlite3.Database,
   approved: readonly KairosDelegation[],
+  projectId?: string,
 ): Promise<AgentExecutionOutput> {
   const forgeDelegations = approved.filter((d) => d.agent === "forge");
 
@@ -234,7 +236,7 @@ async function executeApprovedForge(
     return { results: [], blocked: [] };
   }
 
-  logger.info({ count: forgeDelegations.length }, "Executing forge delegations");
+  logger.info({ count: forgeDelegations.length, projectId: projectId ?? "none" }, "Executing forge delegations");
 
   const results: ExecutionResult[] = [];
   const blocked: BlockedTask[] = [];
@@ -253,7 +255,7 @@ async function executeApprovedForge(
       continue;
     }
 
-    const result = await executeForge(db, delegation);
+    const result = await executeForge(db, delegation, projectId);
     saveOutcome(db, result);
     results.push(result);
 
