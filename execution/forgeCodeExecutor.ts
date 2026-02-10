@@ -24,6 +24,10 @@ const CODING_KEYWORDS: readonly string[] = [
   "adicionar teste",
   "refatorar",
   "modificar",
+  "remover",
+  "alterar",
+  "atualizar",
+  "corrigir",
   "code",
   "test",
   "implement",
@@ -31,8 +35,17 @@ const CODING_KEYWORDS: readonly string[] = [
   "add test",
   "refactor",
   "modify",
+  "remove",
+  "update",
+  "fix",
   "write code",
   "escrever codigo",
+  "sidebar",
+  "component",
+  "page",
+  "route",
+  "api",
+  "endpoint",
 ];
 
 const MAX_FILES_PER_CHANGE = 3;

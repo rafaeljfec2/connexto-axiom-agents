@@ -226,6 +226,10 @@ export async function readFileContents(
   return results;
 }
 
+function normalizeAccents(text: string): string {
+  return text.normalize("NFD").replaceAll(/[\u0300-\u036f]/g, "");
+}
+
 function extractKeywords(task: string): readonly string[] {
   const stopWords = new Set([
     "a", "o", "de", "do", "da", "em", "no", "na", "para", "por", "com",
@@ -235,7 +239,7 @@ function extractKeywords(task: string): readonly string[] {
     "implementar", "criar", "remover", "adicionar", "modificar", "alterar",
   ]);
 
-  return task
+  return normalizeAccents(task)
     .toLowerCase()
     .replaceAll(/[^a-z0-9\s-]/g, " ")
     .split(/\s+/)
