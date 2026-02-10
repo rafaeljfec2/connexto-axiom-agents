@@ -14,14 +14,6 @@
     "declarationMap": true,
     "sourceMap": true
   },
-  "include": [
-    "src/**/*",
-    "agents/**/*",
-    "orchestration/**/*",
-    "state/**/*"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist"
-  ]
+  "include": ["src/**/*", "agents/**/*", "orchestration/**/*", "state/**/*"],
+  "exclude": ["node_modules", "dist"]
 }
