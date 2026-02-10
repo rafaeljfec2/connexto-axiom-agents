@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import type BetterSqlite3 from "better-sqlite3";
 import { loadBudgetConfig } from "../config/budget.js";
 import { logger } from "../config/logger.js";
+import { config as kairosAgentConfig } from "../agents/kairos/config.js";
 import { callLLM, createLLMConfig } from "../llm/client.js";
 import type { LLMUsage } from "../llm/client.js";
 import type { Goal } from "../state/goals.js";
@@ -64,7 +65,7 @@ export async function callKairosLLM(
 
   logger.info({ estimatedInputTokens }, "Token estimate within limit");
 
-  const config = createLLMConfig();
+  const config = createKairosLLMConfig();
   const response = await callLLM(config, {
     system: systemPrompt,
     userMessage,
@@ -74,6 +75,17 @@ export async function callKairosLLM(
   const output = parseJSON(response.text);
 
   return { output, usage: response.usage };
+}
+
+function createKairosLLMConfig(): ReturnType<typeof createLLMConfig> {
+  const baseConfig = createLLMConfig();
+  const model = kairosAgentConfig.llmModel;
+
+  if (model === "placeholder" || model.length === 0) return baseConfig;
+
+  logger.info({ model }, "Using KAIROS-specific LLM model");
+
+  return { ...baseConfig, model };
 }
 
 function injectHistoricalContext(inputText: string, historicalBlock: string): string {
