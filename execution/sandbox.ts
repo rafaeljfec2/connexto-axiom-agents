@@ -7,6 +7,7 @@ const SANDBOX_DIR = path.resolve(PROJECT_ROOT, "sandbox", "forge");
 const MAX_FILENAME_LENGTH = 200;
 const MAX_SANDBOX_FILES = 100;
 const SAFE_FILENAME_REGEX = /^[a-z0-9][a-z0-9./-]*$/;
+const SAFE_AGENT_ID_REGEX = /^[a-z][a-z0-9-]*$/;
 
 export async function ensureSandbox(): Promise<void> {
   await fs.mkdir(SANDBOX_DIR, { recursive: true });
@@ -23,6 +24,49 @@ export function resolveSandboxPath(filename: string): string {
   }
 
   return resolved;
+}
+
+function resolveAgentSandboxDir(agentId: string): string {
+  if (!SAFE_AGENT_ID_REGEX.test(agentId)) {
+    throw new TypeError(`Invalid agent ID for sandbox: "${agentId}"`);
+  }
+  return path.resolve(PROJECT_ROOT, "sandbox", agentId);
+}
+
+export async function ensureAgentSandbox(agentId: string): Promise<void> {
+  const dir = resolveAgentSandboxDir(agentId);
+  await fs.mkdir(dir, { recursive: true });
+}
+
+export function resolveAgentSandboxPath(agentId: string, filename: string): string {
+  validateFilename(filename);
+
+  const dir = resolveAgentSandboxDir(agentId);
+  const resolved = path.resolve(dir, filename);
+  const relative = path.relative(dir, resolved);
+
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new TypeError(`Path traversal detected: "${filename}" resolves outside sandbox`);
+  }
+
+  return resolved;
+}
+
+export async function validateAgentSandboxLimits(agentId: string): Promise<void> {
+  const dir = resolveAgentSandboxDir(agentId);
+  try {
+    const entries = await fs.readdir(dir);
+    if (entries.length >= MAX_SANDBOX_FILES) {
+      throw new Error(
+        `Sandbox file limit reached for ${agentId}: ${entries.length}/${MAX_SANDBOX_FILES}. Remove old files before creating new ones`,
+      );
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
 }
 
 export function validateFilename(filename: string): void {

@@ -114,3 +114,19 @@ CREATE TABLE IF NOT EXISTS agent_feedback (
 CREATE INDEX IF NOT EXISTS idx_agent_feedback_agent_id ON agent_feedback(agent_id);
 CREATE INDEX IF NOT EXISTS idx_agent_feedback_task_type ON agent_feedback(task_type);
 CREATE INDEX IF NOT EXISTS idx_agent_feedback_created_at ON agent_feedback(created_at);
+
+CREATE TABLE IF NOT EXISTS artifacts (
+  id         TEXT PRIMARY KEY,
+  agent_id   TEXT NOT NULL,
+  type       TEXT NOT NULL CHECK (type IN ('post', 'newsletter', 'landing', 'editorial_calendar', 'analysis')),
+  title      TEXT NOT NULL,
+  content    TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'approved', 'rejected')),
+  metadata   TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_artifacts_agent_id ON artifacts(agent_id);
+CREATE INDEX IF NOT EXISTS idx_artifacts_status ON artifacts(status);
+CREATE INDEX IF NOT EXISTS idx_artifacts_type ON artifacts(type);

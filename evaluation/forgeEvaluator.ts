@@ -3,18 +3,20 @@ import type { ExecutionResult } from "../execution/types.js";
 
 export type EvaluationGrade = "SUCCESS" | "PARTIAL" | "FAILURE";
 
-export interface ForgeEvaluation {
+export interface ExecutionEvaluation {
   readonly grade: EvaluationGrade;
   readonly reasons: readonly string[];
 }
 
+export type ForgeEvaluation = ExecutionEvaluation;
+
 const SLOW_EXECUTION_THRESHOLD_MS = 60_000;
 const HIGH_TOKEN_USAGE_RATIO = 0.8;
 
-export function evaluateForgeExecution(
+export function evaluateExecution(
   result: ExecutionResult,
   budgetConfig: BudgetConfig,
-): ForgeEvaluation {
+): ExecutionEvaluation {
   if (result.status === "failed") {
     return {
       grade: "FAILURE",
@@ -46,3 +48,5 @@ function isTokenUsageHigh(tokensUsed: number | undefined, perTaskTokenLimit: num
 function isExecutionSlow(executionTimeMs: number | undefined): boolean {
   return executionTimeMs !== undefined && executionTimeMs > SLOW_EXECUTION_THRESHOLD_MS;
 }
+
+export const evaluateForgeExecution = evaluateExecution;

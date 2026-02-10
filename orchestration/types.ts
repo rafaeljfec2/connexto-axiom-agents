@@ -1,3 +1,5 @@
+import type { ExecutionResult } from "../execution/types.js";
+
 export interface KairosDecision {
   readonly goal_id: string;
   readonly action: string;
@@ -61,8 +63,15 @@ export interface EfficiencyInfo {
 }
 
 export interface FeedbackInfo {
-  readonly successRate7d: number;
-  readonly totalExecutions7d: number;
+  readonly forgeSuccessRate7d: number;
+  readonly forgeTotalExecutions7d: number;
+  readonly vectorSuccessRate7d: number;
+  readonly vectorTotalExecutions7d: number;
   readonly problematicTasks: readonly string[];
   readonly adjustmentsApplied: number;
+}
+
+export interface VectorInfo {
+  readonly executionResults: readonly ExecutionResult[];
+  readonly pendingDraftsCount: number;
 }

@@ -41,6 +41,19 @@
           "allow": ["read", "write"],
           "deny": ["exec", "edit", "apply_patch", "browser", "gateway", "process"]
         }
+      },
+      {
+        "id": "vector",
+        "workspace": "./sandbox/vector",
+        "sandbox": {
+          "mode": "all",
+          "scope": "agent",
+          "workspaceAccess": "rw"
+        },
+        "tools": {
+          "allow": ["read", "write"],
+          "deny": ["exec", "edit", "apply_patch", "browser", "gateway", "process"]
+        }
       }
     ]
   },

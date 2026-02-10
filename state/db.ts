@@ -20,6 +20,10 @@ export function openDatabase(): BetterSqlite3.Database {
 }
 
 function applyMigrations(db: BetterSqlite3.Database): void {
+  migrateOutcomesColumns(db);
+}
+
+function migrateOutcomesColumns(db: BetterSqlite3.Database): void {
   const columns = db.pragma("table_info(outcomes)") as ReadonlyArray<{ name: string }>;
   const columnNames = new Set(columns.map((c) => c.name));
 

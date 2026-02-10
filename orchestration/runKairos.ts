@@ -1,13 +1,15 @@
 import type BetterSqlite3 from "better-sqlite3";
 import { loadBudgetConfig } from "../config/budget.js";
 import { logger } from "../config/logger.js";
-import { evaluateForgeExecution } from "../evaluation/forgeEvaluator.js";
+import { evaluateExecution } from "../evaluation/forgeEvaluator.js";
 import { checkBudget } from "../execution/budgetGate.js";
 import { executeForge } from "../execution/forgeExecutor.js";
 import type { ExecutionResult } from "../execution/types.js";
+import { executeVector } from "../execution/vectorExecutor.js";
 import type { LLMUsage } from "../llm/client.js";
 import { sendTelegramMessage } from "../interfaces/telegram.js";
 import { saveFeedback, normalizeTaskType, getFeedbackSummary } from "../state/agentFeedback.js";
+import { getPendingArtifacts } from "../state/artifacts.js";
 import { getCurrentBudget, incrementUsedTokens } from "../state/budgets.js";
 import { saveDecision, loadRecentDecisions } from "../state/decisions.js";
 import { getAverageTokensPerDecision7d } from "../state/efficiencyMetrics.js";
@@ -24,6 +26,7 @@ import type {
   BudgetInfo,
   EfficiencyInfo,
   FeedbackInfo,
+  VectorInfo,
 } from "./types.js";
 import { validateKairosOutput } from "./validateKairos.js";
 
@@ -75,24 +78,27 @@ export async function runKairos(db: BetterSqlite3.Database): Promise<void> {
     "Delegations filtered",
   );
 
-  const { results: forgeResults, blocked: blockedTasks } = await executeApprovedForge(
-    db,
-    filtered.approved,
-  );
+  const forgeOutput = await executeApprovedForge(db, filtered.approved);
+  const vectorOutput = await executeApprovedVector(db, filtered.approved);
 
-  evaluateAndRecordFeedback(db, forgeResults, filtered.approved, budgetConfig);
+  const allResults = [...forgeOutput.results, ...vectorOutput.results];
+  const allBlocked = [...forgeOutput.blocked, ...vectorOutput.blocked];
 
-  const budgetInfo = buildBudgetInfo(db, blockedTasks);
+  evaluateAndRecordFeedback(db, allResults, filtered.approved, budgetConfig);
+
+  const budgetInfo = buildBudgetInfo(db, allBlocked);
   const efficiencyInfo = buildEfficiencyInfo(db, kairosUsage, output);
   const feedbackInfo = buildFeedbackInfo(db, filterResult.adjustmentsApplied);
+  const vectorInfo = buildVectorInfo(db, vectorOutput.results);
 
   const briefingText = formatDailyBriefing(
     output,
     filtered,
-    forgeResults,
+    forgeOutput.results,
     budgetInfo,
     efficiencyInfo,
     feedbackInfo,
+    vectorInfo,
   );
   await sendTelegramMessage(briefingText);
   logger.info("Daily briefing sent");
@@ -147,15 +153,10 @@ function buildEfficiencyInfo(
   };
 }
 
-interface ForgeExecutionOutput {
-  readonly results: readonly ExecutionResult[];
-  readonly blocked: readonly BlockedTask[];
-}
-
 async function executeApprovedForge(
   db: BetterSqlite3.Database,
   approved: readonly KairosDelegation[],
-): Promise<ForgeExecutionOutput> {
+): Promise<AgentExecutionOutput> {
   const forgeDelegations = approved.filter((d) => d.agent === "forge");
 
   if (forgeDelegations.length === 0) {
@@ -226,7 +227,7 @@ function evaluateAndRecordFeedback(
   budgetConfig: ReturnType<typeof loadBudgetConfig>,
 ): void {
   for (const result of results) {
-    const evaluation = evaluateForgeExecution(result, budgetConfig);
+    const evaluation = evaluateExecution(result, budgetConfig);
     const delegation = approved.find((d) => d.task === result.task);
     const taskType = normalizeTaskType(delegation?.task ?? result.task);
 
@@ -238,20 +239,91 @@ function evaluateAndRecordFeedback(
     });
 
     logger.info(
-      { task: result.task, grade: evaluation.grade, reasons: evaluation.reasons },
-      "Forge execution evaluated and feedback recorded",
+      {
+        agent: result.agent,
+        task: result.task,
+        grade: evaluation.grade,
+        reasons: evaluation.reasons,
+      },
+      "Execution evaluated and feedback recorded",
     );
   }
 }
 
+interface AgentExecutionOutput {
+  readonly results: readonly ExecutionResult[];
+  readonly blocked: readonly BlockedTask[];
+}
+
+async function executeApprovedVector(
+  db: BetterSqlite3.Database,
+  approved: readonly KairosDelegation[],
+): Promise<AgentExecutionOutput> {
+  const vectorDelegations = approved.filter((d) => d.agent === "vector");
+
+  if (vectorDelegations.length === 0) {
+    logger.info("No vector delegations to execute");
+    return { results: [], blocked: [] };
+  }
+
+  logger.info({ count: vectorDelegations.length }, "Executing vector delegations");
+
+  const results: ExecutionResult[] = [];
+  const blocked: BlockedTask[] = [];
+
+  for (const delegation of vectorDelegations) {
+    const budgetCheck = checkBudget(db, delegation.agent);
+    if (!budgetCheck.allowed) {
+      logger.warn(
+        { task: delegation.task, reason: budgetCheck.reason },
+        "Budget gate blocked vector execution",
+      );
+      blocked.push({
+        task: delegation.task,
+        reason: budgetCheck.reason ?? "Orcamento insuficiente",
+      });
+      continue;
+    }
+
+    const result = await executeVector(db, delegation);
+    saveOutcome(db, result);
+    results.push(result);
+
+    if (result.status === "failed") {
+      logger.error(
+        { task: delegation.task, error: result.error },
+        "Vector execution failed, aborting remaining",
+      );
+      break;
+    }
+  }
+
+  return { results, blocked };
+}
+
+function buildVectorInfo(
+  db: BetterSqlite3.Database,
+  vectorResults: readonly ExecutionResult[],
+): VectorInfo {
+  const pendingDrafts = getPendingArtifacts(db, "vector");
+
+  return {
+    executionResults: vectorResults,
+    pendingDraftsCount: pendingDrafts.length,
+  };
+}
+
 function buildFeedbackInfo(db: BetterSqlite3.Database, adjustmentsApplied: number): FeedbackInfo {
-  const summary = getFeedbackSummary(db, "forge", 7);
+  const forgeSummary = getFeedbackSummary(db, "forge", 7);
+  const vectorSummary = getFeedbackSummary(db, "vector", 7);
 
   const problematicTasks = findProblematicTasks(db);
 
   return {
-    successRate7d: summary.successRate,
-    totalExecutions7d: summary.total,
+    forgeSuccessRate7d: forgeSummary.successRate,
+    forgeTotalExecutions7d: forgeSummary.total,
+    vectorSuccessRate7d: vectorSummary.successRate,
+    vectorTotalExecutions7d: vectorSummary.total,
     problematicTasks,
     adjustmentsApplied,
   };
@@ -260,18 +332,17 @@ function buildFeedbackInfo(db: BetterSqlite3.Database, adjustmentsApplied: numbe
 function findProblematicTasks(db: BetterSqlite3.Database): readonly string[] {
   const rows = db
     .prepare(
-      `SELECT task_type, COUNT(*) as failure_count
+      `SELECT agent_id, task_type, COUNT(*) as failure_count
        FROM agent_feedback
-       WHERE agent_id = 'forge'
-         AND grade = 'FAILURE'
+       WHERE grade = 'FAILURE'
          AND created_at >= datetime('now', '-7 days')
-       GROUP BY task_type
+       GROUP BY agent_id, task_type
        HAVING failure_count >= 2
        ORDER BY failure_count DESC`,
     )
-    .all() as ReadonlyArray<{ task_type: string; failure_count: number }>;
+    .all() as ReadonlyArray<{ agent_id: string; task_type: string; failure_count: number }>;
 
-  return rows.map((r) => `${r.task_type} (${r.failure_count} falhas)`);
+  return rows.map((r) => `${r.agent_id}/${r.task_type} (${r.failure_count} falhas)`);
 }
 
 function buildFallbackOutput(errorMessage: string): KairosOutput {

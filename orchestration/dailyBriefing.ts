@@ -5,15 +5,17 @@ import type {
   BudgetInfo,
   EfficiencyInfo,
   FeedbackInfo,
+  VectorInfo,
 } from "./types.js";
 
 export function formatDailyBriefing(
   output: KairosOutput,
   filtered: FilteredDelegations,
-  executions: readonly ExecutionResult[],
+  forgeExecutions: readonly ExecutionResult[],
   budgetInfo: BudgetInfo,
   efficiencyInfo: EfficiencyInfo,
   feedbackInfo: FeedbackInfo,
+  vectorInfo: VectorInfo,
 ): string {
   const decisions =
     output.decisions_needed.length > 0
@@ -45,16 +47,8 @@ export function formatDailyBriefing(
       ? filtered.rejected.map((r) => `- ${r.delegation.task}: ${r.reason}`).join("\n")
       : "- Nenhuma.";
 
-  const executionLines =
-    executions.length > 0
-      ? executions
-          .map((e) => {
-            const tag = e.status === "success" ? "SUCESSO" : "FALHA";
-            const detail = e.status === "success" ? e.output : e.error;
-            return `- [${tag}] ${e.task} -> ${detail}`;
-          })
-          .join("\n")
-      : "- Nenhuma.";
+  const forgeExecutionLines = formatExecutionLines(forgeExecutions);
+  const vectorSection = formatVectorSection(vectorInfo);
 
   const budgetSection = formatBudgetSection(budgetInfo);
   const efficiencySection = formatEfficiencySection(efficiencyInfo);
@@ -79,7 +73,9 @@ export function formatDailyBriefing(
     rejected,
     "",
     String.raw`*Execucoes FORGE:*`,
-    executionLines,
+    forgeExecutionLines,
+    "",
+    ...vectorSection,
     "",
     ...budgetSection,
     "",
@@ -92,6 +88,20 @@ export function formatDailyBriefing(
   ];
 
   return lines.join("\n");
+}
+
+function formatExecutionLines(executions: readonly ExecutionResult[]): string {
+  if (executions.length === 0) {
+    return "- Nenhuma.";
+  }
+
+  return executions
+    .map((e) => {
+      const tag = e.status === "success" ? "SUCESSO" : "FALHA";
+      const detail = e.status === "success" ? e.output : e.error;
+      return `- [${tag}] ${e.task} -> ${detail}`;
+    })
+    .join("\n");
 }
 
 function formatNumber(value: number): string {
@@ -131,11 +141,31 @@ function formatEfficiencySection(info: EfficiencyInfo): readonly string[] {
   return [String.raw`*Eficiencia LLM:*`, cycleLine, perDecisionLine, avg7dLine];
 }
 
+function formatVectorSection(info: VectorInfo): readonly string[] {
+  const header = String.raw`*Execucoes VECTOR:*`;
+
+  const executionLines =
+    info.executionResults.length > 0
+      ? info.executionResults
+          .map((e) => {
+            const tag = e.status === "success" ? "SUCESSO" : "FALHA";
+            const detail = e.status === "success" ? e.output : e.error;
+            return `- [${tag}] ${e.task} -> ${detail}`;
+          })
+          .join("\n")
+      : "- Nenhuma.";
+
+  const draftsLine = `- Drafts aguardando aprovacao: ${formatNumber(info.pendingDraftsCount)}`;
+
+  return [header, executionLines, draftsLine];
+}
+
 function formatFeedbackSection(info: FeedbackInfo): readonly string[] {
-  const rateLine = `- Taxa de sucesso: ${info.successRate7d.toFixed(1)}% (${formatNumber(info.totalExecutions7d)} execucoes)`;
+  const forgeLine = `- FORGE: ${info.forgeSuccessRate7d.toFixed(1)}% sucesso (${formatNumber(info.forgeTotalExecutions7d)} exec)`;
+  const vectorLine = `- VECTOR: ${info.vectorSuccessRate7d.toFixed(1)}% sucesso (${formatNumber(info.vectorTotalExecutions7d)} exec)`;
   const adjustmentsLine = `- Ajustes aplicados: ${formatNumber(info.adjustmentsApplied)}`;
 
-  const lines: string[] = [String.raw`*Feedback FORGE (7d):*`, rateLine, adjustmentsLine];
+  const lines: string[] = [String.raw`*Feedback (7d):*`, forgeLine, vectorLine, adjustmentsLine];
 
   if (info.problematicTasks.length > 0) {
     lines.push(`- Tasks problematicas: ${info.problematicTasks.join(", ")}`);
