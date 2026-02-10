@@ -4,15 +4,24 @@ import { logger } from "../config/logger.js";
 import { checkBudget } from "../execution/budgetGate.js";
 import { executeForge } from "../execution/forgeExecutor.js";
 import type { ExecutionResult } from "../execution/types.js";
+import type { LLMUsage } from "../llm/client.js";
 import { sendTelegramMessage } from "../interfaces/telegram.js";
-import { getCurrentBudget } from "../state/budgets.js";
+import { getCurrentBudget, incrementUsedTokens } from "../state/budgets.js";
 import { saveDecision, loadRecentDecisions } from "../state/decisions.js";
+import { getAverageTokensPerDecision7d } from "../state/efficiencyMetrics.js";
 import { loadGoals } from "../state/goals.js";
 import { saveOutcome } from "../state/outcomes.js";
+import { recordTokenUsage } from "../state/tokenUsage.js";
 import { callKairosLLM } from "./kairosLLM.js";
 import { formatDailyBriefing } from "./dailyBriefing.js";
 import { filterDelegations } from "./decisionFilter.js";
-import type { KairosOutput, KairosDelegation, BlockedTask, BudgetInfo } from "./types.js";
+import type {
+  KairosOutput,
+  KairosDelegation,
+  BlockedTask,
+  BudgetInfo,
+  EfficiencyInfo,
+} from "./types.js";
 import { validateKairosOutput } from "./validateKairos.js";
 
 export async function runKairos(db: BetterSqlite3.Database): Promise<void> {
@@ -26,18 +35,25 @@ export async function runKairos(db: BetterSqlite3.Database): Promise<void> {
     return;
   }
 
-  const recentDecisions = loadRecentDecisions(db, 5);
+  const recentDecisions = loadRecentDecisions(db, 3);
   logger.info({ decisionsCount: recentDecisions.length }, "Recent decisions loaded");
 
   let output: KairosOutput;
+  let kairosUsage: LLMUsage | null = null;
+
   try {
-    const rawOutput = await callKairosLLM(goals, recentDecisions);
-    output = validateKairosOutput(rawOutput);
+    const result = await callKairosLLM(goals, recentDecisions);
+    output = validateKairosOutput(result.output);
+    kairosUsage = result.usage;
     logger.info("Output validated successfully");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error({ error: message }, "Kairos LLM failed");
     output = buildFallbackOutput(message);
+  }
+
+  if (kairosUsage) {
+    recordKairosTokenUsage(db, kairosUsage);
   }
 
   saveDecision(db, output);
@@ -59,12 +75,66 @@ export async function runKairos(db: BetterSqlite3.Database): Promise<void> {
   );
 
   const budgetInfo = buildBudgetInfo(db, blockedTasks);
+  const efficiencyInfo = buildEfficiencyInfo(db, kairosUsage, output);
 
-  const briefingText = formatDailyBriefing(output, filtered, forgeResults, budgetInfo);
+  const briefingText = formatDailyBriefing(
+    output,
+    filtered,
+    forgeResults,
+    budgetInfo,
+    efficiencyInfo,
+  );
   await sendTelegramMessage(briefingText);
   logger.info("Daily briefing sent");
 
   logger.info("Cycle complete.");
+}
+
+function recordKairosTokenUsage(db: BetterSqlite3.Database, usage: LLMUsage): void {
+  recordTokenUsage(db, {
+    agentId: "kairos",
+    taskId: "cycle",
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens,
+  });
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  incrementUsedTokens(db, `${year}-${month}`, usage.totalTokens);
+
+  logger.info(
+    {
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
+    },
+    "Kairos token usage recorded",
+  );
+}
+
+function buildEfficiencyInfo(
+  db: BetterSqlite3.Database,
+  usage: LLMUsage | null,
+  output: KairosOutput,
+): EfficiencyInfo {
+  const cycleInputTokens = usage?.inputTokens ?? 0;
+  const cycleOutputTokens = usage?.outputTokens ?? 0;
+  const cycleTotalTokens = usage?.totalTokens ?? 0;
+
+  const decisionCount = output.delegations.length + output.decisions_needed.length;
+  const tokensPerDecision = decisionCount > 0 ? Math.round(cycleTotalTokens / decisionCount) : 0;
+
+  const avg7dTokensPerDecision = getAverageTokensPerDecision7d(db, "kairos");
+
+  return {
+    cycleInputTokens,
+    cycleOutputTokens,
+    cycleTotalTokens,
+    tokensPerDecision,
+    avg7dTokensPerDecision,
+  };
 }
 
 interface ForgeExecutionOutput {

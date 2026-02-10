@@ -1,11 +1,12 @@
 import type { ExecutionResult } from "../execution/types.js";
-import type { KairosOutput, FilteredDelegations, BudgetInfo } from "./types.js";
+import type { KairosOutput, FilteredDelegations, BudgetInfo, EfficiencyInfo } from "./types.js";
 
 export function formatDailyBriefing(
   output: KairosOutput,
   filtered: FilteredDelegations,
   executions: readonly ExecutionResult[],
   budgetInfo: BudgetInfo,
+  efficiencyInfo: EfficiencyInfo,
 ): string {
   const decisions =
     output.decisions_needed.length > 0
@@ -49,6 +50,7 @@ export function formatDailyBriefing(
       : "- Nenhuma.";
 
   const budgetSection = formatBudgetSection(budgetInfo);
+  const efficiencySection = formatEfficiencySection(efficiencyInfo);
 
   const lines = [
     String.raw`*\[KAIROS — Briefing Diario]*`,
@@ -72,6 +74,8 @@ export function formatDailyBriefing(
     executionLines,
     "",
     ...budgetSection,
+    "",
+    ...efficiencySection,
     "",
     "*Foco nas proximas 24h:*",
     `- ${output.next_24h_focus}`,
@@ -107,4 +111,12 @@ function formatBudgetSection(info: BudgetInfo): readonly string[] {
   const blockedLines = info.blockedTasks.map((b) => `- ${b.task}: ${b.reason}`);
 
   return [...header, "", String.raw`*Execucoes bloqueadas:*`, ...blockedLines];
+}
+
+function formatEfficiencySection(info: EfficiencyInfo): readonly string[] {
+  const cycleLine = `- Tokens neste ciclo: ${formatNumber(info.cycleTotalTokens)} (input: ${formatNumber(info.cycleInputTokens)}, output: ${formatNumber(info.cycleOutputTokens)})`;
+  const perDecisionLine = `- Tokens/decisao: ${formatNumber(info.tokensPerDecision)}`;
+  const avg7dLine = `- Media 7d: ${formatNumber(info.avg7dTokensPerDecision)} tokens/decisao`;
+
+  return [String.raw`*Eficiencia LLM:*`, cycleLine, perDecisionLine, avg7dLine];
 }

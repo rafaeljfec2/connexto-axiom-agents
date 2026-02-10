@@ -1,55 +1,68 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { loadBudgetConfig } from "../config/budget.js";
 import { logger } from "../config/logger.js";
 import { callLLM, createLLMConfig } from "../llm/client.js";
+import type { LLMUsage } from "../llm/client.js";
 import type { Goal } from "../state/goals.js";
 import type { RecentDecision } from "../state/decisions.js";
+import { compressState } from "./stateCompressor.js";
 import type { KairosOutput } from "./types.js";
 
 const SYSTEM_PROMPT_PATH = resolve("agents/kairos/SYSTEM.md");
+const CHARS_PER_TOKEN_ESTIMATE = 4;
+
+let cachedSystemPrompt: string | null = null;
+
+export interface KairosLLMResult {
+  readonly output: KairosOutput;
+  readonly usage: LLMUsage;
+}
+
+function loadSystemPrompt(): string {
+  if (!cachedSystemPrompt) {
+    cachedSystemPrompt = readFileSync(SYSTEM_PROMPT_PATH, "utf-8");
+  }
+  return cachedSystemPrompt;
+}
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / CHARS_PER_TOKEN_ESTIMATE);
+}
 
 export async function callKairosLLM(
   goals: readonly Goal[],
   recentDecisions: readonly RecentDecision[],
-): Promise<KairosOutput> {
-  const systemPrompt = readFileSync(SYSTEM_PROMPT_PATH, "utf-8");
+): Promise<KairosLLMResult> {
+  const systemPrompt = loadSystemPrompt();
   logger.info({ chars: systemPrompt.length }, "System prompt loaded");
 
-  const userMessage = buildUserMessage(goals, recentDecisions);
+  const compressed = compressState(goals, recentDecisions);
+  const userMessage = compressed.inputText;
+
   logger.info({ goalsCount: goals.length, decisionsCount: recentDecisions.length }, "Prompt built");
 
-  const config = createLLMConfig();
-  const rawText = await callLLM(config, { system: systemPrompt, userMessage });
+  const budgetConfig = loadBudgetConfig();
+  const estimatedInputTokens = estimateTokens(systemPrompt + userMessage);
 
-  return parseJSON(rawText);
-}
-
-function buildUserMessage(
-  goals: readonly Goal[],
-  recentDecisions: readonly RecentDecision[],
-): string {
-  const goalsBlock = goals.map((g) => ({
-    id: g.id,
-    title: g.title,
-    description: g.description,
-    priority: g.priority,
-  }));
-
-  const decisionsBlock = recentDecisions.map((d) => ({
-    agent: d.agent_id,
-    reasoning: d.reasoning,
-    created_at: d.created_at,
-  }));
-
-  const parts = [`## Active Goals\n${JSON.stringify(goalsBlock, null, 2)}`];
-
-  if (recentDecisions.length > 0) {
-    parts.push(`## Recent Decisions\n${JSON.stringify(decisionsBlock, null, 2)}`);
+  if (estimatedInputTokens > budgetConfig.kairosMaxInputTokens) {
+    throw new Error(
+      `Input token estimate (${estimatedInputTokens}) exceeds limit (${budgetConfig.kairosMaxInputTokens})`,
+    );
   }
 
-  parts.push("Analyze the goals above and return your JSON decision.");
+  logger.info({ estimatedInputTokens }, "Token estimate within limit");
 
-  return parts.join("\n\n");
+  const config = createLLMConfig();
+  const response = await callLLM(config, {
+    system: systemPrompt,
+    userMessage,
+    maxOutputTokens: budgetConfig.kairosMaxOutputTokens,
+  });
+
+  const output = parseJSON(response.text);
+
+  return { output, usage: response.usage };
 }
 
 function parseJSON(text: string): KairosOutput {

@@ -51,3 +51,11 @@ export interface BudgetInfo {
   readonly isExhausted: boolean;
   readonly blockedTasks: readonly BlockedTask[];
 }
+
+export interface EfficiencyInfo {
+  readonly cycleInputTokens: number;
+  readonly cycleOutputTokens: number;
+  readonly cycleTotalTokens: number;
+  readonly tokensPerDecision: number;
+  readonly avg7dTokensPerDecision: number;
+}

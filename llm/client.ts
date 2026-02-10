@@ -5,6 +5,18 @@ type LLMProvider = "claude" | "openai";
 export interface LLMRequest {
   readonly system: string;
   readonly userMessage: string;
+  readonly maxOutputTokens?: number;
+}
+
+export interface LLMUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly totalTokens: number;
+}
+
+export interface LLMResponse {
+  readonly text: string;
+  readonly usage: LLMUsage;
 }
 
 export interface LLMClientConfig {
@@ -35,20 +47,27 @@ export function createLLMConfig(): LLMClientConfig {
   };
 }
 
-export async function callLLM(config: LLMClientConfig, request: LLMRequest): Promise<string> {
+export async function callLLM(config: LLMClientConfig, request: LLMRequest): Promise<LLMResponse> {
   let lastError: Error | undefined;
 
   for (let attempt = 1; attempt <= config.maxRetries; attempt++) {
     try {
       logger.info({ attempt, provider: config.provider, model: config.model }, "Calling LLM");
 
-      const text =
+      const result =
         config.provider === "claude"
           ? await callClaude(config, request)
           : await callOpenAI(config, request);
 
-      logger.info({ chars: text.length }, "LLM response received");
-      return text;
+      logger.info(
+        {
+          chars: result.text.length,
+          inputTokens: result.usage.inputTokens,
+          outputTokens: result.usage.outputTokens,
+        },
+        "LLM response received",
+      );
+      return result;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       logger.warn({ attempt, error: lastError.message }, "LLM call failed");
@@ -58,7 +77,17 @@ export async function callLLM(config: LLMClientConfig, request: LLMRequest): Pro
   throw new Error(`LLM failed after ${config.maxRetries} attempts: ${lastError?.message}`);
 }
 
-async function callClaude(config: LLMClientConfig, request: LLMRequest): Promise<string> {
+interface ClaudeResponse {
+  readonly content: ReadonlyArray<{ readonly text: string }>;
+  readonly usage: {
+    readonly input_tokens: number;
+    readonly output_tokens: number;
+  };
+}
+
+async function callClaude(config: LLMClientConfig, request: LLMRequest): Promise<LLMResponse> {
+  const maxTokens = request.maxOutputTokens ?? 1024;
+
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -68,7 +97,7 @@ async function callClaude(config: LLMClientConfig, request: LLMRequest): Promise
     },
     body: JSON.stringify({
       model: config.model,
-      max_tokens: 1024,
+      max_tokens: maxTokens,
       system: request.system,
       messages: [{ role: "user", content: request.userMessage }],
     }),
@@ -80,15 +109,34 @@ async function callClaude(config: LLMClientConfig, request: LLMRequest): Promise
     throw new Error(`Claude API ${response.status}: ${body}`);
   }
 
-  const data = (await response.json()) as { content: ReadonlyArray<{ text: string }> };
+  const data = (await response.json()) as ClaudeResponse;
   const text = data.content[0]?.text;
   if (!text) {
     throw new Error("Claude returned empty content");
   }
-  return text;
+
+  return {
+    text,
+    usage: {
+      inputTokens: data.usage.input_tokens,
+      outputTokens: data.usage.output_tokens,
+      totalTokens: data.usage.input_tokens + data.usage.output_tokens,
+    },
+  };
 }
 
-async function callOpenAI(config: LLMClientConfig, request: LLMRequest): Promise<string> {
+interface OpenAIResponse {
+  readonly choices: ReadonlyArray<{ readonly message: { readonly content: string } }>;
+  readonly usage: {
+    readonly prompt_tokens: number;
+    readonly completion_tokens: number;
+    readonly total_tokens: number;
+  };
+}
+
+async function callOpenAI(config: LLMClientConfig, request: LLMRequest): Promise<LLMResponse> {
+  const maxTokens = request.maxOutputTokens ?? 1024;
+
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -97,7 +145,7 @@ async function callOpenAI(config: LLMClientConfig, request: LLMRequest): Promise
     },
     body: JSON.stringify({
       model: config.model,
-      max_tokens: 1024,
+      max_tokens: maxTokens,
       messages: [
         { role: "system", content: request.system },
         { role: "user", content: request.userMessage },
@@ -111,12 +159,18 @@ async function callOpenAI(config: LLMClientConfig, request: LLMRequest): Promise
     throw new Error(`OpenAI API ${response.status}: ${body}`);
   }
 
-  const data = (await response.json()) as {
-    choices: ReadonlyArray<{ message: { content: string } }>;
-  };
+  const data = (await response.json()) as OpenAIResponse;
   const text = data.choices[0]?.message?.content;
   if (!text) {
     throw new Error("OpenAI returned empty content");
   }
-  return text;
+
+  return {
+    text,
+    usage: {
+      inputTokens: data.usage.prompt_tokens,
+      outputTokens: data.usage.completion_tokens,
+      totalTokens: data.usage.total_tokens,
+    },
+  };
 }

@@ -1,4 +1,10 @@
+import { logger } from "../config/logger.js";
 import type { KairosOutput } from "./types.js";
+
+const MAX_BRIEFING_LENGTH = 200;
+const MAX_FOCUS_LENGTH = 120;
+const MAX_TASK_LENGTH = 120;
+const MAX_EXPECTED_OUTPUT_LENGTH = 120;
 
 export function validateKairosOutput(output: unknown): KairosOutput {
   if (output === null || typeof output !== "object") {
@@ -17,7 +23,32 @@ export function validateKairosOutput(output: unknown): KairosOutput {
   validateDelegations(record["delegations"] as unknown[]);
   validateTasksKilled(record["tasks_killed"] as unknown[]);
 
+  truncateFields(record);
+
   return output as KairosOutput;
+}
+
+function truncateFields(record: Record<string, unknown>): void {
+  truncateStringField(record, "briefing", MAX_BRIEFING_LENGTH);
+  truncateStringField(record, "next_24h_focus", MAX_FOCUS_LENGTH);
+
+  const delegations = record["delegations"] as Array<Record<string, unknown>>;
+  for (const delegation of delegations) {
+    truncateStringField(delegation, "task", MAX_TASK_LENGTH);
+    truncateStringField(delegation, "expected_output", MAX_EXPECTED_OUTPUT_LENGTH);
+  }
+}
+
+function truncateStringField(
+  record: Record<string, unknown>,
+  field: string,
+  maxLength: number,
+): void {
+  const value = record[field];
+  if (typeof value === "string" && value.length > maxLength) {
+    logger.warn({ field, originalLength: value.length, maxLength }, "Truncating LLM output field");
+    record[field] = value.slice(0, maxLength);
+  }
 }
 
 function assertNonEmptyString(record: Record<string, unknown>, field: string): void {

@@ -4,6 +4,8 @@ export interface BudgetConfig {
   readonly perTaskTokenLimit: number;
   readonly maxTasksPerDay: number;
   readonly warningThresholdPercent: number;
+  readonly kairosMaxInputTokens: number;
+  readonly kairosMaxOutputTokens: number;
 }
 
 export function loadBudgetConfig(): BudgetConfig {
@@ -13,5 +15,7 @@ export function loadBudgetConfig(): BudgetConfig {
     perTaskTokenLimit: Number(process.env.BUDGET_PER_TASK_TOKENS ?? "50000"),
     maxTasksPerDay: Number(process.env.BUDGET_MAX_TASKS_DAY ?? "10"),
     warningThresholdPercent: 20,
+    kairosMaxInputTokens: Number(process.env.KAIROS_MAX_INPUT_TOKENS ?? "800"),
+    kairosMaxOutputTokens: Number(process.env.KAIROS_MAX_OUTPUT_TOKENS ?? "400"),
   };
 }
