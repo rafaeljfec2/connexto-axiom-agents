@@ -4,6 +4,7 @@ import { logger } from "../config/logger.js";
 import type { KairosDelegation } from "../orchestration/types.js";
 import { logAudit, hashContent } from "../state/auditLog.js";
 import type { ExecutionResult } from "./types.js";
+import { isCodingTask, executeForgeCode } from "./forgeCodeExecutor.js";
 import { executeForgeViaOpenClaw } from "./forgeOpenClawAdapter.js";
 import { hasPermission } from "./permissions.js";
 import { ensureSandbox, resolveSandboxPath, validateSandboxLimits } from "./sandbox.js";
@@ -17,6 +18,11 @@ export async function executeForge(
   }
 
   const useOpenClaw = process.env.USE_OPENCLAW === "true";
+
+  if (useOpenClaw && isCodingTask(delegation)) {
+    logger.info({ task: delegation.task }, "Routing to Forge code executor (coding task)");
+    return executeForgeCode(db, delegation);
+  }
 
   if (useOpenClaw) {
     logger.info({ task: delegation.task }, "Routing to OpenClaw runtime");

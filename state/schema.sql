@@ -177,3 +177,23 @@ CREATE TABLE IF NOT EXISTS marketing_feedback (
 CREATE INDEX IF NOT EXISTS idx_marketing_feedback_message_type ON marketing_feedback(message_type);
 CREATE INDEX IF NOT EXISTS idx_marketing_feedback_grade ON marketing_feedback(grade);
 CREATE INDEX IF NOT EXISTS idx_marketing_feedback_created_at ON marketing_feedback(created_at);
+
+CREATE TABLE IF NOT EXISTS code_changes (
+  id               TEXT PRIMARY KEY,
+  task_id          TEXT NOT NULL,
+  description      TEXT NOT NULL,
+  files_changed    TEXT NOT NULL,
+  diff             TEXT,
+  risk             INTEGER NOT NULL CHECK (risk BETWEEN 1 AND 5),
+  status           TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'pending_approval', 'approved', 'applied', 'failed', 'rolled_back', 'rejected')),
+  test_output      TEXT,
+  error            TEXT,
+  approved_by      TEXT,
+  approved_at      TEXT,
+  applied_at       TEXT,
+  created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_code_changes_status ON code_changes(status);
+CREATE INDEX IF NOT EXISTS idx_code_changes_created_at ON code_changes(created_at);

@@ -80,3 +80,10 @@ export interface VectorInfo {
   readonly strongMessageTypes: readonly string[];
   readonly weakMessageTypes: readonly string[];
 }
+
+export interface ForgeCodeInfo {
+  readonly appliedCount7d: number;
+  readonly pendingApprovalCount: number;
+  readonly failedCount7d: number;
+  readonly totalRisk7d: number;
+}

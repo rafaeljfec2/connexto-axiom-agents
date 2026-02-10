@@ -6,6 +6,7 @@ import type {
   EfficiencyInfo,
   FeedbackInfo,
   VectorInfo,
+  ForgeCodeInfo,
 } from "./types.js";
 
 export function formatDailyBriefing(
@@ -16,6 +17,7 @@ export function formatDailyBriefing(
   efficiencyInfo: EfficiencyInfo,
   feedbackInfo: FeedbackInfo,
   vectorInfo: VectorInfo,
+  forgeCodeInfo: ForgeCodeInfo,
 ): string {
   const decisions =
     output.decisions_needed.length > 0
@@ -49,6 +51,7 @@ export function formatDailyBriefing(
 
   const forgeExecutionLines = formatExecutionLines(forgeExecutions);
   const vectorSection = formatVectorSection(vectorInfo);
+  const forgeCodeSection = formatForgeCodeSection(forgeCodeInfo);
 
   const budgetSection = formatBudgetSection(budgetInfo);
   const efficiencySection = formatEfficiencySection(efficiencyInfo);
@@ -74,6 +77,8 @@ export function formatDailyBriefing(
     "",
     String.raw`*Execucoes FORGE:*`,
     forgeExecutionLines,
+    "",
+    ...forgeCodeSection,
     "",
     ...vectorSection,
     "",
@@ -180,6 +185,16 @@ function formatVectorSection(info: VectorInfo): readonly string[] {
     strongLine,
     weakLine,
   ];
+}
+
+function formatForgeCodeSection(info: ForgeCodeInfo): readonly string[] {
+  const header = String.raw`*Mudancas de Codigo (FORGE):*`;
+  const appliedLine = `- Aplicadas (7d): ${formatNumber(info.appliedCount7d)}`;
+  const pendingLine = `- Pendentes de aprovacao: ${formatNumber(info.pendingApprovalCount)}`;
+  const failedLine = `- Falhas revertidas (7d): ${formatNumber(info.failedCount7d)}`;
+  const riskLine = `- Risco tecnico acumulado: ${formatNumber(info.totalRisk7d)}`;
+
+  return [header, appliedLine, pendingLine, failedLine, riskLine];
 }
 
 function formatFeedbackSection(info: FeedbackInfo): readonly string[] {

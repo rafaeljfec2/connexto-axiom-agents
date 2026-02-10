@@ -1,4 +1,10 @@
-export type ForgeAction = "fs.write" | "fs.mkdir" | "fs.read";
+export type ForgeAction =
+  | "fs.write"
+  | "fs.mkdir"
+  | "fs.read"
+  | "code.plan"
+  | "code.apply"
+  | "code.lint";
 export type VectorAction = "content.draft" | "content.analyze";
 export type AgentAction = ForgeAction | VectorAction;
 

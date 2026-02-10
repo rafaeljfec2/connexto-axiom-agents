@@ -2,8 +2,14 @@ import type BetterSqlite3 from "better-sqlite3";
 import { logger } from "../config/logger.js";
 import { publishArtifact } from "../execution/publisher.js";
 import { listPendingDrafts, approveDraft, rejectDraft } from "../services/approvalService.js";
+import {
+  listPendingCodeChanges,
+  approveCodeChange,
+  rejectCodeChange,
+} from "../services/codeChangeService.js";
 import { saveManualMetrics } from "../services/metricsCollector.js";
 import { getArtifactById } from "../state/artifacts.js";
+import { getCodeChangeById } from "../state/codeChanges.js";
 
 const POLLING_TIMEOUT_SECONDS = 30;
 const ERROR_BACKOFF_MS = 5000;
@@ -113,6 +119,15 @@ async function handleCommand(
       break;
     case "/metrics":
       await handleMetrics(db, token, chatId, args);
+      break;
+    case "/changes":
+      await handleChanges(db, token, chatId);
+      break;
+    case "/approve_change":
+      await handleApproveChange(db, token, chatId, args[0]);
+      break;
+    case "/reject_change":
+      await handleRejectChange(db, token, chatId, args[0]);
       break;
     case "/help":
     case "/start":
@@ -267,6 +282,79 @@ async function handleMetrics(
   await sendMessage(token, chatId, result.message);
 }
 
+async function handleChanges(
+  db: BetterSqlite3.Database,
+  token: string,
+  chatId: number,
+): Promise<void> {
+  const changes = listPendingCodeChanges(db);
+
+  if (changes.length === 0) {
+    await sendMessage(token, chatId, "Nenhuma mudanca de codigo pendente de aprovacao.");
+    return;
+  }
+
+  const lines = changes.map((c) => {
+    const shortId = c.id.slice(0, 8);
+    const files = JSON.parse(c.files_changed) as readonly string[];
+    const fileCount = files.length;
+    const truncatedDesc =
+      c.description.length > TITLE_MAX_LENGTH
+        ? `${c.description.slice(0, TITLE_MAX_LENGTH)}...`
+        : c.description;
+    return `- [${shortId}] R:${c.risk} (${fileCount} arquivo${fileCount > 1 ? "s" : ""}) ${truncatedDesc}`;
+  });
+
+  const message = `Mudancas de codigo pendentes (${changes.length}):\n\n${lines.join("\n")}\n\nUse /approve_change <id> ou /reject_change <id>`;
+  await sendMessage(token, chatId, message);
+}
+
+async function handleApproveChange(
+  db: BetterSqlite3.Database,
+  token: string,
+  chatId: number,
+  idArg: string | undefined,
+): Promise<void> {
+  if (!idArg) {
+    await sendMessage(
+      token,
+      chatId,
+      "Uso: /approve_change <id>\nExemplo: /approve_change abc12345",
+    );
+    return;
+  }
+
+  const changeId = resolveCodeChangeId(db, idArg);
+  if (!changeId) {
+    await sendMessage(token, chatId, `Mudanca com ID "${idArg}" nao encontrada.`);
+    return;
+  }
+
+  const result = await approveCodeChange(db, changeId, `telegram:${chatId}`);
+  await sendMessage(token, chatId, result.message);
+}
+
+async function handleRejectChange(
+  db: BetterSqlite3.Database,
+  token: string,
+  chatId: number,
+  idArg: string | undefined,
+): Promise<void> {
+  if (!idArg) {
+    await sendMessage(token, chatId, "Uso: /reject_change <id>\nExemplo: /reject_change abc12345");
+    return;
+  }
+
+  const changeId = resolveCodeChangeId(db, idArg);
+  if (!changeId) {
+    await sendMessage(token, chatId, `Mudanca com ID "${idArg}" nao encontrada.`);
+    return;
+  }
+
+  const result = rejectCodeChange(db, changeId, `telegram:${chatId}`);
+  await sendMessage(token, chatId, result.message);
+}
+
 async function handleHelp(token: string, chatId: number): Promise<void> {
   const helpText = [
     "Comandos disponiveis:",
@@ -276,6 +364,9 @@ async function handleHelp(token: string, chatId: number): Promise<void> {
     "/reject <id> — Rejeita um draft",
     "/publish <id> — Publica um artifact aprovado (stub v1)",
     "/metrics <id> <impressions> <clicks> <engagement> — Registra metricas manuais",
+    "/changes — Lista mudancas de codigo pendentes",
+    "/approve_change <id> — Aprova e aplica uma mudanca de codigo",
+    "/reject_change <id> — Rejeita uma mudanca de codigo",
     "/help — Mostra esta mensagem",
     "",
     "IDs podem ser parciais (primeiros 8 caracteres).",
@@ -292,6 +383,23 @@ function resolveArtifactId(db: BetterSqlite3.Database, partialId: string): strin
 
   const row = db
     .prepare("SELECT id FROM artifacts WHERE id LIKE ? LIMIT 2")
+    .all(`${partialId}%`) as ReadonlyArray<{ id: string }>;
+
+  if (row.length === 1) {
+    return row[0].id;
+  }
+
+  return undefined;
+}
+
+function resolveCodeChangeId(db: BetterSqlite3.Database, partialId: string): string | undefined {
+  const direct = getCodeChangeById(db, partialId);
+  if (direct) {
+    return direct.id;
+  }
+
+  const row = db
+    .prepare("SELECT id FROM code_changes WHERE id LIKE ? LIMIT 2")
     .all(`${partialId}%`) as ReadonlyArray<{ id: string }>;
 
   if (row.length === 1) {

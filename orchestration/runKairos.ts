@@ -14,6 +14,7 @@ import {
   getAverageEngagement7d,
   getMarketingPerformanceSummary,
 } from "../state/marketingFeedback.js";
+import { getCodeChangeStats7d } from "../state/codeChanges.js";
 import { getPublicationCount7d } from "../state/publications.js";
 import { getCurrentBudget, incrementUsedTokens } from "../state/budgets.js";
 import { saveDecision, loadRecentDecisions } from "../state/decisions.js";
@@ -32,6 +33,7 @@ import type {
   EfficiencyInfo,
   FeedbackInfo,
   VectorInfo,
+  ForgeCodeInfo,
 } from "./types.js";
 import { validateKairosOutput } from "./validateKairos.js";
 
@@ -95,6 +97,7 @@ export async function runKairos(db: BetterSqlite3.Database): Promise<void> {
   const efficiencyInfo = buildEfficiencyInfo(db, kairosUsage, output);
   const feedbackInfo = buildFeedbackInfo(db, filterResult.adjustmentsApplied);
   const vectorInfo = buildVectorInfo(db, vectorOutput.results);
+  const forgeCodeInfo = buildForgeCodeInfo(db);
 
   const briefingText = formatDailyBriefing(
     output,
@@ -104,6 +107,7 @@ export async function runKairos(db: BetterSqlite3.Database): Promise<void> {
     efficiencyInfo,
     feedbackInfo,
     vectorInfo,
+    forgeCodeInfo,
   );
   await sendTelegramMessage(briefingText);
   logger.info("Daily briefing sent");
@@ -364,6 +368,17 @@ function findProblematicTasks(db: BetterSqlite3.Database): readonly string[] {
     .all() as ReadonlyArray<{ agent_id: string; task_type: string; failure_count: number }>;
 
   return rows.map((r) => `${r.agent_id}/${r.task_type} (${r.failure_count} falhas)`);
+}
+
+function buildForgeCodeInfo(db: BetterSqlite3.Database): ForgeCodeInfo {
+  const stats = getCodeChangeStats7d(db);
+
+  return {
+    appliedCount7d: stats.appliedCount,
+    pendingApprovalCount: stats.pendingApprovalCount,
+    failedCount7d: stats.failedCount,
+    totalRisk7d: stats.totalRisk,
+  };
 }
 
 function buildFallbackOutput(errorMessage: string): KairosOutput {
