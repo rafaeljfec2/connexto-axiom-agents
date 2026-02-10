@@ -136,7 +136,7 @@ export async function commitChanges(message: string): Promise<string> {
   const sanitizedMessage = message.slice(0, 200).replaceAll('"', "'");
   const output = await execGit("commit", ["-m", sanitizedMessage]);
 
-  const hashMatch = /\[[\w/]+ ([a-f0-9]+)\]/.exec(output);
+  const hashMatch = /\[[\w/\-.]+ ([a-f0-9]+)\]/.exec(output);
   const hash = hashMatch?.[1] ?? "unknown";
 
   logger.info({ hash, message: sanitizedMessage }, "Changes committed");
