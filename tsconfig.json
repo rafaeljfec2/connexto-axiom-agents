@@ -20,7 +20,8 @@
     "orchestration/**/*",
     "state/**/*",
     "config/**/*",
-    "interfaces/**/*"
+    "interfaces/**/*",
+    "llm/**/*"
   ],
   "exclude": ["node_modules", "dist"]
 }
