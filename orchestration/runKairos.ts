@@ -2,8 +2,10 @@ import type BetterSqlite3 from "better-sqlite3";
 import { loadBudgetConfig } from "../config/budget.js";
 import { logger } from "../config/logger.js";
 import { evaluateExecution } from "../evaluation/forgeEvaluator.js";
+import { evaluateNexusExecution } from "../evaluation/nexusEvaluator.js";
 import { checkBudget } from "../execution/budgetGate.js";
 import { executeForge } from "../execution/forgeExecutor.js";
+import { executeNexus } from "../execution/nexusExecutor.js";
 import type { ExecutionResult } from "../execution/types.js";
 import { executeVector } from "../execution/vectorExecutor.js";
 import type { LLMUsage } from "../llm/client.js";
@@ -17,6 +19,7 @@ import {
 import { isGitHubConfigured } from "../execution/githubClient.js";
 import { syncOpenPRsStatus } from "../services/mergeReadinessService.js";
 import { getCodeChangeStats7d, getBranchStats7d } from "../state/codeChanges.js";
+import { getResearchStats7d } from "../state/nexusResearch.js";
 import { getPRStats7d } from "../state/pullRequests.js";
 import { getPublicationCount7d } from "../state/publications.js";
 import { getCurrentBudget, incrementUsedTokens } from "../state/budgets.js";
@@ -37,6 +40,7 @@ import type {
   FeedbackInfo,
   VectorInfo,
   ForgeCodeInfo,
+  NexusInfo,
 } from "./types.js";
 import { validateKairosOutput } from "./validateKairos.js";
 
@@ -90,11 +94,12 @@ export async function runKairos(db: BetterSqlite3.Database): Promise<void> {
     "Delegations filtered",
   );
 
+  const nexusOutput = await executeApprovedNexus(db, filtered.approved);
   const forgeOutput = await executeApprovedForge(db, filtered.approved);
   const vectorOutput = await executeApprovedVector(db, filtered.approved);
 
-  const allResults = [...forgeOutput.results, ...vectorOutput.results];
-  const allBlocked = [...forgeOutput.blocked, ...vectorOutput.blocked];
+  const allResults = [...nexusOutput.results, ...forgeOutput.results, ...vectorOutput.results];
+  const allBlocked = [...nexusOutput.blocked, ...forgeOutput.blocked, ...vectorOutput.blocked];
 
   evaluateAndRecordFeedback(db, allResults, filtered.approved, budgetConfig);
 
@@ -103,17 +108,19 @@ export async function runKairos(db: BetterSqlite3.Database): Promise<void> {
   const feedbackInfo = buildFeedbackInfo(db, filterResult.adjustmentsApplied);
   const vectorInfo = buildVectorInfo(db, vectorOutput.results);
   const forgeCodeInfo = buildForgeCodeInfo(db);
+  const nexusInfo = buildNexusInfo(db, nexusOutput.results);
 
-  const briefingText = formatDailyBriefing(
+  const briefingText = formatDailyBriefing({
     output,
     filtered,
-    forgeOutput.results,
+    forgeExecutions: forgeOutput.results,
     budgetInfo,
     efficiencyInfo,
     feedbackInfo,
     vectorInfo,
     forgeCodeInfo,
-  );
+    nexusInfo,
+  });
   await sendTelegramMessage(briefingText);
   logger.info("Daily briefing sent");
 
@@ -165,6 +172,52 @@ function buildEfficiencyInfo(
     tokensPerDecision,
     avg7dTokensPerDecision,
   };
+}
+
+async function executeApprovedNexus(
+  db: BetterSqlite3.Database,
+  approved: readonly KairosDelegation[],
+): Promise<AgentExecutionOutput> {
+  const nexusDelegations = approved.filter((d) => d.agent === "nexus");
+
+  if (nexusDelegations.length === 0) {
+    logger.info("No nexus delegations to execute");
+    return { results: [], blocked: [] };
+  }
+
+  logger.info({ count: nexusDelegations.length }, "Executing nexus delegations");
+
+  const results: ExecutionResult[] = [];
+  const blocked: BlockedTask[] = [];
+
+  for (const delegation of nexusDelegations) {
+    const budgetCheck = checkBudget(db, delegation.agent);
+    if (!budgetCheck.allowed) {
+      logger.warn(
+        { task: delegation.task, reason: budgetCheck.reason },
+        "Budget gate blocked nexus execution",
+      );
+      blocked.push({
+        task: delegation.task,
+        reason: budgetCheck.reason ?? "Orcamento insuficiente",
+      });
+      continue;
+    }
+
+    const result = await executeNexus(db, delegation);
+    saveOutcome(db, result);
+    results.push(result);
+
+    if (result.status === "failed") {
+      logger.error(
+        { task: delegation.task, error: result.error },
+        "Nexus execution failed, aborting remaining",
+      );
+      break;
+    }
+  }
+
+  return { results, blocked };
 }
 
 async function executeApprovedForge(
@@ -241,7 +294,10 @@ function evaluateAndRecordFeedback(
   budgetConfig: ReturnType<typeof loadBudgetConfig>,
 ): void {
   for (const result of results) {
-    const evaluation = evaluateExecution(result, budgetConfig);
+    const evaluation =
+      result.agent === "nexus"
+        ? evaluateNexusExecution(result, budgetConfig)
+        : evaluateExecution(result, budgetConfig);
     const delegation = approved.find((d) => d.task === result.task);
     const taskType = normalizeTaskType(delegation?.task ?? result.task);
 
@@ -346,6 +402,7 @@ function buildVectorInfo(
 function buildFeedbackInfo(db: BetterSqlite3.Database, adjustmentsApplied: number): FeedbackInfo {
   const forgeSummary = getFeedbackSummary(db, "forge", 7);
   const vectorSummary = getFeedbackSummary(db, "vector", 7);
+  const nexusSummary = getFeedbackSummary(db, "nexus", 7);
 
   const problematicTasks = findProblematicTasks(db);
 
@@ -354,6 +411,8 @@ function buildFeedbackInfo(db: BetterSqlite3.Database, adjustmentsApplied: numbe
     forgeTotalExecutions7d: forgeSummary.total,
     vectorSuccessRate7d: vectorSummary.successRate,
     vectorTotalExecutions7d: vectorSummary.total,
+    nexusSuccessRate7d: nexusSummary.successRate,
+    nexusTotalExecutions7d: nexusSummary.total,
     problematicTasks,
     adjustmentsApplied,
   };
@@ -404,6 +463,20 @@ function buildForgeCodeInfo(db: BetterSqlite3.Database): ForgeCodeInfo {
     mergedPRs7d: prStats.mergedCount7d,
     readyForMergePRs: prStats.readyForMergeCount,
     stalePRs: prStats.stalePRCount,
+  };
+}
+
+function buildNexusInfo(
+  db: BetterSqlite3.Database,
+  nexusResults: readonly ExecutionResult[],
+): NexusInfo {
+  const stats = getResearchStats7d(db);
+
+  return {
+    executionResults: nexusResults,
+    researchCount7d: stats.researchCount,
+    recentTopics: stats.recentTopics,
+    identifiedRisks: stats.identifiedRisks,
   };
 }
 

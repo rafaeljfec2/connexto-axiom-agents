@@ -7,18 +7,33 @@ import type {
   FeedbackInfo,
   VectorInfo,
   ForgeCodeInfo,
+  NexusInfo,
 } from "./types.js";
 
-export function formatDailyBriefing(
-  output: KairosOutput,
-  filtered: FilteredDelegations,
-  forgeExecutions: readonly ExecutionResult[],
-  budgetInfo: BudgetInfo,
-  efficiencyInfo: EfficiencyInfo,
-  feedbackInfo: FeedbackInfo,
-  vectorInfo: VectorInfo,
-  forgeCodeInfo: ForgeCodeInfo,
-): string {
+export interface DailyBriefingInput {
+  readonly output: KairosOutput;
+  readonly filtered: FilteredDelegations;
+  readonly forgeExecutions: readonly ExecutionResult[];
+  readonly budgetInfo: BudgetInfo;
+  readonly efficiencyInfo: EfficiencyInfo;
+  readonly feedbackInfo: FeedbackInfo;
+  readonly vectorInfo: VectorInfo;
+  readonly forgeCodeInfo: ForgeCodeInfo;
+  readonly nexusInfo: NexusInfo;
+}
+
+export function formatDailyBriefing(input: DailyBriefingInput): string {
+  const {
+    output,
+    filtered,
+    forgeExecutions,
+    budgetInfo,
+    efficiencyInfo,
+    feedbackInfo,
+    vectorInfo,
+    forgeCodeInfo,
+    nexusInfo,
+  } = input;
   const decisions =
     output.decisions_needed.length > 0
       ? output.decisions_needed.map((d) => `- ${d.action}: ${d.reasoning}`).join("\n")
@@ -52,6 +67,7 @@ export function formatDailyBriefing(
   const forgeExecutionLines = formatExecutionLines(forgeExecutions);
   const vectorSection = formatVectorSection(vectorInfo);
   const forgeCodeSection = formatForgeCodeSection(forgeCodeInfo);
+  const nexusSection = formatNexusSection(nexusInfo);
 
   const budgetSection = formatBudgetSection(budgetInfo);
   const efficiencySection = formatEfficiencySection(efficiencyInfo);
@@ -79,6 +95,8 @@ export function formatDailyBriefing(
     forgeExecutionLines,
     "",
     ...forgeCodeSection,
+    "",
+    ...nexusSection,
     "",
     ...vectorSection,
     "",
@@ -233,12 +251,48 @@ function formatForgeCodeSection(info: ForgeCodeInfo): readonly string[] {
   return lines;
 }
 
+function formatNexusSection(info: NexusInfo): readonly string[] {
+  const header = String.raw`*Pesquisas NEXUS:*`;
+
+  const executionLines =
+    info.executionResults.length > 0
+      ? info.executionResults
+          .map((e) => {
+            const tag = e.status === "success" ? "SUCESSO" : "FALHA";
+            const detail = e.status === "success" ? e.output : e.error;
+            return `- [${tag}] ${e.task} -> ${detail}`;
+          })
+          .join("\n")
+      : "- Nenhuma.";
+
+  const countLine = `- Pesquisas (7d): ${formatNumber(info.researchCount7d)}`;
+
+  const topicsLine =
+    info.recentTopics.length > 0
+      ? `- Temas recentes: ${info.recentTopics.join("; ")}`
+      : "- Temas recentes: nenhum";
+
+  const risksLine =
+    info.identifiedRisks.length > 0
+      ? `- Riscos identificados: ${info.identifiedRisks.join("; ")}`
+      : "- Riscos identificados: nenhum";
+
+  return [header, executionLines, countLine, topicsLine, risksLine];
+}
+
 function formatFeedbackSection(info: FeedbackInfo): readonly string[] {
   const forgeLine = `- FORGE: ${info.forgeSuccessRate7d.toFixed(1)}% sucesso (${formatNumber(info.forgeTotalExecutions7d)} exec)`;
   const vectorLine = `- VECTOR: ${info.vectorSuccessRate7d.toFixed(1)}% sucesso (${formatNumber(info.vectorTotalExecutions7d)} exec)`;
+  const nexusLine = `- NEXUS: ${info.nexusSuccessRate7d.toFixed(1)}% sucesso (${formatNumber(info.nexusTotalExecutions7d)} exec)`;
   const adjustmentsLine = `- Ajustes aplicados: ${formatNumber(info.adjustmentsApplied)}`;
 
-  const lines: string[] = [String.raw`*Feedback (7d):*`, forgeLine, vectorLine, adjustmentsLine];
+  const lines: string[] = [
+    String.raw`*Feedback (7d):*`,
+    forgeLine,
+    vectorLine,
+    nexusLine,
+    adjustmentsLine,
+  ];
 
   if (info.problematicTasks.length > 0) {
     lines.push(`- Tasks problematicas: ${info.problematicTasks.join(", ")}`);

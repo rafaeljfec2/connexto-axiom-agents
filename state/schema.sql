@@ -223,3 +223,19 @@ CREATE TABLE IF NOT EXISTS pull_requests (
 CREATE INDEX IF NOT EXISTS idx_pull_requests_status ON pull_requests(status);
 CREATE INDEX IF NOT EXISTS idx_pull_requests_code_change_id ON pull_requests(code_change_id);
 CREATE INDEX IF NOT EXISTS idx_pull_requests_created_at ON pull_requests(created_at);
+
+CREATE TABLE IF NOT EXISTS nexus_research (
+  id              TEXT PRIMARY KEY,
+  goal_id         TEXT NOT NULL,
+  question        TEXT NOT NULL,
+  options         TEXT NOT NULL,
+  pros_cons       TEXT NOT NULL,
+  risk_analysis   TEXT NOT NULL,
+  recommendation  TEXT NOT NULL,
+  raw_output      TEXT NOT NULL,
+  tokens_used     INTEGER,
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_nexus_research_goal_id ON nexus_research(goal_id);
+CREATE INDEX IF NOT EXISTS idx_nexus_research_created_at ON nexus_research(created_at);

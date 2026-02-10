@@ -3,6 +3,7 @@ import type { AgentAction } from "./types.js";
 const AGENT_PERMISSIONS: Readonly<Record<string, readonly AgentAction[]>> = {
   forge: ["fs.write", "fs.mkdir", "fs.read", "code.plan", "code.apply", "code.lint"],
   vector: ["content.draft", "content.analyze"],
+  nexus: ["research.query"],
 };
 
 export function hasPermission(agent: string, action: AgentAction): boolean {

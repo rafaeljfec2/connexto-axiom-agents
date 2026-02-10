@@ -6,7 +6,8 @@ export type ForgeAction =
   | "code.apply"
   | "code.lint";
 export type VectorAction = "content.draft" | "content.analyze";
-export type AgentAction = ForgeAction | VectorAction;
+export type NexusAction = "research.query";
+export type AgentAction = ForgeAction | VectorAction | NexusAction;
 
 export interface ExecutionResult {
   readonly agent: string;

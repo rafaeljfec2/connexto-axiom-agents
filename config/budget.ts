@@ -6,6 +6,7 @@ export interface BudgetConfig {
   readonly warningThresholdPercent: number;
   readonly kairosMaxInputTokens: number;
   readonly kairosMaxOutputTokens: number;
+  readonly nexusMaxOutputTokens: number;
 }
 
 export function loadBudgetConfig(): BudgetConfig {
@@ -17,5 +18,6 @@ export function loadBudgetConfig(): BudgetConfig {
     warningThresholdPercent: 20,
     kairosMaxInputTokens: Number(process.env.KAIROS_MAX_INPUT_TOKENS ?? "800"),
     kairosMaxOutputTokens: Number(process.env.KAIROS_MAX_OUTPUT_TOKENS ?? "400"),
+    nexusMaxOutputTokens: Number(process.env.NEXUS_MAX_OUTPUT_TOKENS ?? "600"),
   };
 }

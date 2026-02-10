@@ -293,3 +293,52 @@ O ciclo PR virtual foi testado com sucesso:
 - Rollback automatico restaurou o estado original
 - FAILURE registrado no feedback, diff e test_output persistidos
 - Briefing enviado com secao de mudancas de codigo
+
+---
+
+## FASE 22 — Agente NEXUS para Research Tecnico
+
+**Objetivo:** Introduzir o agente NEXUS para reduzir incerteza tecnica ANTES de delegar tarefas de codigo ao FORGE, fornecendo pesquisas estruturadas com opcoes, trade-offs e riscos.
+
+**Implementado:**
+
+### Agente NEXUS
+
+- **System Prompt** (`agents/nexus/SYSTEM.md`): papel de pesquisador tecnico read-only, formato de saida obrigatorio (OPCOES / PROS-CONTRAS / RISCO / RECOMENDACAO)
+- **Config** (`agents/nexus/config.ts`): permissoes `["research.query"]`, sem acesso a filesystem
+- **Executor** (`execution/nexusExecutor.ts`): recebe delegacao do KAIROS, constroi prompt de pesquisa, chama LLM, valida formato, persiste resultado
+- **Validador** (`execution/nexusValidator.ts`): valida que output contem todas as secoes obrigatorias com formato correto
+- **Avaliador** (`evaluation/nexusEvaluator.ts`): classifica execucoes como SUCCESS, PARTIAL ou FAILURE
+
+### Modelo de Dados
+
+- **CRUD** (`state/nexusResearch.ts`): persistencia de pesquisas com campos estruturados (question, options, pros_cons, risk_analysis, recommendation)
+- **Estatisticas**: contagem de pesquisas (7d), temas recentes, riscos identificados
+
+### Integracao com Orquestracao
+
+- **runKairos** (`orchestration/runKairos.ts`): NEXUS executado antes do FORGE e VECTOR, com budget gate e feedback loop
+- **Decision Filter**: NEXUS passa pelo mesmo filtro de delegacoes que outros agentes
+- **Token Usage**: registro granular de tokens consumidos por pesquisa
+
+### Visibilidade
+
+- **Daily Briefing** (`orchestration/dailyBriefing.ts`): secao dedicada "Pesquisas NEXUS" com execucoes, temas recentes e riscos identificados
+- **Feedback**: taxa de sucesso do NEXUS (7d) incluida na secao de feedback
+
+### Governanca
+
+- **Permissoes** (`execution/permissions.ts`): `nexus: ["research.query"]`
+- **Budget** (`config/budget.ts`): limite de output tokens controlado por `NEXUS_MAX_OUTPUT_TOKENS`
+- **Sanitizacao**: output sanitizado contra comandos perigosos e URLs externas
+
+**Tabelas criadas:** `nexus_research`
+
+**Regras absolutas:**
+
+- NEXUS nunca e acionado diretamente — apenas via delegacao do KAIROS
+- NEXUS nunca se comunica diretamente com FORGE ou VECTOR
+- Output do NEXUS e insumo para proximas decisoes, nunca comando
+- NEXUS nao escreve codigo, nao cria arquivos, nao altera repositorio
+- NEXUS nao decide implementacao final
+- KAIROS e o unico orquestrador

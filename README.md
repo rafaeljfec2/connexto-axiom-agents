@@ -44,7 +44,7 @@ src/bot.ts           Telegram bot entry point (persistent long-polling)
 | **FORGE**    | Technical executor — generates code, docs, configs via OpenClaw   | Active  |
 | **VECTOR**   | Marketing executor — generates posts, newsletters, landing copy   | Active  |
 | **SENTINEL** | Security & compliance monitor                                     | Planned |
-| **NEXUS**    | Integration & data connector                                      | Planned |
+| **NEXUS**    | Technical research — analyzes options, trade-offs and risks        | Active  |
 | **COVENANT** | Governance & policy enforcer                                      | Planned |
 
 ## Evolution
@@ -57,6 +57,8 @@ src/bot.ts           Telegram bot entry point (persistent long-polling)
 | 15    | VECTOR Real Execution            | Marketing agent generates drafts via OpenClaw         | Done   |
 | 16    | Approval & Semi-Auto Publication | Telegram bot for human approval + stub publication    | Done   |
 | 17    | Marketing Metrics & Feedback     | Engagement metrics influence KAIROS decisions         | Done   |
+| 18    | Governed Code Changes            | FORGE modifies code with PR virtual cycle             | Done   |
+| 22    | NEXUS Technical Research         | Research agent reduces uncertainty before coding      | Done   |
 
 ## Key Features
 
@@ -96,6 +98,7 @@ src/bot.ts           Telegram bot entry point (persistent long-polling)
 | `publications`       | Published artifact records                            |
 | `marketing_metrics`  | Engagement data (stub/manual/api)                     |
 | `marketing_feedback` | Content performance grades (STRONG/AVERAGE/WEAK)      |
+| `nexus_research`     | Technical research outputs with structured analysis   |
 
 ## Project Structure
 

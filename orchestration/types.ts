@@ -67,6 +67,8 @@ export interface FeedbackInfo {
   readonly forgeTotalExecutions7d: number;
   readonly vectorSuccessRate7d: number;
   readonly vectorTotalExecutions7d: number;
+  readonly nexusSuccessRate7d: number;
+  readonly nexusTotalExecutions7d: number;
   readonly problematicTasks: readonly string[];
   readonly adjustmentsApplied: number;
 }
@@ -95,4 +97,11 @@ export interface ForgeCodeInfo {
   readonly mergedPRs7d: number;
   readonly readyForMergePRs: number;
   readonly stalePRs: number;
+}
+
+export interface NexusInfo {
+  readonly executionResults: readonly ExecutionResult[];
+  readonly researchCount7d: number;
+  readonly recentTopics: readonly string[];
+  readonly identifiedRisks: readonly string[];
 }
