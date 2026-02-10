@@ -19,6 +19,7 @@ import {
   validateProjectFilePaths,
   sanitizeWorkspacePath,
   type FileChange,
+  type FileEdit,
 } from "./projectSecurity.js";
 
 const execFileAsync = promisify(execFile);
@@ -131,7 +132,10 @@ export async function applyProjectCodeChange(
       return { success: true, diff, lintOutput: lintResult.output };
     }
 
-    logger.warn({ changeId, branchName }, "Lint failed in project workspace, rolling back");
+    logger.warn(
+      { changeId, branchName, lintOutput: lintResult.output },
+      "Lint failed in project workspace, rolling back",
+    );
     await restoreBackups(backups, workspacePath);
     await switchToMain(workspacePath);
     await deleteBranch(branchName, workspacePath);
@@ -195,9 +199,98 @@ async function writeFiles(
     const fullPath = sanitizeWorkspacePath(workspacePath, file.path);
     const dir = path.dirname(fullPath);
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(fullPath, file.content, "utf-8");
+
+    if (file.action === "modify" && file.edits && file.edits.length > 0) {
+      await applySearchReplaceEdits(fullPath, file.path, file.edits);
+    } else {
+      await fs.writeFile(fullPath, file.content, "utf-8");
+    }
+
     logger.info({ path: file.path, action: file.action, workspacePath }, "Project file written");
   }
+}
+
+async function applySearchReplaceEdits(
+  fullPath: string,
+  relativePath: string,
+  edits: readonly FileEdit[],
+): Promise<void> {
+  let content = await fs.readFile(fullPath, "utf-8");
+
+  for (const edit of edits) {
+    const index = content.indexOf(edit.search);
+    if (index === -1) {
+      const trimmedSearch = edit.search.trim();
+      const trimmedIndex = findTrimmedMatch(content, trimmedSearch);
+
+      if (trimmedIndex === -1) {
+        logger.error(
+          {
+            path: relativePath,
+            searchPreview: edit.search.slice(0, 100),
+            searchLength: edit.search.length,
+          },
+          "Search string not found in file for edit",
+        );
+        throw new Error(
+          `Search/replace failed: search string not found in ${relativePath}`,
+        );
+      }
+
+      logger.debug({ path: relativePath }, "Search matched with trimmed whitespace fallback");
+      const matchEnd = findTrimmedMatchEnd(content, trimmedSearch, trimmedIndex);
+      content = content.slice(0, trimmedIndex) + edit.replace + content.slice(matchEnd);
+    } else {
+      content = content.slice(0, index) + edit.replace + content.slice(index + edit.search.length);
+    }
+  }
+
+  await fs.writeFile(fullPath, content, "utf-8");
+}
+
+function findTrimmedMatch(content: string, trimmedSearch: string): number {
+  const lines = content.split("\n");
+  const searchLines = trimmedSearch.split("\n").map((l) => l.trim());
+
+  for (let i = 0; i <= lines.length - searchLines.length; i++) {
+    let match = true;
+    for (let j = 0; j < searchLines.length; j++) {
+      if (lines[i + j].trim() !== searchLines[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      let charIndex = 0;
+      for (let k = 0; k < i; k++) {
+        charIndex += lines[k].length + 1;
+      }
+      return charIndex;
+    }
+  }
+  return -1;
+}
+
+function findTrimmedMatchEnd(content: string, trimmedSearch: string, startIndex: number): number {
+  const lines = content.split("\n");
+  const searchLines = trimmedSearch.split("\n").map((l) => l.trim());
+
+  let charIndex = 0;
+  let lineIndex = 0;
+  for (let k = 0; k < lines.length; k++) {
+    if (charIndex <= startIndex && startIndex < charIndex + lines[k].length + 1) {
+      lineIndex = k;
+      break;
+    }
+    charIndex += lines[k].length + 1;
+  }
+
+  let endIndex = 0;
+  for (let k = 0; k < lineIndex + searchLines.length; k++) {
+    endIndex += lines[k].length + 1;
+  }
+
+  return endIndex - 1;
 }
 
 async function restoreBackups(

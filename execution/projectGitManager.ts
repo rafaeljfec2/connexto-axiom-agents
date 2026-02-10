@@ -67,21 +67,41 @@ async function execGit(subcommand: string, args: readonly string[], cwd: string)
 
   logger.debug({ subcommand, args, cwd }, "Executing project git command");
 
-  const { stdout, stderr } = await execFileAsync(GIT_BINARY, fullArgs, {
-    cwd,
-    timeout: GIT_TIMEOUT_MS,
-  });
+  try {
+    const { stdout, stderr } = await execFileAsync(GIT_BINARY, fullArgs, {
+      cwd,
+      timeout: GIT_TIMEOUT_MS,
+      env: {
+        ...process.env,
+        HUSKY: "0",
+        GIT_TERMINAL_PROMPT: "0",
+      },
+    });
 
-  if (
-    stderr &&
-    !stderr.includes("Switched to") &&
-    !stderr.includes("Already on") &&
-    !stderr.includes("Cloning into")
-  ) {
-    logger.debug({ stderr: stderr.trim() }, "Project git stderr output");
+    if (
+      stderr &&
+      !stderr.includes("Switched to") &&
+      !stderr.includes("Already on") &&
+      !stderr.includes("Cloning into")
+    ) {
+      logger.debug({ stderr: stderr.trim() }, "Project git stderr output");
+    }
+
+    return stdout.trim();
+  } catch (error: unknown) {
+    const execError = error as { stderr?: string; stdout?: string; message?: string };
+    logger.error(
+      {
+        subcommand,
+        args,
+        cwd,
+        stderr: execError.stderr?.trim(),
+        stdout: execError.stdout?.trim(),
+      },
+      "Project git command failed",
+    );
+    throw error;
   }
-
-  return stdout.trim();
 }
 
 export function buildBranchName(taskId: string): string {
@@ -155,7 +175,11 @@ export async function stageFiles(filePaths: readonly string[], cwd: string): Pro
 }
 
 export async function commitChanges(message: string, cwd: string): Promise<string> {
-  const sanitizedMessage = message.slice(0, 200).replaceAll('"', "'");
+  const sanitizedMessage = message
+    .slice(0, 200)
+    .replaceAll(/[\r\n]+/g, " ")
+    .replaceAll('"', "'")
+    .trim();
   const output = await execGit("commit", ["-m", sanitizedMessage], cwd);
 
   const hashMatch = /\[[\w/\-.]+ ([a-f0-9]+)\]/.exec(output);

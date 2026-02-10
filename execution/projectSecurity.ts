@@ -72,10 +72,16 @@ const ALLOWED_EXTENSIONS: ReadonlySet<string> = new Set([
   ".yml",
 ]);
 
+export interface FileEdit {
+  readonly search: string;
+  readonly replace: string;
+}
+
 export interface FileChange {
   readonly path: string;
   readonly action: "create" | "modify";
   readonly content: string;
+  readonly edits?: readonly FileEdit[];
 }
 
 export interface PathValidationResult {

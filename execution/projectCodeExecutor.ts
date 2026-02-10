@@ -40,10 +40,15 @@ function buildProjectSystemPrompt(
     "Paths devem ser relativos a raiz do projeto.",
     "Use imports relativos consistentes com o projeto existente.",
     "",
-    "REGRA CRITICA: O campo 'content' de cada arquivo DEVE conter o arquivo COMPLETO, do primeiro ao ultimo caractere.",
-    "NUNCA gere apenas um trecho ou fragmento. O 'content' substitui o arquivo inteiro.",
-    "Se o arquivo original tem 100 linhas e voce muda 1 linha, o 'content' deve ter as 100 linhas (99 iguais + 1 modificada).",
-    "Se voce gerar apenas o trecho modificado, o codigo vai quebrar porque o resto do arquivo sera perdido.",
+    "REGRAS DE FORMATO POR ACAO:",
+    "",
+    '1. Para action "create": use o campo "content" com o arquivo completo.',
+    '2. Para action "modify": use o campo "edits" com blocos search/replace.',
+    '   Cada edit tem "search" (trecho EXATO do arquivo original) e "replace" (trecho que substitui).',
+    '   O "search" DEVE ser copiado EXATAMENTE do codigo original, incluindo espacos e indentacao.',
+    "   Inclua contexto suficiente (3-5 linhas ao redor) para que o match seja unico no arquivo.",
+    '   Para remover codigo, use "replace" como string vazia "".',
+    '   NUNCA use "content" para modify. Sempre use "edits".',
     "",
     "Formato de saida OBRIGATORIO (JSON puro, sem fences):",
     "{",
@@ -53,8 +58,15 @@ function buildProjectSystemPrompt(
     '  "files": [',
     "    {",
     '      "path": "caminho/relativo/arquivo.ts",',
-    '      "action": "create" | "modify",',
-    '      "content": "ARQUIVO COMPLETO com a mudanca aplicada"',
+    '      "action": "modify",',
+    '      "edits": [',
+    '        { "search": "trecho exato do original", "replace": "trecho com a mudanca" }',
+    "      ]",
+    "    },",
+    "    {",
+    '      "path": "caminho/relativo/novo-arquivo.ts",',
+    '      "action": "create",',
+    '      "content": "conteudo completo do novo arquivo"',
     "    }",
     "  ]",
     "}",
@@ -219,7 +231,12 @@ async function executeInWorkspace(
   const effectiveRisk = Math.max(riskResult.risk, parsed.risk);
   const filePaths = parsed.files.map((f) => f.path);
   const pendingFilesJson = JSON.stringify(
-    parsed.files.map((f) => ({ path: f.path, action: f.action, content: f.content })),
+    parsed.files.map((f) => ({
+      path: f.path,
+      action: f.action,
+      content: f.content,
+      edits: f.edits,
+    })),
   );
 
   const changeId = saveCodeChange(db, {
@@ -278,7 +295,34 @@ async function executeInWorkspace(
     );
   }
 
+  logger.warn(
+    { changeId, projectId, lintOutput: applyResult.lintOutput },
+    "Lint failed, attempting retry with error feedback",
+  );
+
+  const retryResult = await retryWithLintFeedback({
+    db,
+    delegation,
+    projectId,
+    workspacePath,
+    systemPrompt,
+    relevantFiles,
+    allowedDirs,
+    fileTree: structure.tree,
+    lintOutput: applyResult.lintOutput,
+    previousUsage: usage,
+    startTime,
+  });
+
+  if (retryResult) return retryResult;
+
   const executionTimeMs = Math.round(performance.now() - startTime);
+
+  logger.error(
+    { changeId, projectId, lintOutput: applyResult.lintOutput },
+    "Project code lint validation failed after retry",
+  );
+
   updateCodeChangeStatus(db, changeId, {
     status: "failed",
     testOutput: applyResult.lintOutput,
@@ -293,6 +337,137 @@ async function executeInWorkspace(
     executionTimeMs,
     usage.totalTokens,
   );
+}
+
+interface RetryContext {
+  readonly db: BetterSqlite3.Database;
+  readonly delegation: KairosDelegation;
+  readonly projectId: string;
+  readonly workspacePath: string;
+  readonly systemPrompt: string;
+  readonly relevantFiles: readonly { readonly path: string; readonly content: string }[];
+  readonly allowedDirs: readonly string[];
+  readonly fileTree: string;
+  readonly lintOutput: string;
+  readonly previousUsage: TokenUsageInfo;
+  readonly startTime: number;
+}
+
+async function retryWithLintFeedback(ctx: RetryContext): Promise<ExecutionResult | null> {
+  const { db, delegation, projectId, workspacePath, systemPrompt, relevantFiles, allowedDirs, fileTree, lintOutput, previousUsage, startTime } = ctx;
+  const { task, goal_id, expected_output } = delegation;
+
+  const lintErrors = lintOutput.slice(0, 1500);
+  const retryPrompt = buildRetryPrompt(
+    task,
+    expected_output,
+    goal_id,
+    fileTree,
+    relevantFiles,
+    allowedDirs,
+    lintErrors,
+  );
+
+  logger.info({ projectId, lintErrorPreview: lintErrors.slice(0, 200) }, "Retrying with lint feedback");
+
+  const retryResponse = await callOpenClaw({
+    agentId: "forge",
+    prompt: retryPrompt,
+    systemPrompt,
+  });
+
+  if (retryResponse.status === "failed") return null;
+
+  const retryUsage = resolveUsage(retryResponse.usage, retryResponse.text, retryPrompt);
+  recordUsage(db, goal_id, retryUsage);
+
+  const retryParsed = parseCodeOutput(retryResponse.text);
+  if (!retryParsed) return null;
+
+  const retryRiskResult = validateAndCalculateRisk(retryParsed.files, workspacePath);
+  if (!retryRiskResult.valid) return null;
+
+  const retryFilePaths = retryParsed.files.map((f) => f.path);
+  const retryChangeId = saveCodeChange(db, {
+    taskId: goal_id,
+    description: `[retry] ${retryParsed.description}`,
+    filesChanged: retryFilePaths,
+    risk: Math.max(retryRiskResult.risk, retryParsed.risk),
+    pendingFiles: JSON.stringify(
+      retryParsed.files.map((f) => ({ path: f.path, action: f.action, content: f.content, edits: f.edits })),
+    ),
+    projectId,
+  });
+
+  const retryApplyResult = await applyProjectCodeChange(db, retryChangeId, retryParsed.files, workspacePath);
+
+  if (retryApplyResult.success) {
+    const executionTimeMs = Math.round(performance.now() - startTime);
+    const totalTokens = previousUsage.totalTokens + retryUsage.totalTokens;
+    logger.info(
+      { changeId: retryChangeId, files: retryFilePaths, projectId },
+      "Project code change applied on retry",
+    );
+
+    return buildResult(
+      task,
+      "success",
+      `[${projectId}][retry] Mudanca aplicada: ${retryParsed.description}. Files: ${retryFilePaths.join(", ")}`,
+      undefined,
+      executionTimeMs,
+      totalTokens,
+    );
+  }
+
+  logger.warn(
+    { changeId: retryChangeId, projectId, lintOutput: retryApplyResult.lintOutput },
+    "Retry also failed lint validation",
+  );
+
+  updateCodeChangeStatus(db, retryChangeId, {
+    status: "failed",
+    testOutput: retryApplyResult.lintOutput,
+    error: "Lint validation failed on retry",
+  });
+
+  return null;
+}
+
+function buildRetryPrompt(
+  task: string,
+  expectedOutput: string,
+  goalId: string,
+  fileTree: string,
+  relevantFiles: readonly { readonly path: string; readonly content: string }[],
+  allowedDirs: readonly string[],
+  lintErrors: string,
+): string {
+  const contextBlocks = relevantFiles.map((f) => `--- ${f.path} ---\n${f.content}\n--- end ---`);
+
+  const contextSection =
+    contextBlocks.length > 0
+      ? ["", "CODIGO REAL DO PROJETO:", ...contextBlocks, ""].join("\n")
+      : "";
+
+  return [
+    `Tarefa: ${task}`,
+    `Resultado esperado: ${expectedOutput}`,
+    `Goal ID: ${goalId}`,
+    `Data: ${new Date().toISOString()}`,
+    "",
+    "ESTRUTURA DO PROJETO:",
+    fileTree.slice(0, 3000),
+    "",
+    `Diretorios permitidos: ${allowedDirs.join(", ")}`,
+    contextSection,
+    "",
+    "ATENCAO: Sua tentativa anterior falhou com os seguintes erros de lint:",
+    lintErrors,
+    "",
+    "Corrija os erros acima. Gere os edits corretos para completar a tarefa sem erros de lint.",
+    'Para action "modify", use "edits" com blocos search/replace EXATOS do codigo original.',
+    "Responda APENAS com JSON puro.",
+  ].join("\n");
 }
 
 function buildProjectCodePrompt(
@@ -323,8 +498,9 @@ function buildProjectCodePrompt(
     contextSection,
     "IMPORTANTE: Responda APENAS com JSON puro, sem markdown, sem explicacoes.",
     "Baseie suas mudancas no codigo REAL mostrado acima.",
-    "O campo 'content' DEVE conter o arquivo COMPLETO (todas as linhas), nao apenas o trecho modificado.",
-    "Copie o arquivo original e aplique a mudanca nele. O content substitui o arquivo inteiro.",
+    'Para arquivos existentes (action "modify"), use "edits" com blocos search/replace.',
+    'Copie o trecho EXATO do original no campo "search" e coloque a versao modificada em "replace".',
+    'Para novos arquivos (action "create"), use "content" com o arquivo completo.',
     "Gere o JSON com as mudancas de codigo necessarias.",
   ].join("\n");
 }
@@ -377,22 +553,68 @@ function parseFileChanges(rawFiles: ReadonlyArray<Record<string, unknown>>): rea
   const files: FileChange[] = [];
 
   for (const file of rawFiles) {
-    if (typeof file.path !== "string" || file.path.length === 0) {
-      logger.error("Invalid file path in project code output");
-      return null;
-    }
-    if (file.action !== "create" && file.action !== "modify") {
-      logger.error({ action: file.action }, "Invalid file action in project code output");
-      return null;
-    }
-    if (typeof file.content !== "string") {
-      logger.error("Invalid file content in project code output");
-      return null;
-    }
-    files.push({ path: file.path, action: file.action, content: file.content });
+    const parsed = parseSingleFileChange(file);
+    if (!parsed) return null;
+    files.push(parsed);
   }
 
   return files;
+}
+
+function parseSingleFileChange(file: Record<string, unknown>): FileChange | null {
+  if (typeof file.path !== "string" || file.path.length === 0) {
+    logger.error("Invalid file path in project code output");
+    return null;
+  }
+  if (file.action !== "create" && file.action !== "modify") {
+    logger.error({ action: file.action }, "Invalid file action in project code output");
+    return null;
+  }
+
+  if (file.action === "create") {
+    if (typeof file.content !== "string") {
+      logger.error("Missing content for create action in project code output");
+      return null;
+    }
+    return { path: file.path, action: file.action, content: file.content };
+  }
+
+  const edits = parseFileEdits(file);
+  if (edits) {
+    return { path: file.path, action: "modify", content: "", edits };
+  }
+
+  if (typeof file.content === "string" && file.content.length > 0) {
+    logger.debug({ path: file.path }, "Modify action using full content fallback (no edits)");
+    return { path: file.path, action: file.action, content: file.content };
+  }
+
+  logger.error({ path: file.path }, "Modify action has neither edits nor content");
+  return null;
+}
+
+function parseFileEdits(
+  file: Record<string, unknown>,
+): readonly { readonly search: string; readonly replace: string }[] | null {
+  if (!Array.isArray(file.edits) || file.edits.length === 0) {
+    return null;
+  }
+
+  const edits: { readonly search: string; readonly replace: string }[] = [];
+
+  for (const edit of file.edits as ReadonlyArray<Record<string, unknown>>) {
+    if (typeof edit.search !== "string" || edit.search.length === 0) {
+      logger.error({ path: file.path }, "Invalid search string in edit");
+      return null;
+    }
+    if (typeof edit.replace !== "string") {
+      logger.error({ path: file.path }, "Invalid replace string in edit");
+      return null;
+    }
+    edits.push({ search: edit.search, replace: edit.replace });
+  }
+
+  return edits;
 }
 
 function formatApprovalRequest(
