@@ -260,3 +260,25 @@ CREATE TABLE IF NOT EXISTS projects (
 
 CREATE INDEX IF NOT EXISTS idx_projects_project_id ON projects(project_id);
 CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
+
+CREATE TABLE IF NOT EXISTS governance_decisions (
+  id                      TEXT PRIMARY KEY,
+  cycle_id                TEXT NOT NULL,
+  complexity              INTEGER NOT NULL,
+  risk                    INTEGER NOT NULL,
+  cost                    INTEGER NOT NULL,
+  historical_stability    TEXT NOT NULL CHECK (historical_stability IN ('stable', 'moderate', 'unstable')),
+  selected_model          TEXT NOT NULL,
+  model_tier              TEXT NOT NULL CHECK (model_tier IN ('economy', 'standard', 'premium')),
+  nexus_pre_research      INTEGER NOT NULL DEFAULT 0,
+  nexus_research_id       TEXT,
+  human_approval_required INTEGER NOT NULL DEFAULT 0,
+  post_validation_status  TEXT CHECK (post_validation_status IN ('match', 'mismatch', 'escalation_needed')),
+  post_validation_notes   TEXT,
+  reasons                 TEXT NOT NULL,
+  tokens_used             INTEGER,
+  created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_governance_decisions_created_at ON governance_decisions(created_at);
+CREATE INDEX IF NOT EXISTS idx_governance_decisions_model_tier ON governance_decisions(model_tier);

@@ -524,3 +524,93 @@ HISTORICO:
 
 **Colunas adicionadas:** `outcomes.project_id`
 **Indices adicionados:** `idx_outcomes_project_id`, `idx_outcomes_created_at`
+
+---
+
+## FASE 25 -- Governanca Explicita de Decisao do KAIROS
+
+**Objetivo:** Tornar explicito, previsivel e auditavel: qual modelo LLM e usado em cada decisao, quando acionar NEXUS, quando exigir aprovacao humana e quando NAO delegar execucao.
+
+**Principio Central:** Decisao e um ato governado. Execucao e consequencia.
+
+### Eixos de Governanca
+
+Toda decisao do KAIROS e classificada em 4 eixos (calculados de forma deterministica, SEM LLM):
+
+1. **COMPLEXIDADE (1-5)**: numero de goals ativos, prioridade maxima, presenca de goals arquiteturais (keywords: migrar, redesign, infraestrutura, arquitetura, refatorar)
+2. **RISCO (1-5)**: taxa de sucesso historica (7d), falhas recorrentes, risco medio real observado
+3. **CUSTO (1-5)**: media de tokens gastos (7d), percentual do budget consumido
+4. **HISTORICO**: estabilidade calculada — `stable` (sucesso >= 70% e sem falhas recorrentes), `moderate` (intermediario), `unstable` (sucesso < 50% ou >= 2 tasks problematicas)
+
+### Matriz de Decisao
+
+| Condicao                                                    | Modelo        | NEXUS Pre? | Aprovacao?            |
+| ----------------------------------------------------------- | ------------- | ---------- | --------------------- |
+| COMPLEXIDADE <= 2 AND RISCO <= 2 AND historico estavel      | `gpt-4o-mini` | Nao        | Automatica            |
+| COMPLEXIDADE <= 3 OR RISCO <= 3 (cenario padrao)            | `gpt-4o`      | Nao        | Automatica            |
+| COMPLEXIDADE >= 4 OR RISCO >= 4 OR historico instavel       | `gpt-5.2`     | Sim        | Humana se risco >= 4  |
+| RISCO >= 5 (critico)                                        | `gpt-5.2`     | Obrigatorio| Obrigatoria           |
+
+### Escopo do Modelo Variavel
+
+- A selecao dinamica de modelo aplica-se **somente ao KAIROS**
+- FORGE mantem `gpt-5.3-codex` (via OpenClaw) fixo
+- NEXUS mantem `gpt-4o-mini` fixo
+- VECTOR mantem seu modelo fixo via config
+
+### Componentes Implementados
+
+1. **Decision Governance** (`orchestration/decisionGovernance.ts`): motor de governanca pre-decisao:
+   - `classifyGovernance(goals, data)`: classifica o ciclo nos 4 eixos
+   - `selectGovernancePolicy(classification)`: seleciona modelo, NEXUS pre-research, thresholds
+   - `postValidateGovernance(output, governance)`: valida se output do KAIROS e coerente com a classificacao (match/mismatch/escalation_needed)
+   - `loadGovernanceInputData(db)`: carrega dados necessarios para a classificacao
+   - `resolveNexusPreResearchContext(db, goals)`: resolve contexto NEXUS (lookup existente + fallback)
+2. **Governance Log** (`state/governanceLog.ts`): CRUD para a tabela `governance_decisions`:
+   - `saveGovernanceDecision()`: persiste decisao com classificacao, modelo, validacao e tokens
+   - `getRecentGovernanceDecisions()`: ultimas decisoes ordenadas por data
+   - `getGovernanceStats()`: agregacoes por tier, NEXUS pre-research, mismatches e economia de tokens
+3. **KAIROS LLM** (`orchestration/kairosLLM.ts`): aceita `modelOverride`, `nexusPreContext` e `governanceContext` opcionais:
+   - `createKairosLLMConfig(modelOverride?)`: usa override da governanca ou config do agente
+   - `injectNexusPreContext()`: injeta bloco NEXUS_PRE_RESEARCH antes de CONSTRAINTS
+4. **State Compressor** (`orchestration/stateCompressor.ts`): CONSTRAINTS atualizado:
+   - Agentes disponiveis: `forge, vector, nexus` (antes dizia "apenas forge")
+   - Linha de governanca injetada: `governanca: <tier> C:<N> R:<N>`
+5. **System Prompt** (`agents/kairos/SYSTEM.md`): secao `## Governanca` com instrucoes para KAIROS interpretar classificacao e ser conservador quando risco alto
+6. **Daily Briefing** (`orchestration/dailyBriefing.ts`): secao "Governanca de Decisao" com modelo/tier, classificacao, NEXUS pre-research, e pos-validacao
+7. **Types** (`orchestration/types.ts`): interface `GovernanceInfo` para o briefing
+8. **runKairos** (`orchestration/runKairos.ts`): integracao completa no fluxo:
+   - Pre-classificacao antes do LLM
+   - NEXUS pre-research condicional
+   - Model override dinamico
+   - Pos-validacao e registro de governanca
+
+### NEXUS Pre-Research
+
+Quando `nexusPreResearchRequired = true`:
+
+1. Busca pesquisas recentes (7d) da tabela `nexus_research` associadas aos goals ativos
+2. Se encontrar pesquisa relevante: usa como contexto
+3. Se nao encontrar: bloco vazio (NEXUS regular pode ser acionado via delegacao)
+4. Contexto injetado no prompt do KAIROS antes de CONSTRAINTS
+
+### Fluxo Completo
+
+```
+loadGoals → loadGovernanceInputData
+  → classifyGovernance (deterministic)
+  → selectGovernancePolicy
+  → [if nexus required] resolveNexusPreResearchContext
+  → callKairosLLM (model override + governance context + nexus context)
+  → postValidateGovernance
+  → saveGovernanceDecision
+  → filterDelegations → execute (forge/vector/nexus)
+```
+
+### Testes
+
+- `orchestration/decisionGovernance.test.ts`: 28 testes cobrindo classificacao, selecao de politica, pos-validacao, NEXUS pre-research e carregamento de dados
+- `state/governanceLog.test.ts`: 11 testes cobrindo CRUD e estatisticas
+
+**Tabelas criadas:** `governance_decisions`
+**Indices adicionados:** `idx_governance_decisions_created_at`, `idx_governance_decisions_model_tier`

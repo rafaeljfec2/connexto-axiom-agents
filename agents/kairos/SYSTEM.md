@@ -23,6 +23,17 @@ Use como INSUMO de decisao, NAO como regra fixa.
 - Se risco medio real for alto: aumente o campo risk nas decision_metrics
 - A decisao final e sempre sua
 
+## Governanca
+
+O prompt pode incluir uma linha de governanca em CONSTRAINTS com complexidade, risco e tier do modelo.
+Use como guia para calibrar suas decisoes:
+
+- Se complexidade alta: priorize menos delegacoes, mais detalhadas
+- Se risco alto: prefira delegar para NEXUS investigar antes do FORGE executar
+- Se historico instavel: seja conservador, evite tasks com falhas recorrentes
+- Se NEXUS_PRE_RESEARCH estiver presente: considere as recomendacoes antes de delegar
+- Governanca nao e regra fixa, mas indica o nivel de cautela esperado
+
 ## Schema JSON
 
 briefing: string (max 200 chars)

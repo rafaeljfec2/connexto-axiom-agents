@@ -9,6 +9,7 @@ import type {
   ForgeCodeInfo,
   NexusInfo,
   HistoricalPatternInfo,
+  GovernanceInfo,
 } from "./types.js";
 
 export interface DailyBriefingInput {
@@ -22,6 +23,7 @@ export interface DailyBriefingInput {
   readonly forgeCodeInfo: ForgeCodeInfo;
   readonly nexusInfo: NexusInfo;
   readonly historicalInfo: HistoricalPatternInfo;
+  readonly governanceInfo?: GovernanceInfo;
   readonly projectId?: string;
 }
 
@@ -37,6 +39,7 @@ export function formatDailyBriefing(input: DailyBriefingInput): string {
     forgeCodeInfo,
     nexusInfo,
     historicalInfo,
+    governanceInfo,
     projectId,
   } = input;
   const decisions =
@@ -78,6 +81,7 @@ export function formatDailyBriefing(input: DailyBriefingInput): string {
   const efficiencySection = formatEfficiencySection(efficiencyInfo);
   const feedbackSection = formatFeedbackSection(feedbackInfo);
   const historicalSection = formatHistoricalSection(historicalInfo);
+  const governanceSection = governanceInfo ? formatGovernanceSection(governanceInfo) : [];
 
   const projectLine = projectId ? `*Projeto ativo:* ${projectId}` : "";
 
@@ -117,6 +121,8 @@ export function formatDailyBriefing(input: DailyBriefingInput): string {
     "",
     ...historicalSection,
     "",
+    ...governanceSection,
+    ...(governanceSection.length > 0 ? [""] : []),
     "*Foco nas proximas 24h:*",
     `- ${output.next_24h_focus}`,
   ];
@@ -307,6 +313,23 @@ function formatFeedbackSection(info: FeedbackInfo): readonly string[] {
 
   if (info.problematicTasks.length > 0) {
     lines.push(`- Tasks problematicas: ${info.problematicTasks.join(", ")}`);
+  }
+
+  return lines;
+}
+
+function formatGovernanceSection(info: GovernanceInfo): readonly string[] {
+  const header = String.raw`*Governanca de Decisao:*`;
+  const modelLine = `- Modelo: ${info.selectedModel} (${info.modelTier})`;
+  const classLine = `- Classificacao: complexidade=${info.complexity} risco=${info.risk} custo=${info.cost}`;
+  const stabilityLine = `- Historico: ${info.historicalStability}`;
+  const nexusLine = `- NEXUS pre-research: ${info.nexusPreResearchTriggered ? "Sim" : "Nao"}`;
+  const validationLine = `- Pos-validacao: ${info.postValidationStatus}`;
+
+  const lines: string[] = [header, modelLine, classLine, stabilityLine, nexusLine, validationLine];
+
+  if (info.postValidationStatus !== "match" && info.postValidationNotes.length > 0) {
+    lines.push(`- ALERTA: ${info.postValidationNotes}`);
   }
 
   return lines;

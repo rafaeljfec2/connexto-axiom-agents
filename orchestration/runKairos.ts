@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type BetterSqlite3 from "better-sqlite3";
 import { loadBudgetConfig } from "../config/budget.js";
 import { logger } from "../config/logger.js";
@@ -36,6 +37,14 @@ import {
 import { callKairosLLM } from "./kairosLLM.js";
 import { formatDailyBriefing } from "./dailyBriefing.js";
 import { filterDelegations } from "./decisionFilter.js";
+import {
+  classifyGovernance,
+  selectGovernancePolicy,
+  postValidateGovernance,
+  loadGovernanceInputData,
+  resolveNexusPreResearchContext,
+} from "./decisionGovernance.js";
+import { saveGovernanceDecision } from "../state/governanceLog.js";
 import type {
   KairosOutput,
   KairosDelegation,
@@ -47,6 +56,7 @@ import type {
   ForgeCodeInfo,
   NexusInfo,
   HistoricalPatternInfo,
+  GovernanceInfo,
 } from "./types.js";
 import { validateKairosOutput } from "./validateKairos.js";
 
@@ -69,19 +79,55 @@ export async function runKairos(
   const recentDecisions = loadRecentDecisions(db, 3);
   logger.info({ decisionsCount: recentDecisions.length }, "Recent decisions loaded");
 
+  const governanceData = loadGovernanceInputData(db);
+  const classification = classifyGovernance(goals, governanceData);
+  const governance = selectGovernancePolicy(classification);
+
+  let nexusPreContext = "";
+  if (governance.nexusPreResearchRequired) {
+    nexusPreContext = resolveNexusPreResearchContext(db, goals);
+    logger.info({ chars: nexusPreContext.length }, "NEXUS pre-research context resolved");
+  }
+
+  const governanceContextLine = `- governanca: ${governance.modelTier} C:${classification.complexity} R:${classification.risk}`;
+
   let output: KairosOutput;
   let kairosUsage: LLMUsage | null = null;
 
   try {
-    const result = await callKairosLLM(goals, recentDecisions, db);
+    const result = await callKairosLLM(goals, recentDecisions, db, {
+      modelOverride: governance.selectedModel,
+      nexusPreContext: nexusPreContext.length > 0 ? nexusPreContext : undefined,
+      governanceContext: governanceContextLine,
+    });
     output = validateKairosOutput(result.output);
     kairosUsage = result.usage;
-    logger.info("Output validated successfully");
+    logger.info({ model: governance.selectedModel }, "Output validated successfully");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error({ error: message }, "Kairos LLM failed");
     output = buildFallbackOutput(message);
   }
+
+  const validation = postValidateGovernance(output, governance);
+
+  const cycleId = crypto.randomUUID();
+  saveGovernanceDecision(db, {
+    cycleId,
+    complexity: classification.complexity,
+    risk: classification.risk,
+    cost: classification.cost,
+    historicalStability: classification.historicalStability,
+    selectedModel: governance.selectedModel,
+    modelTier: governance.modelTier,
+    nexusPreResearch: governance.nexusPreResearchRequired,
+    humanApprovalRequired: governance.humanApprovalRequired,
+    postValidationStatus: validation.status,
+    postValidationNotes: validation.notes,
+    reasons: classification.reasons,
+    tokensUsed: kairosUsage?.totalTokens,
+  });
+  logger.info({ cycleId, validation: validation.status }, "Governance decision recorded");
 
   if (kairosUsage) {
     recordKairosTokenUsage(db, kairosUsage);
@@ -120,6 +166,19 @@ export async function runKairos(
   const nexusInfo = buildNexusInfo(db, nexusOutput.results);
   const historicalInfo = buildHistoricalInfo(db);
 
+  const governanceInfo: GovernanceInfo = {
+    selectedModel: governance.selectedModel,
+    modelTier: governance.modelTier,
+    complexity: classification.complexity,
+    risk: classification.risk,
+    cost: classification.cost,
+    historicalStability: classification.historicalStability,
+    nexusPreResearchTriggered: governance.nexusPreResearchRequired,
+    postValidationStatus: validation.status,
+    postValidationNotes: validation.notes,
+    reasons: classification.reasons,
+  };
+
   const briefingText = formatDailyBriefing({
     output,
     filtered,
@@ -131,6 +190,7 @@ export async function runKairos(
     forgeCodeInfo,
     nexusInfo,
     historicalInfo,
+    governanceInfo,
     projectId,
   });
   await sendTelegramMessage(briefingText);

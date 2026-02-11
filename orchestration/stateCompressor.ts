@@ -15,11 +15,12 @@ export interface CompressedState {
 export function compressState(
   goals: readonly Goal[],
   recentDecisions: readonly RecentDecision[],
+  governanceContext?: string,
 ): CompressedState {
   const compressedGoals = goals.slice(0, MAX_GOALS).map(compressGoal);
   const compressedActions = recentDecisions.slice(0, MAX_ACTIONS).map(compressDecision);
 
-  const inputText = buildInputText(compressedGoals, compressedActions);
+  const inputText = buildInputText(compressedGoals, compressedActions, governanceContext);
 
   return {
     goals: compressedGoals,
@@ -59,11 +60,25 @@ function truncate(text: string, maxLength: number = MAX_LINE_LENGTH): string {
   return text.slice(0, maxLength - 3) + "...";
 }
 
-function buildInputText(goals: readonly string[], actions: readonly string[]): string {
+function buildInputText(
+  goals: readonly string[],
+  actions: readonly string[],
+  governanceContext?: string,
+): string {
   const goalsSection = goals.length > 0 ? goals.map((g) => `- ${g}`).join("\n") : "- Nenhum.";
 
   const stateSection =
     actions.length > 0 ? actions.map((a) => `- ${a}`).join("\n") : "- Nenhuma acao recente.";
+
+  const constraintLines = [
+    "- max 3 delegacoes",
+    "- custo e risco obrigatorios",
+    "- agentes disponiveis: forge, vector, nexus",
+  ];
+
+  if (governanceContext && governanceContext.length > 0) {
+    constraintLines.push(governanceContext);
+  }
 
   return [
     "GOALS:",
@@ -73,9 +88,7 @@ function buildInputText(goals: readonly string[], actions: readonly string[]): s
     stateSection,
     "",
     "CONSTRAINTS:",
-    "- max 3 delegacoes",
-    "- custo e risco obrigatorios",
-    "- apenas agente forge disponivel",
+    ...constraintLines,
     "",
     "TASK:",
     "Decida proximas acoes.",

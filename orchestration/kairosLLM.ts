@@ -33,25 +33,38 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN_ESTIMATE);
 }
 
+export interface KairosLLMOptions {
+  readonly modelOverride?: string;
+  readonly nexusPreContext?: string;
+  readonly governanceContext?: string;
+}
+
 export async function callKairosLLM(
   goals: readonly Goal[],
   recentDecisions: readonly RecentDecision[],
   db: BetterSqlite3.Database,
+  options?: KairosLLMOptions,
 ): Promise<KairosLLMResult> {
   const systemPrompt = loadSystemPrompt();
   logger.info({ chars: systemPrompt.length }, "System prompt loaded");
 
-  const compressed = compressState(goals, recentDecisions);
+  const compressed = compressState(goals, recentDecisions, options?.governanceContext);
   const historicalBlock = buildHistoricalContext(db, "forge");
-  const userMessage = injectHistoricalContext(compressed.inputText, historicalBlock);
+  let userMessage = injectHistoricalContext(compressed.inputText, historicalBlock);
+
+  if (options?.nexusPreContext && options.nexusPreContext.length > 0) {
+    userMessage = injectNexusPreContext(userMessage, options.nexusPreContext);
+  }
 
   logger.info(
     {
       goalsCount: goals.length,
       decisionsCount: recentDecisions.length,
       historicalChars: historicalBlock.length,
+      nexusPreContextChars: options?.nexusPreContext?.length ?? 0,
+      modelOverride: options?.modelOverride ?? "none",
     },
-    "Prompt built with historical context",
+    "Prompt built with context",
   );
 
   const budgetConfig = loadBudgetConfig();
@@ -65,7 +78,7 @@ export async function callKairosLLM(
 
   logger.info({ estimatedInputTokens }, "Token estimate within limit");
 
-  const config = createKairosLLMConfig();
+  const config = createKairosLLMConfig(options?.modelOverride);
   const response = await callLLM(config, {
     system: systemPrompt,
     userMessage,
@@ -77,15 +90,21 @@ export async function callKairosLLM(
   return { output, usage: response.usage };
 }
 
-function createKairosLLMConfig(): ReturnType<typeof createLLMConfig> {
+function createKairosLLMConfig(modelOverride?: string): ReturnType<typeof createLLMConfig> {
   const baseConfig = createLLMConfig();
-  const model = kairosAgentConfig.llmModel;
+  const model = modelOverride ?? kairosAgentConfig.llmModel;
 
   if (model === "placeholder" || model.length === 0) return baseConfig;
 
-  logger.info({ model }, "Using KAIROS-specific LLM model");
+  logger.info({ model, overridden: !!modelOverride }, "Using KAIROS LLM model");
 
   return { ...baseConfig, model };
+}
+
+function injectNexusPreContext(inputText: string, nexusContext: string): string {
+  if (nexusContext.length === 0) return inputText;
+
+  return inputText.replace("CONSTRAINTS:", `${nexusContext}\n\nCONSTRAINTS:`);
 }
 
 function injectHistoricalContext(inputText: string, historicalBlock: string): string {

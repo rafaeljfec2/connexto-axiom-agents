@@ -27,6 +27,7 @@ function applyMigrations(db: BetterSqlite3.Database): void {
   migrateGoalsProjectId(db);
   migrateCodeChangesProjectId(db);
   migrateOutcomesProjectId(db);
+  migrateGovernanceDecisions(db);
 }
 
 function migrateArtifactsColumns(db: BetterSqlite3.Database): void {
@@ -100,6 +101,37 @@ function migrateOutcomesProjectId(db: BetterSqlite3.Database): void {
     db.exec("ALTER TABLE outcomes ADD COLUMN project_id TEXT");
     db.exec("CREATE INDEX IF NOT EXISTS idx_outcomes_project_id ON outcomes(project_id)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_outcomes_created_at ON outcomes(created_at)");
+  }
+}
+
+function migrateGovernanceDecisions(db: BetterSqlite3.Database): void {
+  const tables = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='governance_decisions'")
+    .all() as ReadonlyArray<{ name: string }>;
+
+  if (tables.length === 0) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS governance_decisions (
+        id                      TEXT PRIMARY KEY,
+        cycle_id                TEXT NOT NULL,
+        complexity              INTEGER NOT NULL,
+        risk                    INTEGER NOT NULL,
+        cost                    INTEGER NOT NULL,
+        historical_stability    TEXT NOT NULL,
+        selected_model          TEXT NOT NULL,
+        model_tier              TEXT NOT NULL,
+        nexus_pre_research      INTEGER NOT NULL DEFAULT 0,
+        nexus_research_id       TEXT,
+        human_approval_required INTEGER NOT NULL DEFAULT 0,
+        post_validation_status  TEXT,
+        post_validation_notes   TEXT,
+        reasons                 TEXT NOT NULL,
+        tokens_used             INTEGER,
+        created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_governance_decisions_created_at ON governance_decisions(created_at);
+      CREATE INDEX IF NOT EXISTS idx_governance_decisions_model_tier ON governance_decisions(model_tier);
+    `);
   }
 }
 

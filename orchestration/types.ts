@@ -113,3 +113,16 @@ export interface HistoricalPatternInfo {
   readonly frequentFiles: readonly string[];
   readonly historicalContextUsed: boolean;
 }
+
+export interface GovernanceInfo {
+  readonly selectedModel: string;
+  readonly modelTier: string;
+  readonly complexity: number;
+  readonly risk: number;
+  readonly cost: number;
+  readonly historicalStability: string;
+  readonly nexusPreResearchTriggered: boolean;
+  readonly postValidationStatus: string;
+  readonly postValidationNotes: string;
+  readonly reasons: readonly string[];
+}
