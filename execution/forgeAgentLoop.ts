@@ -36,6 +36,7 @@ import {
   runLintCheck,
   readModifiedFilesState,
 } from "./forgeWorkspaceOps.js";
+import type { ValidationConfig } from "./forgeWorkspaceOps.js";
 import { callOpenClaw } from "./openclawClient.js";
 import type { TokenUsageInfo } from "./openclawClient.js";
 
@@ -421,15 +422,21 @@ async function handleApplySuccess(
   fileTree: string,
   allowedDirs: readonly string[],
 ): Promise<CorrectionResult | null> {
+  const validationCfg: ValidationConfig = {
+    runBuild: ctx.runBuild,
+    buildTimeout: ctx.buildTimeout,
+  };
+
   const lintResult = await runLintCheck(
     state.currentParsed.files.map((f) => f.path),
     ctx.workspacePath,
+    validationCfg,
   );
 
   if (lintResult.success) {
     logger.info(
       { projectId: ctx.projectId, round, filesCount: state.currentParsed.files.length },
-      "FORGE agent loop - lint passed, edits verified",
+      "FORGE agent loop - lint/build passed, edits verified",
     );
     return {
       success: true,
@@ -442,12 +449,12 @@ async function handleApplySuccess(
 
   logger.warn(
     { projectId: ctx.projectId, round, lintPreview: lintResult.output.slice(0, 200) },
-    "Lint failed, attempting correction",
+    "Validation failed, attempting correction",
   );
 
   if (round >= ctx.maxCorrectionRounds) {
     return {
-      ...buildFailureResult(state, `Lint validation failed after ${round + 1} attempts`),
+      ...buildFailureResult(state, `Validation failed after ${round + 1} attempts`),
       lintOutput: lintResult.output,
     };
   }

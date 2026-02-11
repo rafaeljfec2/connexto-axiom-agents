@@ -105,9 +105,15 @@ export async function restoreWorkspaceFiles(
   }
 }
 
+export interface ValidationConfig {
+  readonly runBuild: boolean;
+  readonly buildTimeout: number;
+}
+
 export async function runLintCheck(
   filePaths: readonly string[],
   workspacePath: string,
+  validationConfig?: ValidationConfig,
 ): Promise<{ readonly success: boolean; readonly output: string }> {
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
@@ -143,6 +149,12 @@ export async function runLintCheck(
   const tscResult = await runTscCheck(execFileAsync, workspacePath, LINT_TIMEOUT_MS);
   outputs.push(tscResult.output);
   if (!tscResult.success) allSuccess = false;
+
+  if (allSuccess && validationConfig?.runBuild) {
+    const buildResult = await runBuildCheck(execFileAsync, workspacePath, validationConfig.buildTimeout);
+    outputs.push(buildResult.output);
+    if (!buildResult.success) allSuccess = false;
+  }
 
   return { success: allSuccess, output: outputs.join("\n") };
 }
@@ -242,6 +254,65 @@ async function runTscCheck(
     }
     return { success: false, output: `[tsc FAIL] ${cleaned}` };
   }
+}
+
+async function detectBuildScript(workspacePath: string): Promise<string | null> {
+  try {
+    const pkgPath = path.join(workspacePath, "package.json");
+    const raw = await fs.readFile(pkgPath, "utf-8");
+    const pkg = JSON.parse(raw) as { scripts?: Record<string, string> };
+    return pkg.scripts?.build ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function runBuildCheck(
+  execFileAsync: ExecFileAsync,
+  workspacePath: string,
+  timeoutMs: number,
+): Promise<{ readonly success: boolean; readonly output: string }> {
+  const buildScript = await detectBuildScript(workspacePath);
+
+  if (!buildScript) {
+    logger.info("No build script found in package.json, skipping build check");
+    return { success: true, output: "[build] SKIPPED (no build script in package.json)" };
+  }
+
+  const packageManager = await detectPackageManager(workspacePath);
+  logger.info({ buildScript, packageManager }, "Running project build check");
+
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      packageManager,
+      ["run", "build"],
+      { cwd: workspacePath, timeout: timeoutMs },
+    );
+    const cleaned = stripNpmWarnings(`${stdout}${stderr}`);
+    return { success: true, output: `[build] ${cleaned}` };
+  } catch (error) {
+    const execError = error as { stdout?: string; stderr?: string; message?: string };
+    const raw = `${execError.stdout ?? ""}${execError.stderr ?? execError.message ?? ""}`;
+    const cleaned = stripNpmWarnings(raw);
+    if (cleaned.length === 0) {
+      return { success: true, output: "[build] OK (warnings only)" };
+    }
+    return { success: false, output: `[build FAIL] ${cleaned.slice(0, 3000)}` };
+  }
+}
+
+async function detectPackageManager(workspacePath: string): Promise<string> {
+  try {
+    await fs.access(path.join(workspacePath, "pnpm-lock.yaml"));
+    return "pnpm";
+  } catch { /* not pnpm */ }
+
+  try {
+    await fs.access(path.join(workspacePath, "yarn.lock"));
+    return "yarn";
+  } catch { /* not yarn */ }
+
+  return "npm";
 }
 
 async function fixUnusedImportsFromLint(

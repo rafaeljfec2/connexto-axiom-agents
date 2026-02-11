@@ -107,6 +107,8 @@ async function executeWithAgentLoop(
     workspacePath,
     project,
     maxCorrectionRounds: agentConfig.maxCorrectionRounds,
+    runBuild: agentConfig.runBuild,
+    buildTimeout: agentConfig.buildTimeout,
   });
 
   logger.info(

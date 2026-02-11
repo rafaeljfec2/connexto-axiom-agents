@@ -3,3 +3,10 @@ export interface AgentConfig {
   readonly llmModel: string;
   readonly permissions: readonly string[];
 }
+
+export interface ForgeAgentConfig extends AgentConfig {
+  readonly maxCorrectionRounds: number;
+  readonly contextMaxChars: number;
+  readonly runBuild: boolean;
+  readonly buildTimeout: number;
+}

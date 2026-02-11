@@ -1,10 +1,9 @@
 import type BetterSqlite3 from "better-sqlite3";
 import type { KairosDelegation } from "../orchestration/types.js";
 import type { FileChange } from "./projectSecurity.js";
+import { config as forgeConfig } from "../agents/forge/config.js";
 
 export const CHARS_PER_TOKEN_ESTIMATE = 4;
-export const DEFAULT_MAX_CORRECTION_ROUNDS = 4;
-export const DEFAULT_CONTEXT_MAX_CHARS = 20_000;
 export const MAX_LINT_ERROR_CHARS = 2000;
 
 export interface ForgeAgentContext {
@@ -18,6 +17,8 @@ export interface ForgeAgentContext {
     readonly repo_source: string;
   };
   readonly maxCorrectionRounds: number;
+  readonly runBuild: boolean;
+  readonly buildTimeout: number;
 }
 
 export interface ForgePlan {
@@ -70,19 +71,18 @@ export interface CorrectionRoundResult {
   readonly tokensUsed: number;
 }
 
-export function loadForgeAgentConfig(): {
+export interface ForgeExecutionConfig {
   readonly maxCorrectionRounds: number;
   readonly contextMaxChars: number;
-} {
-  const maxRounds = Number(process.env.FORGE_MAX_CORRECTION_ROUNDS);
-  const maxChars = Number(process.env.FORGE_CONTEXT_MAX_CHARS);
+  readonly runBuild: boolean;
+  readonly buildTimeout: number;
+}
 
+export function loadForgeAgentConfig(): ForgeExecutionConfig {
   return {
-    maxCorrectionRounds: Number.isFinite(maxRounds) && maxRounds >= 0
-      ? maxRounds
-      : DEFAULT_MAX_CORRECTION_ROUNDS,
-    contextMaxChars: Number.isFinite(maxChars) && maxChars > 0
-      ? maxChars
-      : DEFAULT_CONTEXT_MAX_CHARS,
+    maxCorrectionRounds: forgeConfig.maxCorrectionRounds,
+    contextMaxChars: forgeConfig.contextMaxChars,
+    runBuild: forgeConfig.runBuild,
+    buildTimeout: forgeConfig.buildTimeout,
   };
 }

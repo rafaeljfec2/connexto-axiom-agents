@@ -323,59 +323,23 @@ describe("forgeAgentLoop", () => {
   });
 
   describe("loadForgeAgentConfig", () => {
-    let originalMaxRounds: string | undefined;
-    let originalMaxChars: string | undefined;
-
-    beforeEach(() => {
-      originalMaxRounds = process.env.FORGE_MAX_CORRECTION_ROUNDS;
-      originalMaxChars = process.env.FORGE_CONTEXT_MAX_CHARS;
+    it("should return values from agents/forge/config.ts", () => {
+      const config = loadForgeAgentConfig();
+      assert.equal(typeof config.maxCorrectionRounds, "number");
+      assert.equal(typeof config.contextMaxChars, "number");
+      assert.equal(typeof config.runBuild, "boolean");
+      assert.equal(typeof config.buildTimeout, "number");
+      assert.ok(config.maxCorrectionRounds >= 0);
+      assert.ok(config.contextMaxChars > 0);
+      assert.ok(config.buildTimeout > 0);
     });
 
-    afterEach(() => {
-      if (originalMaxRounds === undefined) {
-        delete process.env.FORGE_MAX_CORRECTION_ROUNDS;
-      } else {
-        process.env.FORGE_MAX_CORRECTION_ROUNDS = originalMaxRounds;
-      }
-      if (originalMaxChars === undefined) {
-        delete process.env.FORGE_CONTEXT_MAX_CHARS;
-      } else {
-        process.env.FORGE_CONTEXT_MAX_CHARS = originalMaxChars;
-      }
-    });
-
-    it("should return defaults when env vars are not set", () => {
-      delete process.env.FORGE_MAX_CORRECTION_ROUNDS;
-      delete process.env.FORGE_CONTEXT_MAX_CHARS;
-
+    it("should return expected default config values", () => {
       const config = loadForgeAgentConfig();
       assert.equal(config.maxCorrectionRounds, 4);
       assert.equal(config.contextMaxChars, 20_000);
-    });
-
-    it("should parse valid env var values", () => {
-      process.env.FORGE_MAX_CORRECTION_ROUNDS = "6";
-      process.env.FORGE_CONTEXT_MAX_CHARS = "30000";
-
-      const config = loadForgeAgentConfig();
-      assert.equal(config.maxCorrectionRounds, 6);
-      assert.equal(config.contextMaxChars, 30_000);
-    });
-
-    it("should return defaults for invalid env var values", () => {
-      process.env.FORGE_MAX_CORRECTION_ROUNDS = "abc";
-      process.env.FORGE_CONTEXT_MAX_CHARS = "not-a-number";
-
-      const config = loadForgeAgentConfig();
-      assert.equal(config.maxCorrectionRounds, 4);
-      assert.equal(config.contextMaxChars, 20_000);
-    });
-
-    it("should allow 0 correction rounds", () => {
-      process.env.FORGE_MAX_CORRECTION_ROUNDS = "0";
-
-      const config = loadForgeAgentConfig();
-      assert.equal(config.maxCorrectionRounds, 0);
+      assert.equal(config.runBuild, true);
+      assert.equal(config.buildTimeout, 120_000);
     });
   });
 
