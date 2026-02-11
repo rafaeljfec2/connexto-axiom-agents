@@ -44,6 +44,12 @@ Editar `.env` com:
 | `BUDGET_MAX_TASKS_DAY`     | Max tasks/dia                             | Nao (padrao: 10)     |
 | `KAIROS_MAX_INPUT_TOKENS`  | Limite input KAIROS                       | Nao (padrao: 800)    |
 | `KAIROS_MAX_OUTPUT_TOKENS` | Limite output KAIROS                      | Nao (padrao: 400)    |
+| `NEXUS_MAX_OUTPUT_TOKENS`  | Limite output NEXUS                       | Nao (padrao: 600)    |
+| `GITHUB_TOKEN`             | Token GitHub para criacao de PRs          | Nao                  |
+| `GITHUB_REPO`              | Repositorio GitHub (`owner/repo`)         | Nao                  |
+| `PR_MAX_AUTO_RISK`         | Risco maximo para PR automatico (1-5)     | Nao (padrao: 2)      |
+| `MERGE_MAX_RISK`           | Risco maximo para merge automatico (1-5)  | Nao (padrao: 3)      |
+| `PR_STALE_DAYS`            | Dias para considerar PR stale             | Nao (padrao: 7)      |
 | `LOG_LEVEL`                | Nivel de log (`info`, `debug`, `warn`)    | Nao (padrao: info)   |
 | `NODE_ENV`                 | Ambiente (`development`, `production`)    | Nao                  |
 
@@ -73,7 +79,29 @@ O gateway roda em `http://localhost:18789`.
 
 ```bash
 npx tsx scripts/seed-goal.ts
+npx tsx scripts/seed-goal.ts --project connexto-digital-signer
 ```
+
+### Registrar projeto
+
+```bash
+npx tsx scripts/register-project.ts <project-id>
+```
+
+Cria a estrutura em `projects/<project-id>/` com `manifest.yaml` template. Edite o manifesto com `repo_source`, `risk_profile` e demais configuracoes.
+
+### Modelos LLM por Agente
+
+Os modelos sao configurados em `agents/<agente>/config.ts`:
+
+| Agente   | Modelo           | Arquivo de Config                      |
+| -------- | ---------------- | -------------------------------------- |
+| KAIROS   | `gpt-5.2`        | `agents/kairos/config.ts`              |
+| FORGE    | `gpt-5.3-codex`  | `runtime/openclaw/config.json`         |
+| NEXUS    | `gpt-4o-mini`    | `agents/nexus/config.ts` (fallback)    |
+| VECTOR   | `gpt-4o-mini`    | `agents/vector/config.ts`              |
+
+FORGE usa modelo via OpenClaw, os demais via chamada direta ao LLM client.
 
 ## Producao
 
@@ -147,19 +175,22 @@ npx tsc --noEmit
 ## Estrutura de Diretorios
 
 ```
-agents/              Configs e prompts dos agentes
+agents/              Configs e prompts dos agentes (kairos, forge, nexus, vector, sentinel, covenant)
 config/              Budget e logger
 docs/                Documentacao
-evaluation/          Avaliadores (forge, marketing)
-execution/           Executores, sandbox, budget gate, lint
+evaluation/          Avaliadores (forge, nexus, marketing)
+execution/           Executores, sandbox, budget gate, lint, project code system
 interfaces/          Telegram (sender + bot)
-llm/                 Cliente LLM generico
-orchestration/       Ciclo KAIROS, filtros, feedback, briefing
+llm/                 Cliente LLM generico (OpenAI + Claude)
+orchestration/       Ciclo KAIROS, filtros, feedback, briefing, contexto historico
+projects/            Manifestos de projetos (manifest.yaml por projeto)
 runtime/openclaw/    Config OpenClaw, skills
-scripts/             Bootstrap, cron, seed
+scripts/             Bootstrap, cron, seed, register-project
 services/            Aprovacao, metricas, code changes
+shared/policies/     Politicas cross-project (risk limits, allowed paths)
 src/                 Entry points (main.ts, bot.ts)
-state/               Schema SQL, migrations, CRUD modules
+state/               Schema SQL, migrations, CRUD modules, execution history
+workspaces/          Workspaces isolados do FORGE por projeto (gitignored)
 ```
 
 ## Banco de Dados

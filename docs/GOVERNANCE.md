@@ -12,6 +12,8 @@ Este documento descreve todas as regras de governanca, limites de seguranca e co
 4. **Nenhuma falha sem rollback**
 5. **Feedback ajusta pesos, nao logica**
 6. **Previsibilidade > conveniencia**
+7. **Nenhuma modificacao fora do workspace isolado**
+8. **Aprendizado comeca na decisao, nao na execucao**
 
 ---
 
@@ -27,6 +29,7 @@ Este documento descreve todas as regras de governanca, limites de seguranca e co
 | `BUDGET_MAX_TASKS_DAY`     | Maximo de tasks por dia    | 10           |
 | `KAIROS_MAX_INPUT_TOKENS`  | Limite input do KAIROS     | 800          |
 | `KAIROS_MAX_OUTPUT_TOKENS` | Limite output do KAIROS    | 400          |
+| `NEXUS_MAX_OUTPUT_TOKENS`  | Limite output do NEXUS     | 600          |
 
 ### Budget Gate (`execution/budgetGate.ts`)
 
@@ -92,6 +95,89 @@ Limites de seguranca:
 
 ---
 
+## Governanca do NEXUS
+
+### Permissoes
+
+- `research.query` — realizar pesquisas tecnicas
+
+### Restricoes
+
+- NEXUS nunca e acionado diretamente — apenas via delegacao do KAIROS
+- NEXUS nunca se comunica diretamente com FORGE ou VECTOR
+- Output do NEXUS e insumo para proximas decisoes, nunca comando
+- NEXUS nao escreve codigo, nao cria arquivos, nao altera repositorio
+- NEXUS nao decide implementacao final
+- KAIROS e o unico orquestrador
+- Limite de output tokens controlado por `NEXUS_MAX_OUTPUT_TOKENS`
+- Output sanitizado contra comandos perigosos e URLs externas
+
+### Formato de Saida Obrigatorio
+
+O NEXUS deve retornar pesquisas com as seguintes secoes:
+
+1. **OPCOES** — alternativas tecnicas identificadas
+2. **PROS-CONTRAS** — trade-offs de cada opcao
+3. **RISCO** — analise de riscos tecnicos
+4. **RECOMENDACAO** — sugestao fundamentada
+
+---
+
+## Contexto Historico no KAIROS
+
+### Mecanismo
+
+O KAIROS recebe um bloco `HISTORICO:` no prompt com dados agregados de execucoes anteriores (7 dias):
+
+- Taxa de sucesso por agente
+- Tasks problematicas (>= 2 falhas)
+- Arquivos frequentemente modificados
+- Ultimas execucoes com status
+
+### Regras de Uso
+
+- Historico NAO e comando — e insumo de decisao
+- Se historico indicar alto risco ou baixa taxa de sucesso, KAIROS pode:
+  - Reduzir autonomia
+  - Exigir aprovacao humana
+  - Acionar NEXUS antes de delegar
+- FORGE NAO recebe historico, NAO altera prompt, NAO "aprende" diretamente
+- Maximo ~500 caracteres no bloco historico
+- Apenas ultimos 7 dias
+- Descricoes truncadas (60 chars tasks, 40 chars erros)
+
+---
+
+## Governanca Multi-Projeto
+
+### Isolamento
+
+- Cada projeto tem manifesto em `projects/<project_id>/manifest.yaml`
+- Max 1 projeto `active` por ciclo
+- Goals filtrados por `project_id`
+- FORGE opera em workspace isolado: `workspaces/forge/<project_id>/<task_id>/`
+- FORGE nunca opera no repositorio original (`repo_source`)
+
+### Manifesto
+
+Cada projeto define:
+
+- `projectId` (kebab-case)
+- `repo_source` (path local ou URL)
+- `riskProfile` (`conservative`, `moderate`, `aggressive`)
+- `budget_monthly` (limite de tokens)
+- `allowed_paths` e `forbidden_paths`
+
+### Limites por Risk Profile
+
+| Risk Profile | Max Risk Level | Max Files/Change | Approval Required Above Risk |
+| ------------ | -------------- | ---------------- | ---------------------------- |
+| conservative | 2              | 3                | 1                            |
+| moderate     | 3              | 5                | 2                            |
+| aggressive   | 4              | 10               | 3                            |
+
+---
+
 ## Governanca do VECTOR
 
 ### Permissoes
@@ -123,10 +209,47 @@ VECTOR gera draft → Humano revisa via /drafts
 
 ### Permissoes
 
-- `fs.write`, `fs.mkdir`, `fs.read` — operacoes de arquivo no sandbox
+- `fs.write`, `fs.mkdir`, `fs.read` — operacoes de arquivo no workspace
 - `code.plan`, `code.apply`, `code.lint` — operacoes de codigo
 
-### Diretorios Permitidos
+### Modelo de Execucao (Por Projeto)
+
+FORGE opera exclusivamente em workspaces isolados clonados do `repo_source`:
+
+```
+1. Resolver project_id ativo e carregar manifesto
+2. Clonar repo_source para workspaces/forge/<project_id>/<task_id>/
+3. Descobrir arquivos relevantes (keyword, grep, imports, reverse imports, neighbors)
+4. Gerar search/replace edits via LLM (gpt-5.3-codex)
+5. Aplicar edits com fuzzy matching
+6. Lint (eslint + tsc) + auto-fix imports
+7. Commit na branch forge/task-<id>
+8. Push branch para repo_source para review
+```
+
+### Estrategia de Edicao: Search/Replace
+
+FORGE nunca gera arquivos inteiros. Gera edicoes granulares:
+
+```json
+{ "search": "linhas exatas do codigo", "replace": "codigo modificado" }
+```
+
+Com fuzzy matching (exact → trimmed → single-line → substring).
+
+### Diretorios Permitidos (Projeto)
+
+Definidos por projeto no manifesto. Padrao:
+
+```
+src/**
+app/**
+components/**
+packages/**
+tests/**
+```
+
+### Diretorios Permitidos (Interno - Sandbox)
 
 ```
 src/
@@ -158,7 +281,7 @@ execution/permissions.ts     — permissoes
 state/schema.sql
 ```
 
-### Ciclo PR Virtual
+### Ciclo PR Virtual (Sandbox Interno)
 
 ```
 1. FORGE gera plano de mudanca (JSON via OpenClaw)
@@ -172,6 +295,20 @@ state/schema.sql
 9. Diff e test_output persistidos
 ```
 
+### Ciclo por Projeto (Workspace Isolado)
+
+```
+1. Clone repo_source para workspace isolado
+2. Descoberta de arquivos relevantes (5 estrategias)
+3. Geracao de search/replace edits via LLM
+4. Aplicacao com fuzzy matching
+5. Lint + auto-fix imports nao utilizados
+6. Se lint falha: retry com feedback de erro ao LLM
+7. Commit na branch forge/task-<id>
+8. Push branch para repo_source
+9. Registra code_changes com project_id
+```
+
 ### Restricoes
 
 - Max 3 arquivos por mudanca
@@ -179,19 +316,30 @@ state/schema.sql
 - Nenhuma mudanca sem decisao registrada
 - Nenhuma mudanca sem diff persistido
 - Nenhuma falha sem rollback
-- Nao tenta retry no mesmo ciclo
+- Retry unico com feedback de erro ao LLM
+- FORGE nunca opera no repo_source original
+- FORGE nunca acessa outros repositorios
 - Codigo deve ser legivel por humanos
+- Husky hooks desabilitados no workspace
 
 ---
 
-## Sandbox
+## Sandbox e Workspaces
 
-### Isolamento
+### Sandbox (Agentes Internos)
 
 - Cada agente tem diretorio dedicado: `sandbox/<agent>/`
 - OpenClaw workspace restrito ao sandbox do agente
 - Validacao de path traversal (rejeita `..`, paths absolutos)
 - Limite de 100 arquivos por sandbox
+
+### Workspaces de Projeto (FORGE)
+
+- Clone isolado do repo_source: `workspaces/forge/<project_id>/<task_id>/`
+- Diretorio `workspaces/` e gitignored (nao versionado)
+- Cada execucao tem workspace proprio
+- FORGE nunca opera no repositorio original
+- Branch `forge/task-<id>` criada e pushada para review
 
 ### OpenClaw Tools
 

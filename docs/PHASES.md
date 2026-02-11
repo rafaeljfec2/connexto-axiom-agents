@@ -382,3 +382,145 @@ No maximo 1 projeto `active` por ciclo. Se houver mais de 1, o sistema loga warn
 
 **Tabelas criadas:** `projects`
 **Colunas adicionadas:** `goals.project_id`
+
+---
+
+## FASE 23.2 -- FORGE por Projeto com Modificacao Controlada do Repositorio Real
+
+**Objetivo:** Permitir que o FORGE leia o codigo-fonte REAL do projeto ativo, gere mudancas CONCRETAS baseadas no codigo existente e proponha alteracoes via branch/PR mantendo isolamento, rastreabilidade e controle humano.
+
+**Principio Central:** FORGE nunca trabalha em abstracao. FORGE sempre trabalha sobre o repositorio definido em `manifest.yaml`.
+
+### Componentes Implementados
+
+1. **Project Workspace** (`execution/projectWorkspace.ts`): clona `repo_source` do manifesto para workspace isolado (`workspaces/forge/<project_id>/<task_id>/`), garante que FORGE nunca opera no repo original
+2. **Project Security** (`execution/projectSecurity.ts`): define paths permitidos (`src/**`, `app/**`, `components/**`, `packages/**`, `tests/**`) e proibidos (`.git/**`, `node_modules/**`, `.env*`), interface `FileEdit { search, replace }` para edicoes diff-based
+3. **Project Code Executor** (`execution/projectCodeExecutor.ts`): executor principal do FORGE por projeto:
+   - Resolve contexto do projeto (manifesto, `repo_source`)
+   - Descobre arquivos relevantes via keyword matching, Content Grep, Import Chain Following, Reverse Import Tracking e Neighbor Expansion
+   - Monta prompt com codigo real do projeto
+   - Solicita edicoes no formato search/replace (diff-based) ao LLM
+   - Implementa retry com feedback de erros (lint/search-replace failures)
+   - Instrui LLM sobre efeitos cascata (imports nao utilizados)
+4. **Project Code Applier** (`execution/projectCodeApplier.ts`): aplica mudancas no workspace isolado:
+   - `applySearchReplaceEdits()`: fuzzy matching (exact, trimmed multi-line, single-line trim, substring)
+   - `fixUnusedImports()`: remocao automatica de imports nao utilizados baseada no output do ESLint
+   - `lintAndAutoFix()`: orquestra linting, auto-fix e remocao de imports
+   - `commitAndFinalize()`: staging, commit, push da branch para `repo_source`
+5. **Project Git Manager** (`execution/projectGitManager.ts`): operacoes Git no workspace:
+   - Cria branch `forge/task-<id>`
+   - Desabilita Husky hooks (`HUSKY=0`, `GIT_TERMINAL_PROMPT=0`)
+   - Sanitiza mensagens de commit (remove newlines)
+   - `pushBranchToSource()`: faz push da branch para o repositorio original para review/PR
+6. **LLM Model**: FORGE usa `gpt-5.3-codex` via OpenClaw
+
+### Estrategia de Edicao: Search/Replace (Diff-based)
+
+Em vez de gerar arquivos inteiros (propenso a erros), FORGE gera edicoes granulares:
+
+```json
+{
+  "action": "modify",
+  "edits": [
+    { "search": "linhas exatas do codigo original", "replace": "codigo modificado" }
+  ]
+}
+```
+
+Regras para o LLM:
+- `search` deve ser copia exata do codigo-fonte (letra por letra)
+- Incluir 2-3 linhas de contexto para unicidade
+- Tratar efeitos cascata (ex: import removido apos uso removido)
+
+### File Discovery
+
+O FORGE descobre arquivos relevantes usando 5 estrategias combinadas:
+
+1. **Keyword Matching**: paths que contem keywords da task
+2. **Content Grep**: busca por termos dentro dos arquivos
+3. **Import Chain Following**: segue imports a partir dos arquivos encontrados
+4. **Reverse Import Tracking**: encontra quem importa os arquivos afetados
+5. **Neighbor Expansion**: inclui arquivos vizinhos no mesmo diretorio
+
+### Fluxo de Execucao
+
+```
+1. Resolver project_id ativo e carregar manifesto
+2. Clonar repo_source para workspaces/forge/<project_id>/<task_id>/
+3. Descobrir arquivos relevantes (5 estrategias)
+4. Montar prompt com codigo real
+5. Chamar LLM (gpt-5.3-codex via OpenClaw) pedindo search/replace
+6. Aplicar edits com fuzzy matching
+7. Rodar eslint --fix + tsc --noEmit
+8. Se falha: retry com feedback de erro ao LLM
+9. fixUnusedImports() automatico
+10. Criar branch forge/task-<id>
+11. Commit + push para repo_source
+12. Registrar code_changes com project_id
+```
+
+### Visibilidade no Briefing
+
+- Projeto afetado
+- Arquivos reais modificados
+- Status (SUCESSO / FALHA)
+- Risco tecnico
+- Branch / PR gerado
+
+**Colunas adicionadas:** `outcomes.project_id`
+
+---
+
+## FASE 24 -- Contexto Historico de Tentativas Anteriores no KAIROS
+
+**Objetivo:** Permitir que o KAIROS considere historico de tentativas anteriores para avaliar sucesso, falha e risco real, decidindo delegacoes futuras de forma mais informada, sem alterar o comportamento do FORGE.
+
+**Principio Central:** Aprendizado comeca na decisao, nao na execucao.
+
+### Componentes Implementados
+
+1. **Execution History** (`state/executionHistory.ts`): agregacao de dados historicos por `project_id + task_type`:
+   - `getExecutionHistory()`: carrega execucoes recentes
+   - `getAgentSummary()`: taxa de sucesso, total de execucoes (7d)
+   - `getTaskTypeAggregates()`: sucesso/falha por tipo de task
+   - `getFrequentFiles()`: arquivos mais modificados
+   - `getRecurrentFailurePatterns()`: tasks com >= 2 falhas
+   - `getFullExecutionHistoryContext()`: contexto completo agregado
+2. **Historical Context** (`orchestration/historicalContext.ts`): formata dados historicos em bloco de texto compacto para o prompt do KAIROS:
+   - `buildHistoricalContext(db, agentId, days, maxChars)`: gera bloco `HISTORICO:` com taxa de sucesso, tasks problematicas, arquivos frequentes e ultimas execucoes
+   - Maximo ~500 caracteres para nao estourar tokens
+   - Trunca descricoes de tasks em 60 chars e erros em 40 chars
+3. **Kairos LLM Integration** (`orchestration/kairosLLM.ts`):
+   - `callKairosLLM()` recebe `db` e injeta bloco historico antes de `CONSTRAINTS:` no prompt
+   - `injectHistoricalContext()`: insere bloco no local correto do prompt
+4. **KAIROS System Prompt** (`agents/kairos/SYSTEM.md`): secao `## Historico` instruindo KAIROS a interpretar e usar dados historicos (reduzir autonomia para baixa taxa de sucesso, acionar NEXUS para falhas recorrentes)
+5. **Daily Briefing** (`orchestration/dailyBriefing.ts`): secao historica com decisoes influenciadas, alertas de padroes de falha, melhoria/piora de taxa de sucesso
+6. **Database Migration** (`state/db.ts`): adiciona coluna `project_id TEXT` e indices na tabela `outcomes`
+
+### Formato do Bloco HISTORICO (token-eficiente)
+
+```
+HISTORICO:
+- FORGE: 63% sucesso (38 exec, 7d)
+- Tasks problematicas: forge/remover-signatarios (6 falhas)
+- Ultimas execucoes:
+  - forge: remover signatarios -> SUCCESS
+  - forge: adicionar teste -> FAILURE (lint failed)
+  - forge: implementar util -> SUCCESS
+```
+
+### Regras de Uso
+
+- Historico NAO e comando, NAO e regra fixa — e insumo de decisao
+- Se historico indicar alto risco ou baixa taxa de sucesso, KAIROS pode: reduzir autonomia, exigir aprovacao humana, acionar NEXUS antes de delegar
+- FORGE NAO recebe historico, NAO altera prompt, NAO "aprende" diretamente
+- Nenhuma memoria longa no FORGE
+- Historico sempre resumido e limitado em caracteres
+
+### Testes
+
+- `state/executionHistory.test.ts`: 18 testes cobrindo todas as funcoes de agregacao
+- `orchestration/historicalContext.test.ts`: 9 testes cobrindo formatacao, limites de caracteres e filtragem
+
+**Colunas adicionadas:** `outcomes.project_id`
+**Indices adicionados:** `idx_outcomes_project_id`, `idx_outcomes_created_at`

@@ -10,7 +10,7 @@ Schema completo em `state/schema.sql`.
 
 ### `goals`
 
-Objetivos estrategicos ativos do sistema.
+Objetivos estrategicos ativos do sistema, associados a projetos.
 
 | Coluna      | Tipo          | Descricao                            |
 | ----------- | ------------- | ------------------------------------ |
@@ -19,6 +19,7 @@ Objetivos estrategicos ativos do sistema.
 | description | TEXT          | Descricao detalhada                  |
 | status      | TEXT          | `active`, `completed`, `cancelled`   |
 | priority    | INTEGER       | Prioridade (maior = mais importante) |
+| project_id  | TEXT          | ID do projeto associado              |
 | created_at  | TEXT          | Timestamp ISO 8601                   |
 | updated_at  | TEXT          | Timestamp ISO 8601                   |
 
@@ -64,7 +65,7 @@ Metricas genericas de agentes.
 
 ### `outcomes`
 
-Resultados de execucao de agentes com dados de performance.
+Resultados de execucao de agentes com dados de performance, usados pelo KAIROS para contexto historico.
 
 | Coluna              | Tipo          | Descricao                    |
 | ------------------- | ------------- | ---------------------------- |
@@ -77,6 +78,7 @@ Resultados de execucao de agentes com dados de performance.
 | execution_time_ms   | INTEGER       | Tempo de execucao em ms      |
 | tokens_used         | INTEGER       | Tokens consumidos            |
 | artifact_size_bytes | INTEGER       | Tamanho do artefato gerado   |
+| project_id          | TEXT          | ID do projeto associado      |
 | created_at          | TEXT          | Timestamp                    |
 
 ### `audit_log`
@@ -218,17 +220,52 @@ Mudancas de codigo propostas pelo FORGE no ciclo PR virtual.
 | applied_at    | TEXT          | Quando foi aplicado                                                                       |
 | created_at    | TEXT          | Timestamp                                                                                 |
 
+### `nexus_research`
+
+Pesquisas tecnicas realizadas pelo agente NEXUS com analise estruturada.
+
+| Coluna         | Tipo          | Descricao                                                    |
+| -------------- | ------------- | ------------------------------------------------------------ |
+| id             | TEXT PK       | UUID                                                         |
+| task_id        | TEXT NOT NULL | ID da delegacao que originou a pesquisa                      |
+| question       | TEXT NOT NULL | Pergunta de pesquisa                                         |
+| options        | TEXT          | JSON array de opcoes identificadas                           |
+| pros_cons      | TEXT          | JSON com pros/contras de cada opcao                          |
+| risk_analysis  | TEXT          | Analise de riscos                                            |
+| recommendation | TEXT          | Recomendacao final do NEXUS                                  |
+| raw_output     | TEXT          | Output bruto do LLM                                         |
+| status         | TEXT          | `success`, `partial`, `failed`                               |
+| tokens_used    | INTEGER       | Tokens consumidos na pesquisa                                |
+| created_at     | TEXT          | Timestamp                                                    |
+
+### `projects`
+
+Projetos registrados com manifestos e estado de runtime.
+
+| Coluna             | Tipo          | Descricao                                       |
+| ------------------ | ------------- | ----------------------------------------------- |
+| id                 | TEXT PK       | project_id (kebab-case)                         |
+| name               | TEXT NOT NULL | Nome do projeto                                 |
+| repo_source        | TEXT          | Caminho ou URL do repositorio                   |
+| status             | TEXT          | `active`, `paused`, `archived`                  |
+| risk_profile       | TEXT          | `conservative`, `moderate`, `aggressive`        |
+| budget_monthly     | INTEGER       | Limite mensal de tokens do projeto              |
+| tokens_used_month  | INTEGER       | Tokens consumidos no mes                        |
+| manifest_hash      | TEXT          | Hash do manifesto para detectar mudancas        |
+| created_at         | TEXT          | Timestamp                                       |
+| updated_at         | TEXT          | Timestamp                                       |
+
 ---
 
 ## Indices
 
 Cada tabela possui indices otimizados para as queries mais frequentes:
 
-- `goals`: status
+- `goals`: status, project_id
 - `tasks`: status, goal_id, agent_id
 - `decisions`: agent_id, task_id
 - `metrics`: agent_id, metric_name
-- `outcomes`: agent_id, status
+- `outcomes`: agent_id, status, project_id, created_at
 - `audit_log`: agent_id, runtime
 - `budgets`: period
 - `token_usage`: agent_id, created_at
@@ -238,6 +275,8 @@ Cada tabela possui indices otimizados para as queries mais frequentes:
 - `marketing_metrics`: artifact_id, collected_at
 - `marketing_feedback`: message_type, grade, created_at
 - `code_changes`: status, created_at
+- `nexus_research`: task_id, status, created_at
+- `projects`: status
 
 ## Concorrencia
 
