@@ -240,13 +240,15 @@ describe("forgeAgentLoop", () => {
       assert.equal(result2, null);
     });
 
-    it("should return null for empty files array", () => {
+    it("should return output with empty files when task already done", () => {
       const result = parseCodeOutput(JSON.stringify({
         description: "Change",
         risk: 1,
         files: [],
       }));
-      assert.equal(result, null);
+      assert.ok(result);
+      assert.equal(result.files.length, 0);
+      assert.equal(result.description, "Change");
     });
 
     it("should return null for invalid file action", () => {

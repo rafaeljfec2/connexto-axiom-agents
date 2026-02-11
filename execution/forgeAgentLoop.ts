@@ -118,6 +118,19 @@ export async function runForgeAgentLoop(
     };
   }
 
+  if (editResult.parsed.files.length === 0) {
+    logger.info(
+      { projectId, description: editResult.parsed.description.slice(0, 80) },
+      "FORGE agent loop - no files to modify (task already done or no changes needed)",
+    );
+    return {
+      success: true,
+      parsed: editResult.parsed,
+      totalTokensUsed,
+      phasesCompleted,
+    };
+  }
+
   logger.info(
     {
       projectId,

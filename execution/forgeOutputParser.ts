@@ -67,9 +67,19 @@ export function parseCodeOutput(text: string): ForgeCodeOutput | null {
       return null;
     }
 
-    if (!Array.isArray(raw.files) || raw.files.length === 0) {
-      logger.error("Missing or empty files array in project code output");
+    if (!Array.isArray(raw.files)) {
+      logger.error("Missing files array in project code output");
       return null;
+    }
+
+    if (raw.files.length === 0) {
+      logger.info("LLM returned empty files array (task may already be done)");
+      return {
+        description: raw.description.slice(0, 200),
+        risk: raw.risk,
+        rollback: typeof raw.rollback === "string" ? raw.rollback : "",
+        files: [],
+      };
     }
 
     const files = parseFileChanges(raw.files as ReadonlyArray<Record<string, unknown>>);

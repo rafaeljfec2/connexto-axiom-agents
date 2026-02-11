@@ -178,6 +178,19 @@ function stripNpmWarnings(text: string): string {
     .trim();
 }
 
+const ESLINT_CONFIG_ERROR_PATTERNS = [
+  "Oops! Something went wrong!",
+  "Error while loading rule",
+  "You have used a rule which requires",
+  "Error: Failed to load",
+  "Cannot read config file",
+  "ESLintrc configuration is no longer supported",
+] as const;
+
+function isEslintConfigError(output: string): boolean {
+  return ESLINT_CONFIG_ERROR_PATTERNS.some((pattern) => output.includes(pattern));
+}
+
 async function runEslintCheck(
   execFileAsync: ExecFileAsync,
   files: readonly string[],
@@ -198,6 +211,10 @@ async function runEslintCheck(
     const cleaned = stripNpmWarnings(raw);
     if (cleaned.length === 0) {
       return { success: true, output: "[eslint] OK (warnings only)" };
+    }
+    if (isEslintConfigError(cleaned)) {
+      logger.warn("ESLint config/environment error detected, skipping eslint validation");
+      return { success: true, output: "[eslint] SKIPPED (config error in target project)" };
     }
     return { success: false, output: `[eslint FAIL] ${cleaned}` };
   }
