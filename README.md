@@ -161,37 +161,192 @@ state/               Schema SQLite, migrations, modulos CRUD de todas as tabelas
 workspaces/          Clones Git isolados temporarios para execucao do FORGE (gitignored)
 ```
 
-## Pre-requisitos
+## Guia Completo: Da Instalacao ate a Primeira Task
 
-- Node.js >= 24
-- pnpm
+### 1. Pre-requisitos
 
-## Setup
+- **Node.js >= 24** (use [nvm](https://github.com/nvm-sh/nvm) — o projeto inclui `.nvmrc`)
+- **pnpm** (gerenciador de pacotes)
+- **Git** (para workspaces do FORGE)
+- **OpenClaw** (runtime de execucao LLM para FORGE e VECTOR — opcional, mas necessario para execucao de codigo)
+- **Bot Telegram** (para receber briefings e aprovar drafts — opcional)
 
 ```bash
+# Instalar pnpm se necessario
+corepack enable && corepack prepare pnpm@latest --activate
+
+# Usar a versao correta do Node.js (se usar nvm)
+nvm use
+```
+
+### 2. Bootstrap (instalacao e banco de dados)
+
+```bash
+# Clonar o repositorio
+git clone <url-do-repo> connexto-axiom-agents
+cd connexto-axiom-agents
+
+# Rodar o bootstrap (instala deps + cria banco SQLite)
 ./scripts/bootstrap.sh
+```
+
+O bootstrap faz:
+- Verifica Node.js >= 24 e pnpm
+- Instala dependencias via `pnpm install`
+- Cria o banco SQLite em `state/local.db` com todas as tabelas
+
+### 3. Configurar variaveis de ambiente
+
+```bash
 cp .env.example .env
 ```
 
-Edite o `.env` com seu token do bot Telegram, chat ID e configuracoes do OpenClaw.
+Edite o `.env` com suas credenciais:
 
-## Desenvolvimento
+```env
+# === LLM (obrigatorio — pelo menos um provedor) ===
+OPENAI_API_KEY=sk-...                   # Para KAIROS (gpt-5.2) e NEXUS (gpt-4o-mini)
+
+# === OpenClaw (necessario para FORGE e VECTOR) ===
+USE_OPENCLAW=true                        # Ativar execucao via OpenClaw
+OPENCLAW_ENDPOINT=http://localhost:18789 # Endpoint do gateway OpenClaw
+OPENCLAW_API_KEY=dev-local               # Token de autenticacao
+OPENCLAW_MODEL=gpt-4o-mini              # Modelo padrao do OpenClaw
+
+# === Telegram (opcional — para briefings e aprovacoes) ===
+TELEGRAM_BOT_TOKEN=123456:ABC...         # Token do @BotFather
+TELEGRAM_CHAT_ID=-100...                 # ID do chat/grupo
+
+# === Budget (ajuste conforme necessario) ===
+BUDGET_MONTHLY_TOKENS=500000             # Limite mensal total
+BUDGET_PER_TASK_TOKENS=50000             # Limite por task
+BUDGET_MAX_TASKS_DAY=10                  # Max tasks por dia
+
+# === KAIROS ===
+KAIROS_MAX_OUTPUT_TOKENS=4096            # Tokens de saida para modelos de raciocinio
+
+# === FORGE ===
+FORGE_MAX_CORRECTION_ROUNDS=4            # Tentativas de correcao (0-10)
+FORGE_CONTEXT_MAX_CHARS=20000            # Maximo de chars de contexto por task
+
+# === GitHub (opcional — para PRs automaticos) ===
+GITHUB_TOKEN=ghp_...                     # Token com permissao de repo
+GITHUB_REPO=owner/repo                   # Repositorio para PRs
+```
+
+> **Minimo para funcionar:** `OPENAI_API_KEY` + `USE_OPENCLAW=true` com OpenClaw rodando.
+
+### 4. Registrar um projeto
+
+O FORGE precisa de um projeto registrado com manifesto para saber qual repositorio trabalhar.
 
 ```bash
+# Registrar um novo projeto
+pnpm tsx scripts/register-project.ts meu-projeto
+```
+
+Isso cria a estrutura em `projects/meu-projeto/` com um `manifest.yaml` template.
+
+Edite o manifesto para configurar o projeto:
+
+```yaml
+# projects/meu-projeto/manifest.yaml
+project_id: meu-projeto
+repo_source: /caminho/absoluto/para/o/repositorio  # Path local do repo Git
+stack:
+  language: typescript
+  framework: nextjs                                  # nestjs, nextjs, nestjs-nextjs-turbo, etc.
+risk_profile: medium                                 # low, medium, high
+autonomy_level: 2                                    # 1 (minimo) a 5 (maximo)
+token_budget_monthly: 200000                         # Orcamento mensal para este projeto
+status: active                                       # active, paused, archived
+```
+
+| Campo                  | Descricao                                                    |
+| ---------------------- | ------------------------------------------------------------ |
+| `project_id`           | Identificador unico (kebab-case, ex: `meu-saas`)            |
+| `repo_source`          | Caminho absoluto do repositorio Git local                    |
+| `stack.language`       | Linguagem principal (`typescript`, `python`, etc.)           |
+| `stack.framework`      | Framework (`nestjs`, `nextjs`, `nestjs-nextjs-turbo`, etc.)  |
+| `risk_profile`         | Perfil de risco (`low`, `medium`, `high`)                    |
+| `autonomy_level`       | Nivel de autonomia do FORGE (1 = conservador, 5 = agressivo)|
+| `token_budget_monthly` | Orcamento de tokens mensal para este projeto                 |
+| `status`               | `active` para o FORGE trabalhar, `paused` para pausar        |
+
+> **Importante:** O `repo_source` deve apontar para um repositorio Git valido. O FORGE **nunca** modifica o repo original — ele clona para um workspace isolado.
+
+### 5. Criar um Goal (objetivo estrategico)
+
+Goals sao objetivos de alto nivel que o KAIROS usa para decidir quais tarefas delegar aos agentes.
+
+```bash
+# Criar um goal para o projeto
+pnpm tsx scripts/seed-goal.ts --project meu-projeto "Implementar autenticacao OAuth2"
+```
+
+Parametros:
+- `--project <project-id>` — ID do projeto (padrao: `connexto-digital-signer`)
+- O ultimo argumento e o titulo do goal (padrao: `"Launch MVP"`)
+
+Exemplos:
+
+```bash
+# Goal para refatorar o sidebar
+pnpm tsx scripts/seed-goal.ts --project meu-projeto "Remover item signatarios do sidebar"
+
+# Goal para adicionar testes
+pnpm tsx scripts/seed-goal.ts --project meu-projeto "Adicionar testes unitarios para o modulo de auth"
+
+# Goal para otimizar performance
+pnpm tsx scripts/seed-goal.ts --project meu-projeto "Otimizar queries N+1 no endpoint de listagem"
+```
+
+> O KAIROS analisa os goals ativos e decide automaticamente quais tarefas delegar para FORGE, NEXUS e VECTOR a cada ciclo.
+
+### 6. Iniciar o sistema
+
+```bash
+# Modo desenvolvimento (um ciclo com hot-reload + logs formatados)
 pnpm dev
 ```
 
-Roda o ciclo Kairos uma vez com hot-reload e logs formatados.
+O que acontece em cada ciclo:
+1. **KAIROS** carrega goals ativos e historico de execucoes
+2. **Governanca** classifica complexidade, risco e custo, seleciona o modelo LLM
+3. **KAIROS** decide delegacoes (FORGE para codigo, NEXUS para pesquisa, VECTOR para marketing)
+4. **NEXUS** executa pesquisas pre-execucao (se necessario)
+5. **FORGE** executa tarefas de codigo: planeja, gera edits, corrige erros iterativamente
+6. **VECTOR** gera drafts de conteudo
+7. **Feedback** avalia cada execucao (SUCCESS/FAILURE) e atualiza historico
+8. **Briefing** envia resumo via Telegram
 
-## Bot Telegram
+### 7. Acompanhar a execucao
+
+Os logs mostram o progresso em tempo real:
+
+```
+INFO: Starting cycle... {"projectId":"meu-projeto"}
+INFO: Governance policy selected {"selectedModel":"gpt-5.2"}
+INFO: FORGE agent loop starting - Phase 1: Planning
+INFO: FORGE agent loop - Phase 2: Execution
+INFO: FORGE agent loop - Phase 3: Apply & Verify
+INFO: FORGE agent loop - lint passed, edits verified
+INFO: Cycle complete.
+```
+
+Quando o FORGE conclui com sucesso:
+- Uma branch `forge/task-<id>` e criada no workspace
+- As mudancas sao commitadas e pushed para o repositorio original
+- Voce pode revisar e fazer merge via Pull Request
+
+### 8. Bot Telegram (opcional)
 
 ```bash
+# Em outro terminal
 pnpm bot
 ```
 
-Inicia o bot Telegram persistente para comandos humanos. Roda em paralelo com o ciclo cron do Kairos, compartilhando o banco SQLite via modo WAL.
-
-### Comandos
+Comandos disponiveis:
 
 | Comando                                             | Descricao                                  |
 | --------------------------------------------------- | ------------------------------------------ |
@@ -204,44 +359,52 @@ Inicia o bot Telegram persistente para comandos humanos. Roda em paralelo com o 
 
 IDs podem ser parciais (primeiros 8 caracteres).
 
-## Producao
+### 9. Executar via Cron (producao)
+
+Para execucao autonoma diaria:
 
 ```bash
-pnpm build
-pnpm start
-```
-
-## Cron (execucao autonoma)
-
-O script `scripts/run-kairos.sh` e projetado para cron. Ele resolve seu proprio path, faz build do projeto e executa o ciclo Kairos.
-
-### Teste manual
-
-```bash
+# Teste manual primeiro
 ./scripts/run-kairos.sh
-```
 
-### Registrar o cron
-
-```bash
+# Registrar no cron (rodar todo dia as 07:00)
 crontab -e
 ```
 
-Adicione a seguinte linha para rodar todo dia as 07:00:
-
 ```
-0 7 * * * /home/rafael/dev-rafael/connexto-axiom-agents/scripts/run-kairos.sh >> /home/rafael/dev-rafael/connexto-axiom-agents/logs/kairos.log 2>&1
+0 7 * * * /caminho/para/connexto-axiom-agents/scripts/run-kairos.sh >> /caminho/para/connexto-axiom-agents/logs/kairos.log 2>&1
 ```
 
-Substitua o path pelo caminho absoluto do seu diretorio do projeto.
-
-### Verificar
+Verificar:
 
 ```bash
 crontab -l
 ```
 
 Logs sao adicionados em `logs/kairos.log`. O Briefing Diario via Telegram e enviado automaticamente apos cada ciclo.
+
+---
+
+## Resumo Rapido
+
+```bash
+# 1. Instalar
+./scripts/bootstrap.sh && cp .env.example .env
+
+# 2. Configurar .env (OPENAI_API_KEY + OpenClaw)
+
+# 3. Registrar projeto
+pnpm tsx scripts/register-project.ts meu-projeto
+# Editar projects/meu-projeto/manifest.yaml (repo_source, stack, status: active)
+
+# 4. Criar goal
+pnpm tsx scripts/seed-goal.ts --project meu-projeto "Minha primeira tarefa"
+
+# 5. Rodar
+pnpm dev
+```
+
+---
 
 ## Scripts
 
