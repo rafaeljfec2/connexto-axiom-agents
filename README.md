@@ -74,6 +74,7 @@ src/bot.ts           Entry point do bot Telegram (long-polling persistente)
 | 24    | Contexto Historico do KAIROS        | Dados historicos de execucao injetados no prompt do KAIROS                | Feito  |
 | 25    | Governanca Explicita de Decisao     | Classificacao pre-decisao, selecao dinamica de modelo, log de governanca  | Feito  |
 | 26    | Agente QA (Validacao Funcional)     | Testes E2E hibridos (LLM gera + Playwright executa) com retroalimentacao | Planejado |
+| 27    | FORGE Agent Loop Hibrido            | 3 fases (Planning + Execution + Correction Loop) com ate 4 correcoes     | Feito     |
 
 ## Funcionalidades Principais
 

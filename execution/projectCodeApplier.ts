@@ -62,6 +62,71 @@ export function validateAndCalculateRisk(
   return { valid: true, errors: [], risk: Math.min(risk, 5) };
 }
 
+export async function commitVerifiedChanges(
+  db: BetterSqlite3.Database,
+  changeId: string,
+  description: string,
+  filePaths: readonly string[],
+  workspacePath: string,
+  lintOutput: string,
+  repoSource?: string,
+): Promise<ProjectApplyResult> {
+  const branchName = buildBranchName(changeId);
+
+  try {
+    await createBranch(branchName, workspacePath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error({ changeId, branchName, error: message }, "Failed to create branch for verified changes");
+    return { success: false, diff: "", lintOutput: "", error: `Git branch creation failed: ${message}` };
+  }
+
+  try {
+    await stageFiles(filePaths, workspacePath);
+    const commitMessage = `forge: ${description.slice(0, 120)}`;
+    const hash = await commitChanges(commitMessage, workspacePath);
+
+    const diff = await getBranchDiff(branchName, workspacePath);
+    const commits = await getBranchCommits(branchName, workspacePath);
+    const commitsJson = JSON.stringify(commits);
+
+    if (repoSource) {
+      await pushBranchToSource(branchName, repoSource, workspacePath);
+    }
+
+    await switchToMain(workspacePath);
+
+    updateCodeChangeStatus(db, changeId, {
+      status: "applied",
+      diff,
+      testOutput: lintOutput,
+      appliedAt: new Date().toISOString(),
+      branchName,
+      commits: commitsJson,
+    });
+
+    logger.info(
+      { changeId, branchName, commitHash: hash, pushedToSource: !!repoSource },
+      "Verified project code change committed",
+    );
+
+    return { success: true, diff, lintOutput };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error({ changeId, branchName, error: message }, "Commit of verified changes failed");
+
+    try {
+      await switchToMain(workspacePath);
+      await deleteBranch(branchName, workspacePath);
+    } catch (cleanupError) {
+      const cleanupMsg = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      logger.error({ branchName, error: cleanupMsg }, "Failed to cleanup branch after commit error");
+    }
+
+    return { success: false, diff: "", lintOutput: "", error: message };
+  }
+}
+
 export async function applyProjectCodeChange(
   db: BetterSqlite3.Database,
   changeId: string,

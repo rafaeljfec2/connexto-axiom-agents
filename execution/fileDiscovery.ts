@@ -4,7 +4,7 @@ import path from "node:path";
 import { logger } from "../config/logger.js";
 
 const MAX_CONTEXT_FILES = 5;
-const MAX_TOTAL_CONTEXT_CHARS = 12_000;
+const MAX_TOTAL_CONTEXT_CHARS = 20_000;
 const MAX_TREE_DEPTH = 8;
 const MAX_FILE_SIZE_BYTES = 50_000;
 

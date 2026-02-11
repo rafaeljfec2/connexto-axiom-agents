@@ -742,3 +742,76 @@ RECOMENDACAO: corrigir | investigar | ignorar
 - `state/qaBugs.test.ts`: CRUD da tabela `qa_bugs`
 
 **Tabelas a criar:** `qa_test_runs`, `qa_bugs`
+
+---
+
+## FASE 27 — FORGE Agent Loop Hibrido: De Single-Shot para Agente Iterativo
+
+**Status:** Concluida
+**Data:** 2026-02-10
+
+### Problema
+
+O FORGE operava como gerador single-shot: montava prompt, chamava LLM 1x, aplicava edits e tinha no maximo 1 retry. As falhas mais comuns:
+
+- LLM nao via os arquivos necessarios (file discovery automatica falha)
+- `search` string no edit nao correspondia ao codigo real (LLM hallucina)
+- Efeitos cascata nao tratados (remove uso mas nao o import)
+- 1 unico retry insuficiente para corrigir erros de lint/tsc
+
+### Solucao: 3 Fases + Loop de Correcao
+
+**Fase 1 — Planning (LLM Call #1):**
+- Envia arvore de arquivos + task ao LLM
+- LLM retorna plano JSON com `files_to_read`, `files_to_modify`, `files_to_create`, `approach`, `estimated_risk`
+- Beneficio: LLM decide QUAIS arquivos precisa ver, em vez de depender apenas de heuristicas automaticas
+
+**Fase 2 — Execution (LLM Call #2):**
+- Le os arquivos que o LLM pediu na Fase 1
+- Complementa com file discovery automatica (5 estrategias existentes)
+- Monta prompt com codigo real + plano
+- LLM gera edits search/replace (formato existente)
+- Limite de contexto aumentado para 20k chars (vs 12k anterior)
+
+**Fase 3 — Apply + Correction Loop (ate N tentativas):**
+- Aplica edits (fuzzy matching existente)
+- Executa `eslint --fix` + `tsc --noEmit`
+- Se passa: commit + push via `commitVerifiedChanges()`
+- Se falha: le o estado ATUAL dos arquivos modificados + erros de lint, envia ao LLM para correcao incremental
+- Diferenca critica: cada retry recebe o conteudo REAL dos arquivos apos os edits anteriores (nao o conteudo original)
+- Max retries configuravel via `FORGE_MAX_CORRECTION_ROUNDS` (default: 4)
+
+### Arquivos Criados
+
+- `execution/forgeAgentLoop.ts` — Modulo principal com `runForgeAgentLoop()`, planning phase, context loading, edit phase, correction loop, parsing, prompts e fuzzy matching
+- `execution/forgeAgentLoop.test.ts` — 30 testes unitarios (parsing de plano, parsing de edits, config, leitura de estado)
+
+### Arquivos Modificados
+
+- `execution/projectCodeExecutor.ts` — Refatorado para usar `runForgeAgentLoop()` em vez do fluxo monolitico. Removidos `retryWithLintFeedback()`, `buildProjectCodePrompt()`, `buildRetryPrompt()`, `buildProjectSystemPrompt()`, `parseCodeOutput()` e funcoes de parsing (migrados para o agent loop)
+- `execution/projectCodeApplier.ts` — Adicionada `commitVerifiedChanges()` para commitar edits ja verificados pelo agent loop sem re-aplicar
+- `execution/fileDiscovery.ts` — `MAX_TOTAL_CONTEXT_CHARS` aumentado de 12.000 para 20.000
+- `.env.example` — Adicionadas variaveis `FORGE_MAX_CORRECTION_ROUNDS` e `FORGE_CONTEXT_MAX_CHARS`
+
+### Configuracao
+
+| Variavel | Default | Descricao |
+|---|---|---|
+| `FORGE_MAX_CORRECTION_ROUNDS` | 4 | Maximo de rodadas de correcao apos falha de lint |
+| `FORGE_CONTEXT_MAX_CHARS` | 20000 | Limite de caracteres do contexto enviado ao LLM |
+
+### O Que NAO Mudou
+
+- OpenClaw client (`callOpenClaw`) — mesma interface
+- Git workflow (branch, commit, push) — mesma logica, agora via `commitVerifiedChanges`
+- Security/permissions — mesmas regras
+- File discovery heuristicas — complementam o LLM, nao substituem
+- Approval flow (risk >= 3) — mesmo comportamento
+- Budget gate — mesmo controle
+
+### Impacto Esperado
+
+- **Taxa de sucesso**: de ~63% para ~85%+ (com ate 4 correction rounds)
+- **File discovery**: LLM escolhe os arquivos certos vs heuristica
+- **Edits precisos**: com codigo real no contexto + correcoes iterativas
+- **Custo por task**: ~2-5x mais tokens (3-6 chamadas LLM vs 1-2), compensado pela maior taxa de sucesso

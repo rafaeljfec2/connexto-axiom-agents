@@ -125,8 +125,17 @@ async function callClaude(config: LLMClientConfig, request: LLMRequest): Promise
   };
 }
 
+interface OpenAIMessage {
+  readonly role: string;
+  readonly content: string | null;
+  readonly refusal?: string | null;
+}
+
 interface OpenAIResponse {
-  readonly choices: ReadonlyArray<{ readonly message: { readonly content: string } }>;
+  readonly choices: ReadonlyArray<{
+    readonly message: OpenAIMessage;
+    readonly finish_reason: string;
+  }>;
   readonly usage: {
     readonly prompt_tokens: number;
     readonly completion_tokens: number;
@@ -134,8 +143,50 @@ interface OpenAIResponse {
   };
 }
 
+const MODELS_REQUIRING_COMPLETION_TOKENS: ReadonlySet<string> = new Set([
+  "gpt-5",
+  "gpt-5.2",
+  "gpt-5.3",
+  "gpt-5.3-codex",
+  "o1",
+  "o1-mini",
+  "o1-preview",
+  "o3",
+  "o3-mini",
+  "o4-mini",
+]);
+
+function requiresMaxCompletionTokens(model: string): boolean {
+  if (MODELS_REQUIRING_COMPLETION_TOKENS.has(model)) return true;
+  return model.startsWith("o1") || model.startsWith("o3") || model.startsWith("o4") || model.startsWith("gpt-5");
+}
+
+function buildTokenLimit(model: string, maxTokens: number): Record<string, number> {
+  if (requiresMaxCompletionTokens(model)) {
+    return { max_completion_tokens: maxTokens };
+  }
+  return { max_tokens: maxTokens };
+}
+
+function usesDeveloperRole(model: string): boolean {
+  return requiresMaxCompletionTokens(model);
+}
+
+function buildOpenAIMessages(
+  model: string,
+  system: string,
+  userMessage: string,
+): ReadonlyArray<{ readonly role: string; readonly content: string }> {
+  const systemRole = usesDeveloperRole(model) ? "developer" : "system";
+  return [
+    { role: systemRole, content: system },
+    { role: "user", content: userMessage },
+  ];
+}
+
 async function callOpenAI(config: LLMClientConfig, request: LLMRequest): Promise<LLMResponse> {
   const maxTokens = request.maxOutputTokens ?? 1024;
+  const messages = buildOpenAIMessages(config.model, request.system, request.userMessage);
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -145,11 +196,8 @@ async function callOpenAI(config: LLMClientConfig, request: LLMRequest): Promise
     },
     body: JSON.stringify({
       model: config.model,
-      max_tokens: maxTokens,
-      messages: [
-        { role: "system", content: request.system },
-        { role: "user", content: request.userMessage },
-      ],
+      ...buildTokenLimit(config.model, maxTokens),
+      messages,
     }),
     signal: AbortSignal.timeout(config.timeoutMs),
   });
@@ -160,9 +208,25 @@ async function callOpenAI(config: LLMClientConfig, request: LLMRequest): Promise
   }
 
   const data = (await response.json()) as OpenAIResponse;
-  const text = data.choices[0]?.message?.content;
+  const choice = data.choices[0];
+
+  if (!choice) {
+    throw new Error("OpenAI returned no choices");
+  }
+
+  if (choice.message.refusal) {
+    throw new Error(`OpenAI refused: ${choice.message.refusal}`);
+  }
+
+  const text = choice.message.content;
   if (!text) {
-    throw new Error("OpenAI returned empty content");
+    logger.warn(
+      { finishReason: choice.finish_reason, model: config.model },
+      "OpenAI returned null content",
+    );
+    throw new Error(
+      `OpenAI returned empty content (finish_reason: ${choice.finish_reason})`,
+    );
   }
 
   return {
