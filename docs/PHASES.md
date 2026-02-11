@@ -614,3 +614,131 @@ loadGoals → loadGovernanceInputData
 
 **Tabelas criadas:** `governance_decisions`
 **Indices adicionados:** `idx_governance_decisions_created_at`, `idx_governance_decisions_model_tier`
+
+---
+
+## FASE 26 -- Agente QA para Validacao Funcional (E2E)
+
+**Objetivo:** Introduzir o agente QA hibrido (LLM gera + Playwright executa) para validar o comportamento funcional das mudancas do FORGE no projeto-alvo, detectar falhas, gerar evidencias e retroalimentar o KAIROS com bug tasks.
+
+**Principio Central:** Se o usuario consegue quebrar, o sistema esta quebrado. Se o bug nao e reproduzivel, ele nao existe.
+
+### Posicao na Arquitetura
+
+```
+KAIROS → FORGE → QA → BUG → KAIROS → FORGE
+```
+
+O QA valida o COMPORTAMENTO do sistema em execucao, do ponto de vista do usuario final. QA nao revisa codigo, nao implementa correcoes, nao decide prioridade, nao fecha bugs.
+
+### Modelo Hibrido
+
+1. **LLM gera testes** (`gpt-4o-mini`): recebe contexto da task FORGE (descricao, arquivos alterados, expected_output) e gera scripts Playwright validos
+2. **Playwright executa testes**: scripts sao executados contra o projeto-alvo em ambiente isolado, capturando screenshots, console logs e resultados
+3. **Bugs sao reportados**: falhas geram registros estruturados no formato BUG TASK obrigatorio
+
+### Modos de Acionamento
+
+- **Automatico**: apos cada FORGE SUCCESS, QA e acionado automaticamente para validar a mudanca
+- **Sob demanda**: KAIROS pode delegar para `agent: "qa"` como qualquer outro agente
+
+### Componentes Planejados
+
+1. **Agent Config** (`agents/qa/config.ts`): `llmModel: "gpt-4o-mini"`, permissoes `["test.generate", "test.execute", "bug.report"]`
+2. **System Prompt** (`agents/qa/SYSTEM.md`): prompt para gerar testes Playwright baseados na descricao da task FORGE, formato de saida obrigatorio
+3. **QA Executor** (`execution/qaExecutor.ts`): executor principal:
+   - Recebe delegacao com `task_id` da task FORGE de origem e `project_id`
+   - Carrega contexto da task FORGE (descricao, arquivos alterados, expected_output)
+   - Chama LLM para gerar script Playwright
+   - Salva script em `workspaces/qa/<project_id>/<task_id>/`
+   - Delega execucao para `qaTestRunner`
+   - Registra resultado em `qa_test_runs`
+   - Se falhar, cria registro em `qa_bugs`
+4. **Test Runner** (`execution/qaTestRunner.ts`): executa Playwright via subprocess, captura stdout/stderr, exit code, screenshots e console logs
+5. **State: QA Tests** (`state/qaTests.ts`): CRUD para tabela `qa_test_runs`
+6. **State: QA Bugs** (`state/qaBugs.ts`): CRUD para tabela `qa_bugs`
+
+### Geracao de Casos de Teste
+
+Para cada task do FORGE:
+
+- Complexidade baixa: 1-2 testes
+- Complexidade media: 3-4 testes
+- Complexidade alta: ate 5 testes
+
+Cada teste deve representar um fluxo real, usar usuario QA dedicado e validar comportamento observavel.
+
+### Formato Obrigatorio de BUG TASK
+
+```
+BUG: <titulo curto>
+PROJETO: <project_id>
+TASK DE ORIGEM: <task_id original do FORGE>
+CENARIO: ambiente, URL, usuario de teste
+PASSOS PARA REPRODUZIR: 1. ... 2. ... 3. ...
+RESULTADO ESPERADO: ...
+RESULTADO OBSERVADO: ...
+SEVERIDADE: blocker | high | medium | low
+REPRODUTIBILIDADE: sempre | intermitente | nao reproduzido
+EVIDENCIAS: screenshot, log
+IMPACTO AO USUARIO: descricao curta
+RECOMENDACAO: corrigir | investigar | ignorar
+```
+
+### Modelo de Dados
+
+**Tabela `qa_test_runs`:**
+- `id`, `forge_task_id`, `project_id`, `test_script_path`, `status` (passed/failed/error), `test_count`, `passed_count`, `failed_count`, `error_output`, `screenshots`, `console_logs`, `tokens_used`, `execution_time_ms`, `created_at`
+
+**Tabela `qa_bugs`:**
+- `id`, `forge_task_id`, `project_id`, `title`, `scenario`, `steps_to_reproduce`, `expected_result`, `observed_result`, `severity` (blocker/high/medium/low), `reproducibility` (always/intermittent/not_reproduced), `evidence_paths`, `impact`, `recommendation`, `status` (open/investigating/fixed/closed/wontfix), `created_at`, `updated_at`
+
+### Integracao
+
+- **runKairos**: `executeApprovedQA()` adicionado junto com forge/nexus/vector + auto-trigger apos FORGE SUCCESS
+- **Daily Briefing**: secao dedicada "Execucoes QA" com testes (total/passed/failed), bugs abertos e severidades
+- **KAIROS System Prompt**: `qa` adicionado a lista de agentes disponiveis
+- **State Compressor**: `qa` incluido em CONSTRAINTS
+- **Permissions**: `qa: ["test.generate", "test.execute", "bug.report"]`
+
+### Retroalimentacao
+
+- Todo bug vira BUG TASK
+- BUG TASK e enviada ao KAIROS via goal
+- KAIROS decide delegacao ao FORGE
+- QA nunca fala diretamente com o FORGE
+
+### Seguranca e Restricoes
+
+**QA PODE:**
+- Subir o sistema em ambiente isolado
+- Criar usuarios de teste (fake/sandbox)
+- Manter base de testes propria em `workspaces/qa/`
+- Gerar ate 5 casos de teste por task
+- Classificar bugs e reexecutar testes de regressao
+
+**QA NAO PODE:**
+- Alterar codigo do produto (`src/`, `app/`, `components/`)
+- Modificar arquivos versionados do produto
+- Corrigir bugs, fazer commit, merge ou deploy
+- Acessar producao ou usar dados reais
+- Decidir prioridade ou fechar bugs
+- Falar diretamente com o FORGE
+
+### Dependencia Externa
+
+- `playwright` como devDependency para execucao dos testes E2E
+
+### Variaveis de Ambiente
+
+- `QA_BASE_URL`: URL do app alvo (ex: http://localhost:3000)
+- `PLAYWRIGHT_HEADLESS`: modo headless (default: true)
+- `QA_MAX_TESTS_PER_TASK`: maximo de testes por task (default: 5)
+
+### Testes Unitarios Planejados
+
+- `execution/qaExecutor.test.ts`: geracao de testes via LLM mock, fluxo de bugs
+- `state/qaTests.test.ts`: CRUD da tabela `qa_test_runs`
+- `state/qaBugs.test.ts`: CRUD da tabela `qa_bugs`
+
+**Tabelas a criar:** `qa_test_runs`, `qa_bugs`
