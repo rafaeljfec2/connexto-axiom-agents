@@ -107,8 +107,16 @@ function parseFileChanges(
 
   for (const file of rawFiles) {
     const parsed = parseSingleFileChange(file);
-    if (!parsed) return null;
+    if (!parsed) {
+      logger.warn({ path: file.path }, "Skipping invalid file entry from LLM output");
+      continue;
+    }
     files.push(parsed);
+  }
+
+  if (files.length === 0) {
+    logger.error("All file entries were invalid in LLM output");
+    return null;
   }
 
   return files;
@@ -122,14 +130,19 @@ function parseEditsArray(
 
   for (const edit of rawEdits) {
     if (typeof edit.search !== "string" || edit.search.length === 0) {
-      logger.error({ path: filePath }, "Invalid search string in edit");
-      return null;
+      logger.warn({ path: filePath }, "Skipping edit with invalid search string");
+      continue;
     }
     if (typeof edit.replace !== "string") {
-      logger.error({ path: filePath }, "Invalid replace string in edit");
-      return null;
+      logger.warn({ path: filePath }, "Skipping edit with invalid replace string");
+      continue;
     }
     edits.push({ search: edit.search, replace: edit.replace });
+  }
+
+  if (edits.length === 0) {
+    logger.error({ path: filePath }, "All edits were invalid for file");
+    return null;
   }
 
   return edits;

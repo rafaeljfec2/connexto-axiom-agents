@@ -293,6 +293,14 @@ async function executeEditPhase(
   return { parsed, tokensUsed: usage.totalTokens };
 }
 
+interface CorrectionLoopState {
+  currentParsed: ForgeCodeOutput;
+  totalTokensUsed: number;
+  roundsUsed: number;
+  lastFailedFile: string;
+  consecutiveSearchFailures: number;
+}
+
 async function verifyAndCorrectLoop(
   ctx: ForgeAgentContext,
   initialParsed: ForgeCodeOutput,
@@ -301,139 +309,202 @@ async function verifyAndCorrectLoop(
   allowedDirs: readonly string[],
   previousTokens: number,
 ): Promise<CorrectionResult> {
-  const { projectId, workspacePath, maxCorrectionRounds } = ctx;
-  let currentParsed = initialParsed;
-  let totalTokensUsed = previousTokens;
-  let roundsUsed = 0;
+  const { maxCorrectionRounds } = ctx;
+  const state: CorrectionLoopState = {
+    currentParsed: initialParsed,
+    totalTokensUsed: previousTokens,
+    roundsUsed: 0,
+    lastFailedFile: "",
+    consecutiveSearchFailures: 0,
+  };
 
   for (let round = 0; round <= maxCorrectionRounds; round++) {
-    roundsUsed = round;
+    state.roundsUsed = round;
 
     const applyResult = await applyEditsToWorkspace(
-      currentParsed.files,
-      workspacePath,
+      state.currentParsed.files,
+      ctx.workspacePath,
     );
 
     if (!applyResult.success) {
-      logger.warn(
-        { projectId, round, error: applyResult.error },
-        "Edit application failed",
-      );
-
-      if (round >= maxCorrectionRounds) {
-        return {
-          success: false,
-          finalParsed: currentParsed,
-          totalTokensUsed,
-          correctionRoundsUsed: roundsUsed,
-          error: `Edit application failed: ${applyResult.error}`,
-        };
-      }
-
-      const currentState = await readModifiedFilesState(
-        currentParsed.files.map((f) => f.path),
-        workspacePath,
-      );
-
-      const correctionOutput = await executeCorrectionRound(
-        ctx,
-        plan,
-        `Edit application error: ${applyResult.error}`,
-        currentState,
-        fileTree,
-        allowedDirs,
-      );
-
-      totalTokensUsed += correctionOutput.tokensUsed;
-
-      if (!correctionOutput.parsed) {
-        return {
-          success: false,
-          finalParsed: currentParsed,
-          totalTokensUsed,
-          correctionRoundsUsed: roundsUsed,
-          error: "Correction round returned invalid output",
-        };
-      }
-
-      await restoreWorkspaceFiles(currentParsed.files, workspacePath);
-      currentParsed = correctionOutput.parsed;
+      const result = await handleApplyFailure(ctx, state, plan, applyResult, round, fileTree, allowedDirs);
+      if (result) return result;
       continue;
     }
 
-    const lintResult = await runLintCheck(
-      currentParsed.files.map((f) => f.path),
-      workspacePath,
-    );
+    state.lastFailedFile = "";
+    state.consecutiveSearchFailures = 0;
 
-    if (lintResult.success) {
-      logger.info(
-        { projectId, round, filesCount: currentParsed.files.length },
-        "FORGE agent loop - lint passed, edits verified",
-      );
-
-      return {
-        success: true,
-        finalParsed: currentParsed,
-        totalTokensUsed,
-        correctionRoundsUsed: roundsUsed,
-        lintOutput: lintResult.output,
-      };
-    }
-
-    logger.warn(
-      { projectId, round, lintPreview: lintResult.output.slice(0, 200) },
-      "Lint failed, attempting correction",
-    );
-
-    if (round >= maxCorrectionRounds) {
-      return {
-        success: false,
-        finalParsed: currentParsed,
-        totalTokensUsed,
-        correctionRoundsUsed: roundsUsed,
-        lintOutput: lintResult.output,
-        error: `Lint validation failed after ${round + 1} attempts`,
-      };
-    }
-
-    const currentState = await readModifiedFilesState(
-      currentParsed.files.map((f) => f.path),
-      workspacePath,
-    );
-
-    const correctionOutput = await executeCorrectionRound(
-      ctx,
-      plan,
-      lintResult.output,
-      currentState,
-      fileTree,
-      allowedDirs,
-    );
-
-    totalTokensUsed += correctionOutput.tokensUsed;
-
-    if (!correctionOutput.parsed) {
-      return {
-        success: false,
-        finalParsed: currentParsed,
-        totalTokensUsed,
-        correctionRoundsUsed: roundsUsed,
-        lintOutput: lintResult.output,
-        error: "Correction round returned invalid output",
-      };
-    }
-
-    currentParsed = correctionOutput.parsed;
+    const result = await handleApplySuccess(ctx, state, plan, round, fileTree, allowedDirs);
+    if (result) return result;
   }
 
+  return buildFailureResult(state, "Max correction rounds exhausted");
+}
+
+async function handleApplyFailure(
+  ctx: ForgeAgentContext,
+  state: CorrectionLoopState,
+  plan: ForgePlan,
+  applyResult: { readonly success: boolean; readonly error?: string },
+  round: number,
+  fileTree: string,
+  allowedDirs: readonly string[],
+): Promise<CorrectionResult | null> {
+  const failedFile = extractFailedFilePath(applyResult.error ?? "");
+  if (failedFile === state.lastFailedFile) {
+    state.consecutiveSearchFailures++;
+  } else {
+    state.consecutiveSearchFailures = 1;
+    state.lastFailedFile = failedFile;
+  }
+
+  logger.warn(
+    { projectId: ctx.projectId, round, consecutiveSearchFailures: state.consecutiveSearchFailures, failedFile },
+    "Edit application failed",
+  );
+
+  if (round >= ctx.maxCorrectionRounds || state.consecutiveSearchFailures >= 3) {
+    const reason = state.consecutiveSearchFailures >= 3
+      ? `Search string repeatedly not found in ${failedFile} (${state.consecutiveSearchFailures} times)`
+      : `Edit application failed: ${applyResult.error}`;
+    return buildFailureResult(state, reason);
+  }
+
+  const currentFileState = await readModifiedFilesState(
+    state.currentParsed.files.map((f) => f.path),
+    ctx.workspacePath,
+  );
+
+  const escalation = state.consecutiveSearchFailures >= 2
+    ? buildSearchFailureEscalation(failedFile, currentFileState)
+    : "";
+
+  const correctionOutput = await executeCorrectionRound(
+    ctx,
+    plan,
+    `Edit application error: ${applyResult.error}\n${escalation}`,
+    currentFileState,
+    fileTree,
+    allowedDirs,
+  );
+
+  state.totalTokensUsed += correctionOutput.tokensUsed;
+
+  if (!correctionOutput.parsed) {
+    return buildFailureResult(state, "Correction round returned invalid output");
+  }
+
+  await restoreWorkspaceFiles(state.currentParsed.files, ctx.workspacePath);
+  state.currentParsed = correctionOutput.parsed;
+  return null;
+}
+
+async function handleApplySuccess(
+  ctx: ForgeAgentContext,
+  state: CorrectionLoopState,
+  plan: ForgePlan,
+  round: number,
+  fileTree: string,
+  allowedDirs: readonly string[],
+): Promise<CorrectionResult | null> {
+  const lintResult = await runLintCheck(
+    state.currentParsed.files.map((f) => f.path),
+    ctx.workspacePath,
+  );
+
+  if (lintResult.success) {
+    logger.info(
+      { projectId: ctx.projectId, round, filesCount: state.currentParsed.files.length },
+      "FORGE agent loop - lint passed, edits verified",
+    );
+    return {
+      success: true,
+      finalParsed: state.currentParsed,
+      totalTokensUsed: state.totalTokensUsed,
+      correctionRoundsUsed: state.roundsUsed,
+      lintOutput: lintResult.output,
+    };
+  }
+
+  logger.warn(
+    { projectId: ctx.projectId, round, lintPreview: lintResult.output.slice(0, 200) },
+    "Lint failed, attempting correction",
+  );
+
+  if (round >= ctx.maxCorrectionRounds) {
+    return {
+      ...buildFailureResult(state, `Lint validation failed after ${round + 1} attempts`),
+      lintOutput: lintResult.output,
+    };
+  }
+
+  const currentFileState = await readModifiedFilesState(
+    state.currentParsed.files.map((f) => f.path),
+    ctx.workspacePath,
+  );
+
+  const correctionOutput = await executeCorrectionRound(
+    ctx,
+    plan,
+    lintResult.output,
+    currentFileState,
+    fileTree,
+    allowedDirs,
+  );
+
+  state.totalTokensUsed += correctionOutput.tokensUsed;
+
+  if (!correctionOutput.parsed) {
+    return {
+      ...buildFailureResult(state, "Correction round returned invalid output"),
+      lintOutput: lintResult.output,
+    };
+  }
+
+  state.currentParsed = correctionOutput.parsed;
+  return null;
+}
+
+function buildFailureResult(state: CorrectionLoopState, error: string): CorrectionResult {
   return {
     success: false,
-    finalParsed: currentParsed,
-    totalTokensUsed,
-    correctionRoundsUsed: roundsUsed,
-    error: "Max correction rounds exhausted",
+    finalParsed: state.currentParsed,
+    totalTokensUsed: state.totalTokensUsed,
+    correctionRoundsUsed: state.roundsUsed,
+    error,
   };
+}
+
+function extractFailedFilePath(error: string): string {
+  const match = /not found in ([^:]+):/.exec(error);
+  return match ? match[1] : "";
+}
+
+function buildSearchFailureEscalation(
+  failedFile: string,
+  currentState: readonly { readonly path: string; readonly content: string }[],
+): string {
+  const file = currentState.find((f) => f.path === failedFile);
+  if (!file) return "";
+
+  const first80Lines = file.content.split("\n").slice(0, 80).join("\n");
+
+  return [
+    "",
+    "=== ALERTA: ERRO REPETIDO ===",
+    `O arquivo ${failedFile} ja falhou na busca de search strings MULTIPLAS VEZES.`,
+    "Voce esta gerando search strings que NAO existem neste arquivo.",
+    "PARE de inventar conteudo. Aqui estao as primeiras 80 linhas REAIS do arquivo:",
+    "",
+    first80Lines,
+    "",
+    "INSTRUCOES OBRIGATORIAS:",
+    "- Copie EXATAMENTE linhas do conteudo acima para o campo 'search'.",
+    "- Se este arquivo NAO precisa ser alterado para a tarefa, REMOVA-O da lista de files.",
+    "- Considere se voce esta editando o ARQUIVO CORRETO para esta tarefa.",
+    "=== FIM DO ALERTA ===",
+  ].join("\n");
 }
 
 async function executeCorrectionRound(

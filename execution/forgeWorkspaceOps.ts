@@ -25,9 +25,13 @@ export async function applyEditsToWorkspace(
         for (const edit of file.edits) {
           const result = applyOneEdit(content, edit.search, edit.replace, file.path);
           if (result === null) {
+            const snippet = buildFileSnippetForError(content, edit.search);
             return {
               success: false,
-              error: `Search string not found in ${file.path}: "${edit.search.slice(0, 100)}..."`,
+              error: [
+                `Search string not found in ${file.path}: "${edit.search.slice(0, 100)}..."`,
+                snippet,
+              ].join("\n"),
             };
           }
           content = result;
@@ -43,6 +47,44 @@ export async function applyEditsToWorkspace(
     const message = error instanceof Error ? error.message : String(error);
     return { success: false, error: message };
   }
+}
+
+function buildFileSnippetForError(fileContent: string, failedSearch: string): string {
+  const MAX_SNIPPET_CHARS = 1500;
+  const lines = fileContent.split("\n");
+
+  const searchFirstLine = failedSearch.split("\n")[0].trim().toLowerCase();
+  let bestLineIdx = -1;
+  let bestScore = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const lineLower = lines[i].trim().toLowerCase();
+    if (lineLower.length === 0) continue;
+
+    const words = searchFirstLine.split(/\s+/).filter((w) => w.length > 2);
+    const matchCount = words.filter((w) => lineLower.includes(w)).length;
+
+    if (matchCount > bestScore) {
+      bestScore = matchCount;
+      bestLineIdx = i;
+    }
+  }
+
+  if (bestLineIdx >= 0 && bestScore >= 2) {
+    const start = Math.max(0, bestLineIdx - 5);
+    const end = Math.min(lines.length, bestLineIdx + 15);
+    const snippet = lines
+      .slice(start, end)
+      .map((l, idx) => `${start + idx + 1}| ${l}`)
+      .join("\n");
+    return `TRECHO RELEVANTE DO ARQUIVO (linhas ${start + 1}-${end}):\n${snippet.slice(0, MAX_SNIPPET_CHARS)}`;
+  }
+
+  const snippet = lines
+    .slice(0, 40)
+    .map((l, idx) => `${idx + 1}| ${l}`)
+    .join("\n");
+  return `INICIO DO ARQUIVO (primeiras 40 linhas):\n${snippet.slice(0, MAX_SNIPPET_CHARS)}`;
 }
 
 export async function restoreWorkspaceFiles(
@@ -128,6 +170,14 @@ async function runEslintFix(
   }
 }
 
+function stripNpmWarnings(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => !line.startsWith("npm warn") && !line.startsWith("npm WARN"))
+    .join("\n")
+    .trim();
+}
+
 async function runEslintCheck(
   execFileAsync: ExecFileAsync,
   files: readonly string[],
@@ -140,13 +190,16 @@ async function runEslintCheck(
       ["eslint", ...files, "--no-error-on-unmatched-pattern"],
       { cwd: workspacePath, timeout: timeoutMs },
     );
-    return { success: true, output: `[eslint] ${stdout}${stderr}` };
+    const cleaned = stripNpmWarnings(`${stdout}${stderr}`);
+    return { success: true, output: `[eslint] ${cleaned}` };
   } catch (error) {
     const execError = error as { stdout?: string; stderr?: string; message?: string };
-    return {
-      success: false,
-      output: `[eslint FAIL] ${execError.stdout ?? ""}${execError.stderr ?? execError.message ?? ""}`,
-    };
+    const raw = `${execError.stdout ?? ""}${execError.stderr ?? execError.message ?? ""}`;
+    const cleaned = stripNpmWarnings(raw);
+    if (cleaned.length === 0) {
+      return { success: true, output: "[eslint] OK (warnings only)" };
+    }
+    return { success: false, output: `[eslint FAIL] ${cleaned}` };
   }
 }
 
@@ -161,13 +214,16 @@ async function runTscCheck(
       ["tsc", "--noEmit"],
       { cwd: workspacePath, timeout: timeoutMs },
     );
-    return { success: true, output: `[tsc] ${stdout}${stderr}` };
+    const cleaned = stripNpmWarnings(`${stdout}${stderr}`);
+    return { success: true, output: `[tsc] ${cleaned}` };
   } catch (error) {
     const execError = error as { stdout?: string; stderr?: string; message?: string };
-    return {
-      success: false,
-      output: `[tsc FAIL] ${execError.stdout ?? ""}${execError.stderr ?? execError.message ?? ""}`,
-    };
+    const raw = `${execError.stdout ?? ""}${execError.stderr ?? execError.message ?? ""}`;
+    const cleaned = stripNpmWarnings(raw);
+    if (cleaned.length === 0) {
+      return { success: true, output: "[tsc] OK (warnings only)" };
+    }
+    return { success: false, output: `[tsc FAIL] ${cleaned}` };
   }
 }
 
