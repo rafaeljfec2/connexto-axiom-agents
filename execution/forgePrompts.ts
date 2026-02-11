@@ -38,14 +38,35 @@ export function buildPlanningUserPrompt(
   delegation: KairosDelegation,
   fileTree: string,
   allowedDirs: readonly string[],
+  previewFiles: readonly FileContext[] = [],
 ): string {
-  return [
+  const lines = [
     `Tarefa: ${delegation.task}`,
     `Resultado esperado: ${delegation.expected_output}`,
     `Goal ID: ${delegation.goal_id}`,
     "",
+  ];
+
+  if (previewFiles.length > 0) {
+    lines.push("PREVIEW DE ARQUIVOS MAIS RELEVANTES:");
+    for (const file of previewFiles) {
+      lines.push(
+        `--- ${file.path} (score: ${file.score}) ---`,
+        file.content,
+        "--- end ---",
+        "",
+      );
+    }
+    lines.push(
+      "Use o preview acima para decidir se estes arquivos sao relevantes para a tarefa.",
+      "Se a tarefa JA esta implementada no codigo mostrado, defina files_to_modify como VAZIO [].",
+      "",
+    );
+  }
+
+  lines.push(
     "ESTRUTURA DO PROJETO:",
-    fileTree.slice(0, 4000),
+    fileTree.slice(0, previewFiles.length > 0 ? 3000 : 4000),
     "",
     `Diretorios permitidos para escrita: ${allowedDirs.join(", ")}`,
     "",
@@ -53,7 +74,9 @@ export function buildPlanningUserPrompt(
     "Identifique quais arquivos voce precisa LER para entender o contexto,",
     "e quais arquivos precisa MODIFICAR ou CRIAR.",
     "Responda APENAS com JSON puro.",
-  ].join("\n");
+  );
+
+  return lines.join("\n");
 }
 
 export function buildExecutionSystemPrompt(
@@ -121,6 +144,8 @@ export function buildExecutionUserPrompt(
   contextFiles: readonly FileContext[],
   fileTree: string,
   allowedDirs: readonly string[],
+  aliasInfo: string = "",
+  preExistingErrors: string = "",
 ): string {
   const contextBlocks = contextFiles.map(
     (f) => `--- ${f.path} ---\n${f.content}\n--- end ---`,
@@ -128,6 +153,19 @@ export function buildExecutionUserPrompt(
 
   const contextSection = contextBlocks.length > 0
     ? ["", "CODIGO REAL DO PROJETO:", ...contextBlocks, ""].join("\n")
+    : "";
+
+  const aliasSection = aliasInfo.length > 0 ? `\n${aliasInfo}\n` : "";
+
+  const preExistingSection = preExistingErrors.length > 0
+    ? [
+        "",
+        "ERROS PRE-EXISTENTES (NAO CORRIGIR):",
+        "Os erros abaixo ja existiam antes da sua alteracao. NAO tente corrigi-los.",
+        "Seu objetivo e apenas completar a tarefa sem introduzir NOVOS erros.",
+        preExistingErrors,
+        "",
+      ].join("\n")
     : "";
 
   return [
@@ -148,7 +186,9 @@ export function buildExecutionUserPrompt(
     fileTree.slice(0, 3000),
     "",
     `Diretorios permitidos: ${allowedDirs.join(", ")}`,
+    aliasSection,
     contextSection,
+    preExistingSection,
     "REGRAS OBRIGATORIAS:",
     "1. Responda APENAS com JSON puro, sem markdown, sem explicacoes.",
     "2. ANTES DE GERAR EDITS: verifique se a mudanca JA FOI FEITA no codigo mostrado.",
@@ -163,6 +203,12 @@ export function buildExecutionUserPrompt(
     '9. Cada arquivo com action "modify" DEVE ter pelo menos um edit com search e replace.',
     "10. Foque APENAS na mudanca minima necessaria. Nao faca mudancas extras.",
     "11. Se um arquivo NAO precisa ser alterado para cumprir a tarefa, NAO o inclua.",
+    aliasInfo.length > 0
+      ? "12. Use os import aliases do projeto ao inves de caminhos relativos longos."
+      : "",
+    preExistingErrors.length > 0
+      ? "13. IGNORE erros pre-existentes listados acima. Corrija apenas erros que VOCE introduzir."
+      : "",
   ].join("\n");
 }
 

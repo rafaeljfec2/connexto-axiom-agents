@@ -9,8 +9,11 @@ import {
   discoverProjectStructure,
   findRelevantFiles,
   readFileContents,
+  expandContextWithImports,
+  globSearch,
+  extractKeywords,
 } from "./fileDiscovery.js";
-import type { FileContext } from "./fileDiscovery.js";
+import type { FileContext, ProjectStructure } from "./fileDiscovery.js";
 import { parseCodeOutput, parsePlanningOutput, buildFallbackPlan } from "./forgeOutputParser.js";
 import {
   buildPlanningSystemPrompt,
@@ -19,6 +22,9 @@ import {
   buildExecutionUserPrompt,
   buildCorrectionUserPrompt,
 } from "./forgePrompts.js";
+import { getFrameworkDiscoveryRules, getContextualPatternsForTask } from "./frameworkRules.js";
+import { readProjectConfig, formatAliasesForPrompt } from "./projectConfigReader.js";
+import type { ProjectConfig } from "./projectConfigReader.js";
 import type {
   ForgeAgentContext,
   ForgeAgentResult,
@@ -50,6 +56,13 @@ export { loadForgeAgentConfig } from "./forgeTypes.js";
 export { parsePlanningOutput, parseCodeOutput } from "./forgeOutputParser.js";
 export { readModifiedFilesState } from "./forgeWorkspaceOps.js";
 
+const MIN_REMAINING_CHARS_FOR_EXPANSION = 2000;
+const PREVIEW_MAX_FILES = 3;
+const PREVIEW_MAX_CHARS = 4000;
+const PREVIEW_MIN_AVAILABLE = 200;
+const PRE_EXISTING_ERRORS_MAX_CHARS = 1500;
+const ESCALATION_LINES = 80;
+
 export async function runForgeAgentLoop(
   ctx: ForgeAgentContext,
 ): Promise<ForgeAgentResult> {
@@ -63,12 +76,25 @@ export async function runForgeAgentLoop(
   const structure = await discoverProjectStructure(workspacePath);
   const fileTree = structure.tree;
 
+  const projectConfig = await readProjectConfig(workspacePath);
+
+  let previewFiles: readonly FileContext[] = [];
+  if (ctx.enablePlanningPreview) {
+    previewFiles = await buildPlanningPreview(ctx, structure);
+  }
+
   logger.info(
-    { projectId, totalFiles: structure.totalFiles, task: delegation.task.slice(0, 80) },
+    {
+      projectId,
+      totalFiles: structure.totalFiles,
+      previewFiles: previewFiles.length,
+      aliases: projectConfig.importAliases.size,
+      task: delegation.task.slice(0, 80),
+    },
     "FORGE agent loop starting - Phase 1: Planning",
   );
 
-  const planResult = await executePlanningPhase(ctx, fileTree, allowedDirs);
+  const planResult = await executePlanningPhase(ctx, fileTree, allowedDirs, previewFiles);
   totalTokensUsed += planResult.tokensUsed;
   phasesCompleted = 1;
 
@@ -92,10 +118,18 @@ export async function runForgeAgentLoop(
     "FORGE agent loop - Phase 1 complete, loading context",
   );
 
-  const contextFiles = await loadContextFiles(ctx, planResult.plan);
+  const contextFiles = await loadContextFiles(ctx, planResult.plan, structure);
+
+  let preExistingErrors = "";
+  if (ctx.enablePreLintCheck) {
+    preExistingErrors = await getPreExistingErrors(
+      planResult.plan.filesToModify,
+      workspacePath,
+    );
+  }
 
   logger.info(
-    { projectId, contextFiles: contextFiles.length },
+    { projectId, contextFiles: contextFiles.length, hasPreExistingErrors: preExistingErrors.length > 0 },
     "FORGE agent loop - Phase 2: Execution",
   );
 
@@ -105,6 +139,8 @@ export async function runForgeAgentLoop(
     contextFiles,
     fileTree,
     allowedDirs,
+    projectConfig,
+    preExistingErrors,
   );
   totalTokensUsed += editResult.tokensUsed;
   phasesCompleted = 2;
@@ -160,103 +196,233 @@ export async function runForgeAgentLoop(
   };
 }
 
-async function executePlanningPhase(
+async function buildPlanningPreview(
   ctx: ForgeAgentContext,
-  fileTree: string,
-  allowedDirs: readonly string[],
-): Promise<PlanningResult> {
-  const { db, delegation, projectId, project } = ctx;
-  const systemPrompt = buildPlanningSystemPrompt(project.language, project.framework);
-  const userPrompt = buildPlanningUserPrompt(delegation, fileTree, allowedDirs);
+  _structure: ProjectStructure,
+): Promise<readonly FileContext[]> {
+  const preview = await findRelevantFiles(
+    ctx.workspacePath,
+    ctx.delegation.task,
+    PREVIEW_MAX_FILES,
+  );
 
+  let usedChars = 0;
+  const limited: FileContext[] = [];
+  for (const file of preview) {
+    const available = PREVIEW_MAX_CHARS - usedChars;
+    if (available <= PREVIEW_MIN_AVAILABLE) break;
+
+    const trimmed = file.content.length > available
+      ? file.content.slice(0, available) + "\n// ... truncated ..."
+      : file.content;
+
+    limited.push({ path: file.path, content: trimmed, score: file.score });
+    usedChars += trimmed.length;
+  }
+
+  return limited;
+}
+
+async function getPreExistingErrors(
+  filePaths: readonly string[],
+  workspacePath: string,
+): Promise<string> {
+  const lintableFiles = filePaths.filter(
+    (f) => f.endsWith(".ts") || f.endsWith(".tsx") || f.endsWith(".js") || f.endsWith(".jsx"),
+  );
+  if (lintableFiles.length === 0) return "";
+
+  try {
+    const { execFile: execFileFn } = await import("node:child_process");
+    const { promisify: promisifyFn } = await import("node:util");
+    const execFileAsync = promisifyFn(execFileFn);
+
+    const { stdout, stderr } = await execFileAsync(
+      "npx",
+      ["tsc", "--noEmit"],
+      { cwd: workspacePath, timeout: 30_000 },
+    );
+
+    const output = `${stdout}${stderr}`.trim();
+    if (output.length === 0) return "";
+
+    const relevantErrors = filterErrorsForFiles(output, lintableFiles);
+    if (relevantErrors.length === 0) return "";
+
+    logger.debug(
+      { errorCount: relevantErrors.length },
+      "Pre-existing TypeScript errors detected",
+    );
+
+    return relevantErrors.join("\n").slice(0, PRE_EXISTING_ERRORS_MAX_CHARS);
+  } catch (error) {
+    const execError = error as { stdout?: string; stderr?: string };
+    const raw = `${execError.stdout ?? ""}${execError.stderr ?? ""}`.trim();
+    if (raw.length === 0) return "";
+
+    const relevantErrors = filterErrorsForFiles(raw, lintableFiles);
+    return relevantErrors.join("\n").slice(0, PRE_EXISTING_ERRORS_MAX_CHARS);
+  }
+}
+
+function filterErrorsForFiles(output: string, filePaths: readonly string[]): readonly string[] {
+  const lines = output.split("\n");
+  return lines.filter((line) =>
+    filePaths.some((fp) => line.includes(fp)),
+  );
+}
+
+interface LlmCallResult {
+  readonly text: string;
+  readonly tokensUsed: number;
+}
+
+async function callLlmWithAudit(
+  ctx: ForgeAgentContext,
+  systemPrompt: string,
+  userPrompt: string,
+  actionLabel: string,
+): Promise<LlmCallResult | null> {
   const response = await callOpenClaw({
     agentId: "forge",
     prompt: userPrompt,
     systemPrompt,
   });
 
-  if (response.status === "failed") {
-    return { plan: null, tokensUsed: 0 };
-  }
+  if (response.status === "failed") return null;
 
   const usage = resolveUsage(response.usage, response.text, userPrompt);
-  recordForgeUsage(db, delegation.goal_id, usage);
+  recordForgeUsage(ctx.db, ctx.delegation.goal_id, usage);
 
-  logAudit(db, {
+  logAudit(ctx.db, {
     agent: "forge",
-    action: `planning: ${delegation.task.slice(0, 80)}`,
+    action: `${actionLabel}: ${ctx.delegation.task.slice(0, 80)}`,
     inputHash: hashContent(userPrompt),
     outputHash: hashContent(response.text),
     sanitizerWarnings: [],
     runtime: "openclaw",
   });
 
-  const plan = parsePlanningOutput(response.text);
+  return { text: response.text, tokensUsed: usage.totalTokens };
+}
+
+async function executePlanningPhase(
+  ctx: ForgeAgentContext,
+  fileTree: string,
+  allowedDirs: readonly string[],
+  previewFiles: readonly FileContext[] = [],
+): Promise<PlanningResult> {
+  const systemPrompt = buildPlanningSystemPrompt(ctx.project.language, ctx.project.framework);
+  const userPrompt = buildPlanningUserPrompt(ctx.delegation, fileTree, allowedDirs, previewFiles);
+
+  const result = await callLlmWithAudit(ctx, systemPrompt, userPrompt, "planning");
+  if (!result) return { plan: null, tokensUsed: 0 };
+
+  const plan = parsePlanningOutput(result.text);
 
   if (!plan) {
-    logger.warn({ projectId }, "Planning phase returned invalid JSON, using fallback plan");
-    return {
-      plan: buildFallbackPlan(delegation),
-      tokensUsed: usage.totalTokens,
-    };
+    logger.warn({ projectId: ctx.projectId }, "Planning phase returned invalid JSON, using fallback plan");
+    return { plan: buildFallbackPlan(ctx.delegation), tokensUsed: result.tokensUsed };
   }
 
-  return { plan, tokensUsed: usage.totalTokens };
+  return { plan, tokensUsed: result.tokensUsed };
 }
 
 async function loadContextFiles(
   ctx: ForgeAgentContext,
   plan: ForgePlan,
+  structure: ProjectStructure,
 ): Promise<readonly FileContext[]> {
   const { workspacePath, delegation } = ctx;
   const config = loadForgeAgentConfig();
 
-  const llmRequestedFiles = [
-    ...plan.filesToRead,
-    ...plan.filesToModify,
-  ];
-  const uniqueRequested = [...new Set(llmRequestedFiles)];
+  const requestedFiles = await buildRequestedFileList(ctx, plan);
+  const uniqueRequested = [...new Set(requestedFiles)];
 
-  const llmFiles = await readFileContents(
-    workspacePath,
-    uniqueRequested,
-    config.contextMaxChars,
+  const llmFiles = await readFileContents(workspacePath, uniqueRequested, config.contextMaxChars);
+  const allFilePaths = new Set(structure.files.map((f) => f.relativePath));
+  const loadedPaths = new Set(llmFiles.map((f) => f.path));
+  let totalCharsUsed = llmFiles.reduce((sum, f) => sum + f.content.length, 0);
+
+  const importExpandedFiles = await tryExpandImports(ctx, llmFiles, allFilePaths, config.contextMaxChars - totalCharsUsed);
+  totalCharsUsed += importExpandedFiles.reduce((s, f) => s + f.content.length, 0);
+  for (const f of importExpandedFiles) loadedPaths.add(f.path);
+
+  const discoveredFiles = await discoverRemainingFiles(
+    workspacePath, delegation.task, config.maxContextFiles, loadedPaths, config.contextMaxChars - totalCharsUsed,
   );
 
-  const llmFilePaths = new Set(llmFiles.map((f) => f.path));
-  const remainingChars = config.contextMaxChars - llmFiles.reduce(
-    (sum, f) => sum + f.content.length, 0,
-  );
-
-  let discoveredFiles: readonly FileContext[] = [];
-  if (remainingChars > 2000) {
-    const allDiscovered = await findRelevantFiles(workspacePath, delegation.task);
-    discoveredFiles = allDiscovered.filter((f) => !llmFilePaths.has(f.path));
-
-    let usedChars = 0;
-    const filtered: FileContext[] = [];
-    for (const file of discoveredFiles) {
-      if (usedChars + file.content.length > remainingChars) break;
-      filtered.push(file);
-      usedChars += file.content.length;
-    }
-    discoveredFiles = filtered;
-  }
-
-  const merged = [...llmFiles, ...discoveredFiles];
+  const merged = [...llmFiles, ...importExpandedFiles, ...discoveredFiles];
 
   logger.info(
     {
       llmRequested: uniqueRequested.length,
       llmLoaded: llmFiles.length,
+      importExpanded: importExpandedFiles.length,
       discoveryAdded: discoveredFiles.length,
       totalContext: merged.length,
       totalChars: merged.reduce((s, f) => s + f.content.length, 0),
     },
-    "Context files loaded (LLM-guided + auto-discovery)",
+    "Context files loaded (LLM-guided + imports + discovery)",
   );
 
   return merged;
+}
+
+async function buildRequestedFileList(
+  ctx: ForgeAgentContext,
+  plan: ForgePlan,
+): Promise<readonly string[]> {
+  const files = [...plan.filesToRead, ...plan.filesToModify];
+
+  if (!ctx.enableFrameworkRules) return files;
+
+  const keywords = extractKeywords(ctx.delegation.task);
+  const rules = getFrameworkDiscoveryRules(ctx.project.framework);
+  const contextualPatterns = getContextualPatternsForTask(rules, keywords);
+
+  if (contextualPatterns.length === 0) return files;
+
+  const frameworkFiles = await globSearch(ctx.workspacePath, contextualPatterns);
+  for (const fp of frameworkFiles) {
+    if (!files.includes(fp)) files.push(fp);
+  }
+
+  return files;
+}
+
+async function tryExpandImports(
+  ctx: ForgeAgentContext,
+  llmFiles: readonly FileContext[],
+  allFilePaths: ReadonlySet<string>,
+  remainingChars: number,
+): Promise<readonly FileContext[]> {
+  if (!ctx.enableImportExpansion || remainingChars <= MIN_REMAINING_CHARS_FOR_EXPANSION) return [];
+
+  return expandContextWithImports(ctx.workspacePath, llmFiles, allFilePaths, remainingChars);
+}
+
+async function discoverRemainingFiles(
+  workspacePath: string,
+  task: string,
+  maxFiles: number,
+  loadedPaths: ReadonlySet<string>,
+  remainingChars: number,
+): Promise<readonly FileContext[]> {
+  if (remainingChars <= MIN_REMAINING_CHARS_FOR_EXPANSION) return [];
+
+  const allDiscovered = await findRelevantFiles(workspacePath, task, maxFiles);
+  const unloaded = allDiscovered.filter((f) => !loadedPaths.has(f.path));
+
+  let usedChars = 0;
+  const filtered: FileContext[] = [];
+  for (const file of unloaded) {
+    if (usedChars + file.content.length > remainingChars) break;
+    filtered.push(file);
+    usedChars += file.content.length;
+  }
+
+  return filtered;
 }
 
 async function executeEditPhase(
@@ -265,46 +431,21 @@ async function executeEditPhase(
   contextFiles: readonly FileContext[],
   fileTree: string,
   allowedDirs: readonly string[],
+  projectConfig: ProjectConfig,
+  preExistingErrors: string = "",
 ): Promise<EditResult> {
-  const { db, delegation, project } = ctx;
+  const aliasInfo = formatAliasesForPrompt(projectConfig);
 
-  const systemPrompt = buildExecutionSystemPrompt(
-    project.language,
-    project.framework,
-    allowedDirs,
-  );
+  const systemPrompt = buildExecutionSystemPrompt(ctx.project.language, ctx.project.framework, allowedDirs);
   const userPrompt = buildExecutionUserPrompt(
-    delegation,
-    plan,
-    contextFiles,
-    fileTree,
-    allowedDirs,
+    ctx.delegation, plan, contextFiles, fileTree, allowedDirs, aliasInfo, preExistingErrors,
   );
 
-  const response = await callOpenClaw({
-    agentId: "forge",
-    prompt: userPrompt,
-    systemPrompt,
-  });
+  const result = await callLlmWithAudit(ctx, systemPrompt, userPrompt, "execution");
+  if (!result) return { parsed: null, tokensUsed: 0 };
 
-  if (response.status === "failed") {
-    return { parsed: null, tokensUsed: 0 };
-  }
-
-  const usage = resolveUsage(response.usage, response.text, userPrompt);
-  recordForgeUsage(db, delegation.goal_id, usage);
-
-  logAudit(db, {
-    agent: "forge",
-    action: `execution: ${delegation.task.slice(0, 80)}`,
-    inputHash: hashContent(userPrompt),
-    outputHash: hashContent(response.text),
-    sanitizerWarnings: [],
-    runtime: "openclaw",
-  });
-
-  const parsed = parseCodeOutput(response.text);
-  return { parsed, tokensUsed: usage.totalTokens };
+  const parsed = parseCodeOutput(result.text);
+  return { parsed, tokensUsed: result.tokensUsed };
 }
 
 interface CorrectionLoopState {
@@ -508,7 +649,7 @@ function buildSearchFailureEscalation(
   const file = currentState.find((f) => f.path === failedFile);
   if (!file) return "";
 
-  const first80Lines = file.content.split("\n").slice(0, 80).join("\n");
+  const first80Lines = file.content.split("\n").slice(0, ESCALATION_LINES).join("\n");
 
   return [
     "",
@@ -535,46 +676,16 @@ async function executeCorrectionRound(
   fileTree: string,
   allowedDirs: readonly string[],
 ): Promise<CorrectionRoundResult> {
-  const { db, delegation, project } = ctx;
-
-  const systemPrompt = buildExecutionSystemPrompt(
-    project.language,
-    project.framework,
-    allowedDirs,
-  );
+  const systemPrompt = buildExecutionSystemPrompt(ctx.project.language, ctx.project.framework, allowedDirs);
   const userPrompt = buildCorrectionUserPrompt(
-    delegation,
-    plan,
-    errorOutput,
-    currentFilesState,
-    fileTree,
-    allowedDirs,
+    ctx.delegation, plan, errorOutput, currentFilesState, fileTree, allowedDirs,
   );
 
-  const response = await callOpenClaw({
-    agentId: "forge",
-    prompt: userPrompt,
-    systemPrompt,
-  });
+  const result = await callLlmWithAudit(ctx, systemPrompt, userPrompt, "correction");
+  if (!result) return { parsed: null, tokensUsed: 0 };
 
-  if (response.status === "failed") {
-    return { parsed: null, tokensUsed: 0 };
-  }
-
-  const usage = resolveUsage(response.usage, response.text, userPrompt);
-  recordForgeUsage(db, delegation.goal_id, usage);
-
-  logAudit(db, {
-    agent: "forge",
-    action: `correction: ${delegation.task.slice(0, 80)}`,
-    inputHash: hashContent(userPrompt),
-    outputHash: hashContent(response.text),
-    sanitizerWarnings: [],
-    runtime: "openclaw",
-  });
-
-  const parsed = parseCodeOutput(response.text);
-  return { parsed, tokensUsed: usage.totalTokens };
+  const parsed = parseCodeOutput(result.text);
+  return { parsed, tokensUsed: result.tokensUsed };
 }
 
 function resolveUsage(

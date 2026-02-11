@@ -340,6 +340,12 @@ describe("forgeAgentLoop", () => {
       assert.equal(config.contextMaxChars, 20_000);
       assert.equal(config.runBuild, true);
       assert.equal(config.buildTimeout, 120_000);
+      assert.equal(config.maxContextFiles, 8);
+      assert.equal(config.enableRipgrep, true);
+      assert.equal(config.enablePlanningPreview, true);
+      assert.equal(config.enableImportExpansion, true);
+      assert.equal(config.enableFrameworkRules, true);
+      assert.equal(config.enablePreLintCheck, true);
     });
   });
 

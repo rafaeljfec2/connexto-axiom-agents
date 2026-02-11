@@ -9,4 +9,10 @@ export interface ForgeAgentConfig extends AgentConfig {
   readonly contextMaxChars: number;
   readonly runBuild: boolean;
   readonly buildTimeout: number;
+  readonly maxContextFiles: number;
+  readonly enableRipgrep: boolean;
+  readonly enablePlanningPreview: boolean;
+  readonly enableImportExpansion: boolean;
+  readonly enableFrameworkRules: boolean;
+  readonly enablePreLintCheck: boolean;
 }

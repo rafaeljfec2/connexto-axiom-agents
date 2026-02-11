@@ -109,6 +109,12 @@ async function executeWithAgentLoop(
     maxCorrectionRounds: agentConfig.maxCorrectionRounds,
     runBuild: agentConfig.runBuild,
     buildTimeout: agentConfig.buildTimeout,
+    maxContextFiles: agentConfig.maxContextFiles,
+    enableRipgrep: agentConfig.enableRipgrep,
+    enablePlanningPreview: agentConfig.enablePlanningPreview,
+    enableImportExpansion: agentConfig.enableImportExpansion,
+    enableFrameworkRules: agentConfig.enableFrameworkRules,
+    enablePreLintCheck: agentConfig.enablePreLintCheck,
   });
 
   logger.info(

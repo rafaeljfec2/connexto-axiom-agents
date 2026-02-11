@@ -1,7 +1,6 @@
 import type BetterSqlite3 from "better-sqlite3";
 import type { KairosDelegation } from "../orchestration/types.js";
 import type { FileChange } from "./projectSecurity.js";
-import { config as forgeConfig } from "../agents/forge/config.js";
 
 export const CHARS_PER_TOKEN_ESTIMATE = 4;
 export const MAX_LINT_ERROR_CHARS = 2000;
@@ -19,6 +18,12 @@ export interface ForgeAgentContext {
   readonly maxCorrectionRounds: number;
   readonly runBuild: boolean;
   readonly buildTimeout: number;
+  readonly maxContextFiles: number;
+  readonly enableRipgrep: boolean;
+  readonly enablePlanningPreview: boolean;
+  readonly enableImportExpansion: boolean;
+  readonly enableFrameworkRules: boolean;
+  readonly enablePreLintCheck: boolean;
 }
 
 export interface ForgePlan {
@@ -76,13 +81,12 @@ export interface ForgeExecutionConfig {
   readonly contextMaxChars: number;
   readonly runBuild: boolean;
   readonly buildTimeout: number;
+  readonly maxContextFiles: number;
+  readonly enableRipgrep: boolean;
+  readonly enablePlanningPreview: boolean;
+  readonly enableImportExpansion: boolean;
+  readonly enableFrameworkRules: boolean;
+  readonly enablePreLintCheck: boolean;
 }
 
-export function loadForgeAgentConfig(): ForgeExecutionConfig {
-  return {
-    maxCorrectionRounds: forgeConfig.maxCorrectionRounds,
-    contextMaxChars: forgeConfig.contextMaxChars,
-    runBuild: forgeConfig.runBuild,
-    buildTimeout: forgeConfig.buildTimeout,
-  };
-}
+export { loadForgeAgentConfig } from "./forgeConfigLoader.js";

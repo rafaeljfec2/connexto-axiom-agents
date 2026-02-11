@@ -8,4 +8,10 @@ export const config: ForgeAgentConfig = {
   contextMaxChars: 20_000,
   runBuild: true,
   buildTimeout: 120_000,
+  maxContextFiles: 8,
+  enableRipgrep: true,
+  enablePlanningPreview: true,
+  enableImportExpansion: true,
+  enableFrameworkRules: true,
+  enablePreLintCheck: true,
 };

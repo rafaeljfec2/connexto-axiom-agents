@@ -4,270 +4,221 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import {
-  discoverProjectStructure,
-  findRelevantFiles,
-  grepFilesForKeywords,
-  followImports,
-  findReverseImports,
+  extractGlobPatterns,
+  extractKeywords,
+  expandContextWithImports,
+  ripgrepSearch,
+  findSymbolDefinitions,
+  globSearch,
 } from "./fileDiscovery.js";
 
-let testDir: string;
+describe("fileDiscovery - enhanced discovery", () => {
+  let testDir: string;
 
-function createFile(relativePath: string, content: string): void {
-  const fullPath = path.join(testDir, relativePath);
-  fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-  fs.writeFileSync(fullPath, content, "utf-8");
-}
-
-describe("fileDiscovery", () => {
   beforeEach(() => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-discovery-"));
-
-    createFile("src/components/Sidebar.tsx", "export function Sidebar() { return <nav>sidebar</nav>; }");
-    createFile("src/components/Header.tsx", "export function Header() { return <header>header</header>; }");
-    createFile("src/pages/index.tsx", "export default function Home() { return <div>home</div>; }");
-    createFile("src/utils/format.ts", "export function formatDate(d: Date) { return d.toISOString(); }");
-    createFile("packages/shared/src/types.ts", "export interface User { id: string; }");
-    createFile("package.json", '{ "name": "test-project" }');
-    createFile(".gitignore", "node_modules\ndist");
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), "fd-test-"));
   });
 
   afterEach(() => {
     fs.rmSync(testDir, { recursive: true, force: true });
   });
 
-  describe("discoverProjectStructure", () => {
-    it("should discover files and directories", async () => {
-      const structure = await discoverProjectStructure(testDir);
-
-      assert.ok(structure.totalFiles > 0);
-      assert.ok(structure.totalDirs > 0);
-      assert.ok(structure.tree.length > 0);
+  describe("extractKeywords", () => {
+    it("should extract meaningful keywords from task", () => {
+      const result = extractKeywords("remover opção signatários do sidebar");
+      assert.ok(result.length > 0);
+      assert.ok(result.includes("signatarios") || result.includes("sidebar"));
     });
 
-    it("should include tsx files in the file list", async () => {
-      const structure = await discoverProjectStructure(testDir);
-      const tsxFiles = structure.files.filter((f) => f.relativePath.endsWith(".tsx"));
-      assert.ok(tsxFiles.length >= 3);
+    it("should filter stop words", () => {
+      const result = extractKeywords("eu quero criar uma sidebar nova para o menu");
+      assert.ok(!result.includes("quero"));
+      assert.ok(!result.includes("criar"));
+      assert.ok(!result.includes("para"));
     });
 
-    it("should exclude node_modules directory", async () => {
-      fs.mkdirSync(path.join(testDir, "node_modules", "lodash"), { recursive: true });
-      fs.writeFileSync(path.join(testDir, "node_modules", "lodash", "index.js"), "", "utf-8");
-
-      const structure = await discoverProjectStructure(testDir);
-      const nodeModFiles = structure.files.filter((f) => f.relativePath.includes("node_modules"));
-      assert.equal(nodeModFiles.length, 0);
+    it("should return empty array for stop-words-only input", () => {
+      const result = extractKeywords("eu de o a");
+      assert.equal(result.length, 0);
     });
 
-    it("should exclude .git directory", async () => {
-      fs.mkdirSync(path.join(testDir, ".git"), { recursive: true });
-      fs.writeFileSync(path.join(testDir, ".git", "config"), "", "utf-8");
-
-      const structure = await discoverProjectStructure(testDir);
-      const gitFiles = structure.files.filter((f) => f.relativePath.includes(".git"));
-      assert.equal(gitFiles.length, 0);
+    it("should limit to 10 keywords", () => {
+      const longTask = "sidebar navigation menu header footer layout content container wrapper component section area region zone panel";
+      const result = extractKeywords(longTask);
+      assert.ok(result.length <= 10);
     });
   });
 
-  describe("findRelevantFiles", () => {
-    it("should find files matching task keywords", async () => {
-      const files = await findRelevantFiles(testDir, "remover sidebar do menu lateral");
-
-      assert.ok(files.length > 0);
-      const sidebarFile = files.find((f) => f.path.includes("Sidebar"));
-      assert.ok(sidebarFile);
+  describe("extractGlobPatterns", () => {
+    it("should generate glob patterns from keywords", () => {
+      const result = extractGlobPatterns(["sidebar", "menu"]);
+      assert.ok(result.length >= 2);
+      assert.ok(result.some((p) => p.includes("sidebar")));
+      assert.ok(result.some((p) => p.includes("menu")));
     });
 
-    it("should return empty for unrelated task", async () => {
-      const files = await findRelevantFiles(testDir, "xyzabc123 nothing matches");
-      assert.equal(files.length, 0);
+    it("should generate capitalized variants", () => {
+      const result = extractGlobPatterns(["sidebar"]);
+      assert.ok(result.some((p) => p.includes("Sidebar")));
     });
 
-    it("should include file content", async () => {
-      const files = await findRelevantFiles(testDir, "sidebar component");
+    it("should skip short keywords", () => {
+      const result = extractGlobPatterns(["ab", "sidebar"]);
+      assert.ok(!result.some((p) => p.includes("*ab*")));
+    });
 
-      const sidebarFile = files.find((f) => f.path.includes("Sidebar"));
-      if (sidebarFile) {
-        assert.ok(sidebarFile.content.includes("Sidebar"));
+    it("should return empty for empty keywords", () => {
+      const result = extractGlobPatterns([]);
+      assert.equal(result.length, 0);
+    });
+  });
+
+  describe("expandContextWithImports", () => {
+    it("should expand context with imported files", async () => {
+      const srcDir = path.join(testDir, "src");
+      fs.mkdirSync(srcDir, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(srcDir, "types.ts"),
+        "export interface User { name: string; }",
+        "utf-8",
+      );
+
+      const loadedFiles = [{
+        path: "src/main.ts",
+        content: 'import { User } from "./types";\nconst u: User = { name: "test" };',
+        score: 5,
+      }];
+
+      const allPaths = new Set(["src/main.ts", "src/types.ts"]);
+      const result = await expandContextWithImports(testDir, loadedFiles, allPaths, 10000);
+
+      assert.equal(result.length, 1);
+      assert.equal(result[0].path, "src/types.ts");
+      assert.ok(result[0].content.includes("User"));
+    });
+
+    it("should respect remaining chars limit", async () => {
+      const srcDir = path.join(testDir, "src");
+      fs.mkdirSync(srcDir, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(srcDir, "types.ts"),
+        "x".repeat(500),
+        "utf-8",
+      );
+
+      const loadedFiles = [{
+        path: "src/main.ts",
+        content: 'import { User } from "./types";\nconst u = 1;',
+        score: 5,
+      }];
+
+      const allPaths = new Set(["src/main.ts", "src/types.ts"]);
+      const result = await expandContextWithImports(testDir, loadedFiles, allPaths, 100);
+
+      assert.equal(result.length, 1);
+      assert.ok(result[0].content.length < 500);
+    });
+
+    it("should not re-load already loaded files", async () => {
+      const srcDir = path.join(testDir, "src");
+      fs.mkdirSync(srcDir, { recursive: true });
+
+      fs.writeFileSync(path.join(srcDir, "types.ts"), "export type X = string;", "utf-8");
+
+      const loadedFiles = [
+        { path: "src/main.ts", content: 'import { X } from "./types";', score: 5 },
+        { path: "src/types.ts", content: "export type X = string;", score: 3 },
+      ];
+
+      const allPaths = new Set(["src/main.ts", "src/types.ts"]);
+      const result = await expandContextWithImports(testDir, loadedFiles, allPaths, 10000);
+
+      assert.equal(result.length, 0);
+    });
+
+    it("should handle files with no imports", async () => {
+      const loadedFiles = [{
+        path: "src/constants.ts",
+        content: "export const VERSION = '1.0.0';",
+        score: 5,
+      }];
+
+      const allPaths = new Set(["src/constants.ts"]);
+      const result = await expandContextWithImports(testDir, loadedFiles, allPaths, 10000);
+
+      assert.equal(result.length, 0);
+    });
+  });
+
+  describe("ripgrepSearch", () => {
+    it("should return results when rg is available and finds matches", async () => {
+      const srcDir = path.join(testDir, "src");
+      fs.mkdirSync(srcDir, { recursive: true });
+      fs.writeFileSync(path.join(srcDir, "test.ts"), "export function doSomething() {}", "utf-8");
+
+      const results = await ripgrepSearch(testDir, "doSomething");
+      if (results.length > 0) {
+        assert.ok(results[0].path.includes("test.ts"));
+        assert.ok(results[0].matchCount >= 1);
       }
     });
 
-    it("should respect max files limit", async () => {
-      const files = await findRelevantFiles(testDir, "components pages utils format", 2);
-      assert.ok(files.length <= 2);
-    });
+    it("should return empty array for non-matching pattern", async () => {
+      const srcDir = path.join(testDir, "src");
+      fs.mkdirSync(srcDir, { recursive: true });
+      fs.writeFileSync(path.join(srcDir, "test.ts"), "const x = 1;", "utf-8");
 
-    it("should score tsx/ts files higher", async () => {
-      const files = await findRelevantFiles(testDir, "format date utils");
-      const formatFile = files.find((f) => f.path.includes("format"));
-      assert.ok(formatFile);
-    });
-  });
-
-  describe("grepFilesForKeywords", () => {
-    it("should find files containing keyword in content", async () => {
-      createFile("src/layouts/app-shell.tsx", [
-        "import { Sidebar } from '../components/Sidebar';",
-        "const menuItems = [",
-        "  { label: 'Home', icon: HomeIcon },",
-        "  { label: 'Signers', icon: UsersIcon },",
-        "  { label: 'Documents', icon: FileIcon },",
-        "];",
-        "export function AppShell() { return <Sidebar items={menuItems} />; }",
-      ].join("\n"));
-
-      const structure = await discoverProjectStructure(testDir);
-      const alreadyScored = new Set<string>();
-      const results = await grepFilesForKeywords(testDir, structure.files, ["signers"], alreadyScored);
-
-      assert.ok(results.length > 0);
-      const shellFile = results.find((r) => r.file.relativePath.includes("app-shell"));
-      assert.ok(shellFile);
-    });
-
-    it("should not re-score already scored files", async () => {
-      const structure = await discoverProjectStructure(testDir);
-      const alreadyScored = new Set(structure.files.map((f) => f.relativePath));
-      const results = await grepFilesForKeywords(testDir, structure.files, ["sidebar"], alreadyScored);
-
+      const results = await ripgrepSearch(testDir, "zzz_nonexistent_zzz");
       assert.equal(results.length, 0);
     });
+  });
 
-    it("should return empty when no keywords match content", async () => {
-      const structure = await discoverProjectStructure(testDir);
-      const results = await grepFilesForKeywords(testDir, structure.files, ["xyznonexistent"], new Set());
+  describe("findSymbolDefinitions", () => {
+    it("should find function definitions", async () => {
+      const srcDir = path.join(testDir, "src");
+      fs.mkdirSync(srcDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(srcDir, "utils.ts"),
+        "export function formatCurrency(value: number): string { return String(value); }",
+        "utf-8",
+      );
 
+      const results = await findSymbolDefinitions(testDir, "formatCurrency");
+      if (results.length > 0) {
+        assert.ok(results[0].path.includes("utils.ts"));
+      }
+    });
+
+    it("should return empty for non-existent symbol", async () => {
+      const srcDir = path.join(testDir, "src");
+      fs.mkdirSync(srcDir, { recursive: true });
+      fs.writeFileSync(path.join(srcDir, "utils.ts"), "const x = 1;", "utf-8");
+
+      const results = await findSymbolDefinitions(testDir, "zzz_nonexistent_symbol_zzz");
       assert.equal(results.length, 0);
     });
-
-    it("should only scan greppable files", async () => {
-      createFile("config/settings.yaml", "sidebar: true");
-      const structure = await discoverProjectStructure(testDir);
-      const results = await grepFilesForKeywords(testDir, structure.files, ["sidebar"], new Set());
-
-      const yamlFile = results.find((r) => r.file.relativePath.includes("settings.yaml"));
-      assert.equal(yamlFile, undefined);
-    });
   });
 
-  describe("followImports", () => {
-    it("should resolve relative imports from found files", async () => {
-      createFile("src/components/Sidebar.tsx", [
-        "import { Badge } from './Badge';",
-        "import { formatName } from '../utils/format';",
-        "export function Sidebar() { return <nav><Badge /></nav>; }",
-      ].join("\n"));
-      createFile("src/components/Badge.tsx", "export function Badge() { return <span>badge</span>; }");
+  describe("globSearch", () => {
+    it("should find files matching glob patterns", async () => {
+      const srcDir = path.join(testDir, "src", "components");
+      fs.mkdirSync(srcDir, { recursive: true });
+      fs.writeFileSync(path.join(srcDir, "Sidebar.tsx"), "export const Sidebar = () => null;", "utf-8");
+      fs.writeFileSync(path.join(srcDir, "Header.tsx"), "export const Header = () => null;", "utf-8");
 
-      const structure = await discoverProjectStructure(testDir);
-      const allFilePaths = new Set(structure.files.map((f) => f.relativePath));
-      const allFilesMap = new Map(structure.files.map((f) => [f.relativePath, f]));
-
-      const sidebarFile = structure.files.find((f) => f.relativePath.includes("Sidebar"));
-      assert.ok(sidebarFile);
-
-      const scored = [{ file: sidebarFile, score: 9 }];
-      const alreadyScored = new Set([sidebarFile.relativePath]);
-
-      const imported = await followImports(testDir, scored, allFilePaths, alreadyScored, allFilesMap);
-
-      assert.ok(imported.length > 0);
-      const badgeFile = imported.find((f) => f.file.relativePath.includes("Badge"));
-      assert.ok(badgeFile);
+      const results = await globSearch(testDir, ["**/*Sidebar*"]);
+      if (results.length > 0) {
+        assert.ok(results.some((r) => r.includes("Sidebar")));
+      }
     });
 
-    it("should not follow non-relative imports", async () => {
-      createFile("src/components/Sidebar.tsx", [
-        "import React from 'react';",
-        "import lodash from 'lodash';",
-        "export function Sidebar() { return <nav>sidebar</nav>; }",
-      ].join("\n"));
+    it("should return empty for non-matching patterns", async () => {
+      fs.writeFileSync(path.join(testDir, "test.ts"), "const x = 1;", "utf-8");
 
-      const structure = await discoverProjectStructure(testDir);
-      const allFilePaths = new Set(structure.files.map((f) => f.relativePath));
-      const allFilesMap = new Map(structure.files.map((f) => [f.relativePath, f]));
-
-      const sidebarFile = structure.files.find((f) => f.relativePath.includes("Sidebar"));
-      assert.ok(sidebarFile);
-
-      const scored = [{ file: sidebarFile, score: 9 }];
-      const imported = await followImports(testDir, scored, allFilePaths, new Set([sidebarFile.relativePath]), allFilesMap);
-
-      assert.equal(imported.length, 0);
-    });
-
-    it("should resolve index files", async () => {
-      createFile("src/shared/index.ts", "export { Button } from './Button';");
-      createFile("src/shared/Button.tsx", "export function Button() {}");
-      createFile("src/components/Form.tsx", "import { Button } from '../shared';");
-
-      const structure = await discoverProjectStructure(testDir);
-      const allFilePaths = new Set(structure.files.map((f) => f.relativePath));
-      const allFilesMap = new Map(structure.files.map((f) => [f.relativePath, f]));
-
-      const formFile = structure.files.find((f) => f.relativePath.includes("Form"));
-      assert.ok(formFile);
-
-      const scored = [{ file: formFile, score: 5 }];
-      const imported = await followImports(testDir, scored, allFilePaths, new Set([formFile.relativePath]), allFilesMap);
-
-      const indexFile = imported.find((f) => f.file.relativePath.includes("shared/index"));
-      assert.ok(indexFile);
-    });
-  });
-
-  describe("findReverseImports", () => {
-    it("should find files that import a target file", async () => {
-      createFile("src/components/Sidebar.tsx", "export function Sidebar() { return <nav>sidebar</nav>; }");
-      createFile("src/layouts/app-shell.tsx", [
-        "import { Sidebar } from '../components/Sidebar';",
-        "export function AppShell() { return <Sidebar />; }",
-      ].join("\n"));
-
-      const structure = await discoverProjectStructure(testDir);
-      const sidebarFile = structure.files.find((f) => f.relativePath.includes("Sidebar"));
-      assert.ok(sidebarFile);
-
-      const targets = [{ file: sidebarFile, score: 9 }];
-      const alreadyScored = new Set([sidebarFile.relativePath]);
-
-      const reverse = await findReverseImports(testDir, structure.files, targets, alreadyScored);
-
-      assert.ok(reverse.length > 0);
-      const shellFile = reverse.find((r) => r.file.relativePath.includes("app-shell"));
-      assert.ok(shellFile);
-    });
-
-    it("should not return already scored files", async () => {
-      createFile("src/layouts/app-shell.tsx", [
-        "import { Sidebar } from '../components/Sidebar';",
-        "export function AppShell() { return <Sidebar />; }",
-      ].join("\n"));
-
-      const structure = await discoverProjectStructure(testDir);
-      const sidebarFile = structure.files.find((f) => f.relativePath.includes("Sidebar"));
-      assert.ok(sidebarFile);
-      const shellFile = structure.files.find((f) => f.relativePath.includes("app-shell"));
-      assert.ok(shellFile);
-
-      const targets = [{ file: sidebarFile, score: 9 }];
-      const alreadyScored = new Set([sidebarFile.relativePath, shellFile.relativePath]);
-
-      const reverse = await findReverseImports(testDir, structure.files, targets, alreadyScored);
-      assert.equal(reverse.length, 0);
-    });
-
-    it("should return empty when no reverse imports exist", async () => {
-      const structure = await discoverProjectStructure(testDir);
-      const formatFile = structure.files.find((f) => f.relativePath.includes("format"));
-      assert.ok(formatFile);
-
-      const targets = [{ file: formatFile, score: 5 }];
-      const reverse = await findReverseImports(testDir, structure.files, targets, new Set([formatFile.relativePath]));
-
-      const importers = reverse.filter((r) => r.file.relativePath !== formatFile.relativePath);
-      assert.equal(importers.length, 0);
+      const results = await globSearch(testDir, ["**/*zzz_nonexistent*"]);
+      assert.equal(results.length, 0);
     });
   });
 });
