@@ -7,151 +7,160 @@
 ![Prettier](https://img.shields.io/badge/Prettier-3-F7B93E?logo=prettier&logoColor=black)
 ![License](https://img.shields.io/badge/License-Private-red)
 
-**Operational execution system where AI agents work continuously to advance real objectives.**
+**Sistema operacional de execucao onde agentes de IA trabalham continuamente para avancar objetivos reais.**
 
-connexto-axiom-agents is an AI execution operating system that orchestrates autonomous agents to plan, execute, evaluate, and learn from real tasks — all running locally with full cost control, human governance, and traceable feedback loops.
+connexto-axiom-agents e um sistema operacional de execucao com IA que orquestra agentes autonomos para planejar, executar, avaliar e aprender com tarefas reais — tudo rodando localmente com controle total de custo, governanca humana e loops de feedback rastreaveis.
 
 ---
 
-## Architecture
+## Arquitetura
 
 ```
-src/main.ts          Kairos cycle entry point (one-shot via cron)
-src/bot.ts           Telegram bot entry point (persistent long-polling)
+src/main.ts          Entry point do ciclo Kairos (one-shot via cron)
+src/bot.ts           Entry point do bot Telegram (long-polling persistente)
                               |
          ┌────────────────────┼────────────────────┐
          v                    v                    v
      KAIROS               FORGE                VECTOR
-   (orchestrator)      (tech executor)     (marketing executor)
+   (orquestrador)     (executor tecnico)   (executor marketing)
     gpt-5.2           gpt-5.3-codex          gpt-4o-mini
          |                    |                    |
          |    ┌───────────────┤                    |
          v    v               v                    v
        NEXUS             ┌──────────────┐    ┌──────────┐
-    (researcher)         │ Workspaces   │    │ Artifacts│
+    (pesquisador)        │ Workspaces   │    │ Artefatos│
     gpt-4o-mini          │ Git Branches │    │ Drafts   │
          |               │ Code Changes │    │ Publish  │
          v               └──────────────┘    └──────────┘
    ┌──────────┐               │                    │
-   │ Research │               │                    │
-   │ Analysis │               │                    │
+   │ Pesquisa │               │                    │
+   │ Analise  │               │                    │
    └──────────┘               │                    │
          │                    │                    │
          └────────────────────┼────────────────────┘
                               v
-                       SQLite (WAL mode)
+                       SQLite (modo WAL)
                               |
                               v
-                    Telegram (Daily Briefing)
+                    Telegram (Briefing Diario)
 ```
 
-## Agents
+## Agentes
 
-| Agent        | Role                                                              | LLM Model       | Status  |
-| ------------ | ----------------------------------------------------------------- | ---------------- | ------- |
-| **KAIROS**   | Strategic orchestrator — decides, delegates, evaluates with historical context | `gpt-5.2`       | Active  |
-| **FORGE**    | Technical executor — reads real code, generates search/replace edits via OpenClaw | `gpt-5.3-codex` | Active  |
-| **NEXUS**    | Technical research — analyzes options, trade-offs and risks       | `gpt-4o-mini`    | Active  |
-| **VECTOR**   | Marketing executor — generates posts, newsletters, landing copy   | `gpt-4o-mini`    | Active  |
-| **SENTINEL** | Security & compliance monitor                                     | —                | Planned |
-| **COVENANT** | Governance & policy enforcer                                      | —                | Planned |
+| Agente       | Papel                                                                          | Modelo LLM       | Status     |
+| ------------ | ------------------------------------------------------------------------------ | ----------------- | ---------- |
+| **KAIROS**   | Orquestrador estrategico — decide, delega e avalia com contexto historico      | `gpt-5.2`        | Ativo      |
+| **FORGE**    | Executor tecnico — le codigo real, gera edits search/replace via OpenClaw      | `gpt-5.3-codex`  | Ativo      |
+| **NEXUS**    | Pesquisa tecnica — analisa opcoes, trade-offs e riscos                         | `gpt-4o-mini`    | Ativo      |
+| **VECTOR**   | Executor de marketing — gera posts, newsletters, landing copy                  | `gpt-4o-mini`    | Ativo      |
+| **QA**       | Validacao funcional — testes E2E hibridos (LLM + Playwright)                   | `gpt-4o-mini`    | Planejado  |
+| **SENTINEL** | Monitor de seguranca e compliance                                              | —                 | Planejado  |
+| **COVENANT** | Fiscalizador de governanca e politicas                                         | —                 | Planejado  |
 
-## Evolution
+## Evolucao
 
-| Phase | Name                             | Description                                                        | Status |
-| ----- | -------------------------------- | ------------------------------------------------------------------ | ------ |
-| 12    | Controlled Forge Execution       | FORGE executes real tasks in sandbox with permissions               | Done   |
-| 13    | OpenClaw Integration             | LLM execution runtime via OpenClaw with hardening                  | Done   |
-| 14    | Automatic Feedback Loop          | System learns from outcomes, adjusts decision scores               | Done   |
-| 15    | VECTOR Real Execution            | Marketing agent generates drafts via OpenClaw                      | Done   |
-| 16    | Approval & Semi-Auto Publication | Telegram bot for human approval + stub publication                 | Done   |
-| 17    | Marketing Metrics & Feedback     | Engagement metrics influence KAIROS decisions                      | Done   |
-| 18    | Governed Code Changes            | FORGE modifies code with PR virtual cycle                          | Done   |
-| 22    | NEXUS Technical Research         | Research agent reduces uncertainty before coding                   | Done   |
-| 23.1  | Multi-Project Manifest           | Project manifests, isolation by project_id, structure              | Done   |
-| 23.2  | FORGE Per-Project Execution      | FORGE reads real code, generates diffs, pushes branches for review | Done   |
-| 24    | KAIROS Historical Context        | Historical execution data injected into KAIROS prompt              | Done   |
+| Fase  | Nome                                | Descricao                                                                 | Status |
+| ----- | ----------------------------------- | ------------------------------------------------------------------------- | ------ |
+| 12    | Execucao Controlada do FORGE        | FORGE executa tarefas reais em sandbox com permissoes                     | Feito  |
+| 13    | Integracao OpenClaw                 | Runtime de execucao LLM via OpenClaw com hardening                        | Feito  |
+| 14    | Feedback Loop Automatico            | Sistema aprende com resultados, ajusta scores de decisao                  | Feito  |
+| 15    | Execucao Real do VECTOR             | Agente de marketing gera drafts via OpenClaw                              | Feito  |
+| 16    | Aprovacao e Publicacao Semi-Auto    | Bot Telegram para aprovacao humana + publicacao stub                      | Feito  |
+| 17    | Metricas de Marketing e Feedback    | Metricas de engajamento influenciam decisoes do KAIROS                    | Feito  |
+| 18    | Codificacao Governada               | FORGE modifica codigo com ciclo PR virtual                                | Feito  |
+| 22    | Pesquisa Tecnica NEXUS              | Agente de pesquisa reduz incerteza antes da codificacao                   | Feito  |
+| 23.1  | Manifesto Multi-Projeto             | Manifestos de projeto, isolamento por project_id, estrutura               | Feito  |
+| 23.2  | FORGE por Projeto                   | FORGE le codigo real, gera diffs, faz push de branches para review        | Feito  |
+| 24    | Contexto Historico do KAIROS        | Dados historicos de execucao injetados no prompt do KAIROS                | Feito  |
+| 25    | Governanca Explicita de Decisao     | Classificacao pre-decisao, selecao dinamica de modelo, log de governanca  | Feito  |
+| 26    | Agente QA (Validacao Funcional)     | Testes E2E hibridos (LLM gera + Playwright executa) com retroalimentacao | Planejado |
 
-## Key Features
+## Funcionalidades Principais
 
-- **Cost Predictability** — Rigid token budget with monthly limits, per-agent caps, per-task gates, and kill switch
-- **Prompt Compression** — Minimalist state-driven prompts, strict templates, hard token limits
-- **Feedback Loops** — Execution feedback (SUCCESS/PARTIAL/FAILURE) + marketing feedback (STRONG/AVERAGE/WEAK) automatically adjust decision scores
-- **Historical Context** — KAIROS receives aggregated execution history (success rates, frequent failures, risky files) to make informed delegation decisions
-- **Multi-Project Support** — Project manifests with isolated workspaces, per-project governance and budget tracking
-- **Real Code Modification** — FORGE reads actual source code, generates search/replace diffs, pushes branches for human review
-- **Technical Research** — NEXUS agent researches options, trade-offs, and risks before FORGE executes code tasks
-- **Human Governance** — All publications and high-risk code changes require explicit approval via Telegram
-- **Marketing Intelligence** — Stub/manual metrics with evaluator; strong/weak message type detection feeds back into orchestration
-- **Security Hardening** — Output sanitization, sandboxed execution, audit logging, SSRF prevention, workspace isolation
+- **Previsibilidade de Custo** — Orcamento rigido de tokens com limites mensais, por agente, por task e kill switch
+- **Compressao de Prompts** — Prompts minimalistas dirigidos por estado, templates estritos, limites rigidos de tokens
+- **Feedback Loops** — Feedback de execucao (SUCCESS/PARTIAL/FAILURE) + feedback de marketing (STRONG/AVERAGE/WEAK) ajustam scores de decisao automaticamente
+- **Contexto Historico** — KAIROS recebe historico agregado (taxas de sucesso, falhas frequentes, arquivos arriscados) para decisoes informadas
+- **Governanca de Decisao** — Classificacao pre-decisao em 4 eixos (complexidade, risco, custo, historico) para selecao dinamica de modelo LLM e thresholds de aprovacao
+- **Suporte Multi-Projeto** — Manifestos de projeto com workspaces isolados, governanca e rastreamento de budget por projeto
+- **Modificacao de Codigo Real** — FORGE le codigo-fonte real, gera diffs search/replace, faz push de branches para revisao humana
+- **Pesquisa Tecnica** — Agente NEXUS pesquisa opcoes, trade-offs e riscos antes do FORGE executar tarefas de codigo
+- **Governanca Humana** — Todas as publicacoes e mudancas de codigo de alto risco exigem aprovacao explicita via Telegram
+- **Inteligencia de Marketing** — Metricas stub/manuais com avaliador; deteccao de tipos de mensagem fortes/fracas retroalimenta a orquestracao
+- **Hardening de Seguranca** — Sanitizacao de output, execucao em sandbox, audit logging, prevencao de SSRF, isolamento de workspaces
 
-## Tech Stack
+## Stack Tecnologica
 
-| Component       | Technology                          |
+| Componente      | Tecnologia                          |
 | --------------- | ----------------------------------- |
 | Runtime         | Node.js >= 24 + TypeScript 5.9      |
-| Database        | SQLite (WAL mode, better-sqlite3)   |
-| LLM Runtime     | OpenClaw (isolated agent execution) |
-| LLM Providers   | OpenAI (gpt-5.2, gpt-5.3-codex, gpt-4o-mini) |
-| Version Control | Git (isolated workspaces, branch per task) |
-| Scheduling      | Cron (one-shot cycles)              |
-| Human Interface | Telegram Bot (long-polling)         |
-| Logging         | Pino (structured JSON)              |
+| Banco de Dados  | SQLite (modo WAL, better-sqlite3)   |
+| Runtime LLM     | OpenClaw (execucao isolada de agentes) |
+| Provedores LLM  | OpenAI (gpt-5.2, gpt-5.3-codex, gpt-4o-mini) |
+| Controle de Versao | Git (workspaces isolados, branch por task) |
+| Agendamento     | Cron (ciclos one-shot)              |
+| Interface Humana | Bot Telegram (long-polling)         |
+| Logging         | Pino (JSON estruturado)             |
 | Linting         | ESLint 9 + Prettier 3               |
 
-## Database Tables
+## Tabelas do Banco de Dados
 
-| Table                | Purpose                                               |
-| -------------------- | ----------------------------------------------------- |
-| `goals`              | Active strategic objectives                           |
-| `tasks`              | Tasks linked to goals                                 |
-| `decisions`          | KAIROS decision history                               |
-| `metrics`            | Generic agent metrics                                 |
-| `outcomes`           | Execution results with timing/token/size data         |
-| `audit_log`          | Security audit trail                                  |
-| `budgets`            | Monthly token budgets                                 |
-| `token_usage`        | Granular per-agent token tracking                     |
-| `agent_feedback`     | Execution evaluation grades (SUCCESS/PARTIAL/FAILURE) |
-| `artifacts`          | Content drafts with approval workflow                 |
-| `publications`       | Published artifact records                            |
-| `marketing_metrics`  | Engagement data (stub/manual/api)                     |
-| `marketing_feedback` | Content performance grades (STRONG/AVERAGE/WEAK)      |
-| `nexus_research`     | Technical research outputs with structured analysis   |
-| `projects`           | Registered project manifests with runtime state       |
+| Tabela                 | Finalidade                                                |
+| ---------------------- | --------------------------------------------------------- |
+| `goals`                | Objetivos estrategicos ativos                             |
+| `tasks`                | Tarefas vinculadas a goals                                |
+| `decisions`            | Historico de decisoes do KAIROS                           |
+| `metrics`              | Metricas genericas de agentes                             |
+| `outcomes`             | Resultados de execucao com dados de tempo/tokens/tamanho  |
+| `audit_log`            | Trilha de auditoria de seguranca                          |
+| `budgets`              | Orcamentos mensais de tokens                              |
+| `token_usage`          | Rastreamento granular de tokens por agente                |
+| `agent_feedback`       | Avaliacoes de execucao (SUCCESS/PARTIAL/FAILURE)          |
+| `artifacts`            | Drafts de conteudo com workflow de aprovacao               |
+| `publications`         | Registros de artefatos publicados                         |
+| `marketing_metrics`    | Dados de engajamento (stub/manual/api)                    |
+| `marketing_feedback`   | Avaliacoes de performance de conteudo (STRONG/AVERAGE/WEAK) |
+| `code_changes`         | Mudancas de codigo do FORGE com ciclo PR virtual          |
+| `pull_requests`        | Pull requests vinculadas a code_changes                   |
+| `nexus_research`       | Pesquisas tecnicas com analise estruturada                |
+| `projects`             | Manifestos de projetos registrados com estado de runtime  |
+| `governance_decisions` | Log de decisoes de governanca com classificacao e modelo  |
 
-## Project Structure
+## Estrutura do Projeto
 
 ```
-agents/              Agent configs, system prompts, memory
-  kairos/            Orchestrator (gpt-5.2)
-  forge/             Technical executor (gpt-5.3-codex via OpenClaw)
-  nexus/             Technical researcher (gpt-4o-mini)
-  vector/            Marketing executor (gpt-4o-mini)
-  sentinel/          Security monitor (planned)
-  covenant/          Governance enforcer (planned)
-config/              Budget limits, logger setup
-evaluation/          Execution evaluator, marketing evaluator, NEXUS evaluator
-execution/           FORGE/VECTOR/NEXUS executors, project code system, sandbox
-  project*.ts        Per-project code: executor, applier, git manager, security, workspace
-  nexus*.ts          NEXUS executor and validator
+agents/              Configs de agentes, system prompts, memoria
+  kairos/            Orquestrador (gpt-5.2)
+  forge/             Executor tecnico (gpt-5.3-codex via OpenClaw)
+  nexus/             Pesquisador tecnico (gpt-4o-mini)
+  vector/            Executor de marketing (gpt-4o-mini)
+  sentinel/          Monitor de seguranca (planejado)
+  covenant/          Fiscalizador de governanca (planejado)
+config/              Limites de budget, configuracao de logger
+evaluation/          Avaliadores de execucao, marketing e NEXUS
+execution/           Executores FORGE/VECTOR/NEXUS, sistema de codigo por projeto, sandbox
+  project*.ts        Codigo por projeto: executor, applier, git manager, security, workspace
+  nexus*.ts          Executor e validador NEXUS
 interfaces/          Telegram sender + bot (long-polling)
-llm/                 LLM client with failover (OpenAI + Claude)
-orchestration/       Kairos cycle, decision filter, feedback adjusters, briefing
-  historicalContext   Historical execution data formatting for KAIROS prompt
-projects/            Project manifests and multi-project support
-  default/           Default project (retrocompatibility)
-  <project-id>/      Per-project directories
-runtime/openclaw/    OpenClaw agent configs and skills
+llm/                 Cliente LLM com failover (OpenAI + Claude)
+orchestration/       Ciclo Kairos, filtro de decisao, ajustadores de feedback, briefing
+  historicalContext   Formatacao de dados historicos para prompt do KAIROS
+  decisionGovernance Classificacao pre-decisao e selecao de politica de governanca
+projects/            Manifestos de projetos e suporte multi-projeto
+  default/           Projeto padrao (retrocompatibilidade)
+  <project-id>/      Diretorios por projeto
+runtime/openclaw/    Configs de agentes e skills do OpenClaw
 scripts/             Bootstrap, cron runner, seed data, register-project
-services/            Approval service, metrics collector, code change service
-shared/policies/     Cross-project policies (risk limits, allowed paths)
+services/            Servico de aprovacao, coletor de metricas, servico de code changes
+shared/policies/     Politicas cross-projeto (limites de risco, paths permitidos)
 src/                 Entry points (main.ts, bot.ts)
-state/               SQLite schema, migrations, all table CRUD modules
-  executionHistory   Historical aggregation for KAIROS decisions
-workspaces/          Temporary isolated Git clones for FORGE execution (gitignored)
+state/               Schema SQLite, migrations, modulos CRUD de todas as tabelas
+  executionHistory   Agregacao historica para decisoes do KAIROS
+  governanceLog      Log de decisoes de governanca
+workspaces/          Clones Git isolados temporarios para execucao do FORGE (gitignored)
 ```
 
-## Prerequisites
+## Pre-requisitos
 
 - Node.js >= 24
 - pnpm
@@ -163,85 +172,85 @@ workspaces/          Temporary isolated Git clones for FORGE execution (gitignor
 cp .env.example .env
 ```
 
-Edit `.env` with your Telegram bot token, chat ID, and OpenClaw settings.
+Edite o `.env` com seu token do bot Telegram, chat ID e configuracoes do OpenClaw.
 
-## Development
+## Desenvolvimento
 
 ```bash
 pnpm dev
 ```
 
-Runs the Kairos cycle once with hot-reload and formatted logs.
+Roda o ciclo Kairos uma vez com hot-reload e logs formatados.
 
-## Telegram Bot
+## Bot Telegram
 
 ```bash
 pnpm bot
 ```
 
-Starts the persistent Telegram bot for human commands. Runs in parallel with the Kairos cron cycle, sharing the SQLite database via WAL mode.
+Inicia o bot Telegram persistente para comandos humanos. Roda em paralelo com o ciclo cron do Kairos, compartilhando o banco SQLite via modo WAL.
 
-### Commands
+### Comandos
 
-| Command                                             | Description                            |
-| --------------------------------------------------- | -------------------------------------- |
-| `/drafts`                                           | List pending drafts awaiting approval  |
-| `/approve <id>`                                     | Approve a draft                        |
-| `/reject <id>`                                      | Reject a draft                         |
-| `/publish <id>`                                     | Publish an approved artifact (stub v1) |
-| `/metrics <id> <impressions> <clicks> <engagement>` | Register manual marketing metrics      |
-| `/help`                                             | Show available commands                |
+| Comando                                             | Descricao                                  |
+| --------------------------------------------------- | ------------------------------------------ |
+| `/drafts`                                           | Listar drafts pendentes de aprovacao       |
+| `/approve <id>`                                     | Aprovar um draft                           |
+| `/reject <id>`                                      | Rejeitar um draft                          |
+| `/publish <id>`                                     | Publicar artefato aprovado (stub v1)       |
+| `/metrics <id> <impressions> <clicks> <engagement>` | Registrar metricas de marketing manuais    |
+| `/help`                                             | Mostrar comandos disponiveis               |
 
-IDs can be partial (first 8 characters).
+IDs podem ser parciais (primeiros 8 caracteres).
 
-## Production
+## Producao
 
 ```bash
 pnpm build
 pnpm start
 ```
 
-## Cron (autonomous execution)
+## Cron (execucao autonoma)
 
-The script `scripts/run-kairos.sh` is designed for cron. It resolves its own path, builds the project, and executes the Kairos cycle.
+O script `scripts/run-kairos.sh` e projetado para cron. Ele resolve seu proprio path, faz build do projeto e executa o ciclo Kairos.
 
-### Manual test
+### Teste manual
 
 ```bash
 ./scripts/run-kairos.sh
 ```
 
-### Register the cron
+### Registrar o cron
 
 ```bash
 crontab -e
 ```
 
-Add the following line to run every day at 07:00:
+Adicione a seguinte linha para rodar todo dia as 07:00:
 
 ```
 0 7 * * * /home/rafael/dev-rafael/connexto-axiom-agents/scripts/run-kairos.sh >> /home/rafael/dev-rafael/connexto-axiom-agents/logs/kairos.log 2>&1
 ```
 
-Replace the path with the absolute path to your project directory.
+Substitua o path pelo caminho absoluto do seu diretorio do projeto.
 
-### Verify
+### Verificar
 
 ```bash
 crontab -l
 ```
 
-Logs are appended to `logs/kairos.log`. The Telegram Daily Briefing is sent automatically after each cycle.
+Logs sao adicionados em `logs/kairos.log`. O Briefing Diario via Telegram e enviado automaticamente apos cada ciclo.
 
 ## Scripts
 
-| Script              | Description                                         |
-| ------------------- | --------------------------------------------------- |
-| `pnpm dev`          | Run Kairos cycle with hot-reload and formatted logs |
-| `pnpm bot`          | Start Telegram bot (persistent long-polling)        |
-| `pnpm build`        | Compile TypeScript                                  |
-| `pnpm start`        | Run compiled output                                 |
-| `pnpm lint`         | Check for linting errors                            |
-| `pnpm lint:fix`     | Auto-fix linting errors                             |
-| `pnpm format`       | Format all files                                    |
-| `pnpm format:check` | Check formatting                                    |
+| Script              | Descricao                                              |
+| ------------------- | ------------------------------------------------------ |
+| `pnpm dev`          | Rodar ciclo Kairos com hot-reload e logs formatados    |
+| `pnpm bot`          | Iniciar bot Telegram (long-polling persistente)        |
+| `pnpm build`        | Compilar TypeScript                                    |
+| `pnpm start`        | Rodar output compilado                                 |
+| `pnpm lint`         | Verificar erros de linting                             |
+| `pnpm lint:fix`     | Corrigir erros de linting automaticamente              |
+| `pnpm format`       | Formatar todos os arquivos                             |
+| `pnpm format:check` | Verificar formatacao                                   |
