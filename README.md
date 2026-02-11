@@ -5,7 +5,7 @@
 ![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)
 ![ESLint](https://img.shields.io/badge/ESLint-9-4B32C3?logo=eslint&logoColor=white)
 ![Prettier](https://img.shields.io/badge/Prettier-3-F7B93E?logo=prettier&logoColor=black)
-![License](https://img.shields.io/badge/License-Private-red)
+![License](https://img.shields.io/badge/License-Apache%202.0-blue)
 
 **Sistema operacional de execucao onde agentes de IA trabalham continuamente para avancar objetivos reais.**
 

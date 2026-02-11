@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Operational execution system where AI agents work continuously to advance real objectives",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"
