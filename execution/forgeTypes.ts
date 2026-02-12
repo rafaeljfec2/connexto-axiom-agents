@@ -24,6 +24,11 @@ export interface ForgeAgentContext {
   readonly enableImportExpansion: boolean;
   readonly enableFrameworkRules: boolean;
   readonly enablePreLintCheck: boolean;
+  readonly enableTestExecution: boolean;
+  readonly testTimeout: number;
+  readonly enableAutoFix: boolean;
+  readonly enableAtomicEdits: boolean;
+  readonly enableStructuredErrors: boolean;
 }
 
 export interface ForgePlan {
@@ -87,6 +92,11 @@ export interface ForgeExecutionConfig {
   readonly enableImportExpansion: boolean;
   readonly enableFrameworkRules: boolean;
   readonly enablePreLintCheck: boolean;
+  readonly enableTestExecution: boolean;
+  readonly testTimeout: number;
+  readonly enableAutoFix: boolean;
+  readonly enableAtomicEdits: boolean;
+  readonly enableStructuredErrors: boolean;
 }
 
 export { loadForgeAgentConfig } from "./forgeConfigLoader.js";

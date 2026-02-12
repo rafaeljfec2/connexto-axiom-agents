@@ -2,20 +2,102 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { logger } from "../config/logger.js";
 import { sanitizeWorkspacePath } from "./projectSecurity.js";
-import type { FileChange } from "./projectSecurity.js";
+import type { FileChange, FileEdit } from "./projectSecurity.js";
 
-export type { ValidationConfig } from "./forgeValidation.js";
+export type { ValidationConfig, ValidationResult } from "./forgeValidation.js";
 export { runLintCheck } from "./forgeValidation.js";
 
 export interface ApplyResult {
   readonly success: boolean;
   readonly error?: string;
+  readonly appliedFiles: readonly string[];
+  readonly failedFile?: string;
+  readonly failedEditIndex?: number;
 }
 
 export async function applyEditsToWorkspace(
   files: readonly FileChange[],
   workspacePath: string,
+  atomic: boolean = true,
 ): Promise<ApplyResult> {
+  if (atomic) {
+    return applyEditsAtomic(files, workspacePath);
+  }
+  return applyEditsSequential(files, workspacePath);
+}
+
+async function applyEditsAtomic(
+  files: readonly FileChange[],
+  workspacePath: string,
+): Promise<ApplyResult> {
+  const pendingWrites = new Map<string, string>();
+  const appliedFiles: string[] = [];
+
+  for (const file of files) {
+    const fullPath = sanitizeWorkspacePath(workspacePath, file.path);
+
+    if (file.action === "create" || !file.edits || file.edits.length === 0) {
+      pendingWrites.set(fullPath, file.content);
+      appliedFiles.push(file.path);
+      continue;
+    }
+
+    let content: string;
+    try {
+      content = await fs.readFile(fullPath, "utf-8");
+    } catch {
+      return {
+        success: false,
+        error: `File not found for modify: ${file.path}`,
+        appliedFiles: [],
+        failedFile: file.path,
+        failedEditIndex: 0,
+      };
+    }
+
+    for (let editIdx = 0; editIdx < file.edits.length; editIdx++) {
+      const edit = file.edits[editIdx];
+      const result = applyOneEdit(content, edit, file.path);
+      if (result === null) {
+        const snippet = buildFileSnippetForError(content, edit.search);
+        return {
+          success: false,
+          error: [
+            `Search string not found in ${file.path} (edit ${editIdx + 1} of ${file.edits.length}): "${edit.search.slice(0, 100)}..."`,
+            snippet,
+          ].join("\n"),
+          appliedFiles,
+          failedFile: file.path,
+          failedEditIndex: editIdx,
+        };
+      }
+      content = result;
+    }
+
+    pendingWrites.set(fullPath, content);
+    appliedFiles.push(file.path);
+  }
+
+  try {
+    for (const [fullPath, content] of pendingWrites) {
+      const dir = path.dirname(fullPath);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(fullPath, content, "utf-8");
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, error: `Disk write failed: ${message}`, appliedFiles: [] };
+  }
+
+  return { success: true, appliedFiles };
+}
+
+async function applyEditsSequential(
+  files: readonly FileChange[],
+  workspacePath: string,
+): Promise<ApplyResult> {
+  const appliedFiles: string[] = [];
+
   try {
     for (const file of files) {
       const fullPath = sanitizeWorkspacePath(workspacePath, file.path);
@@ -25,16 +107,20 @@ export async function applyEditsToWorkspace(
       if (file.action === "modify" && file.edits && file.edits.length > 0) {
         let content = await fs.readFile(fullPath, "utf-8");
 
-        for (const edit of file.edits) {
-          const result = applyOneEdit(content, edit.search, edit.replace, file.path);
+        for (let editIdx = 0; editIdx < file.edits.length; editIdx++) {
+          const edit = file.edits[editIdx];
+          const result = applyOneEdit(content, edit, file.path);
           if (result === null) {
             const snippet = buildFileSnippetForError(content, edit.search);
             return {
               success: false,
               error: [
-                `Search string not found in ${file.path}: "${edit.search.slice(0, 100)}..."`,
+                `Search string not found in ${file.path} (edit ${editIdx + 1} of ${file.edits.length}): "${edit.search.slice(0, 100)}..."`,
                 snippet,
               ].join("\n"),
+              appliedFiles,
+              failedFile: file.path,
+              failedEditIndex: editIdx,
             };
           }
           content = result;
@@ -44,15 +130,18 @@ export async function applyEditsToWorkspace(
       } else {
         await fs.writeFile(fullPath, file.content, "utf-8");
       }
+
+      appliedFiles.push(file.path);
     }
-    return { success: true };
+    return { success: true, appliedFiles };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { success: false, error: message };
+    return { success: false, error: message, appliedFiles };
   }
 }
 
 const MAX_SNIPPET_CHARS = 1500;
+const DUPLICATE_MATCH_THRESHOLD = 1;
 
 function buildFileSnippetForError(fileContent: string, failedSearch: string): string {
   const lines = fileContent.split("\n");
@@ -130,26 +219,82 @@ export async function readModifiedFilesState(
 
 function applyOneEdit(
   content: string,
-  search: string,
-  replace: string,
+  edit: FileEdit,
   filePath: string,
 ): string | null {
-  const exactIndex = content.indexOf(search);
-  if (exactIndex !== -1) {
-    return content.slice(0, exactIndex) + replace + content.slice(exactIndex + search.length);
+  if (edit.line !== undefined && edit.endLine !== undefined) {
+    const lineResult = applyLineBasedEdit(content, edit.line, edit.endLine, edit.replace);
+    if (lineResult !== null) {
+      logger.debug({ path: filePath, line: edit.line, endLine: edit.endLine }, "Edit applied via line numbers");
+      return lineResult;
+    }
   }
 
-  const fuzzyResult = fuzzyLineMatch(content, search);
+  const occurrences = countOccurrences(content, edit.search);
+  if (occurrences > DUPLICATE_MATCH_THRESHOLD) {
+    logger.warn(
+      { path: filePath, occurrences, searchPreview: edit.search.slice(0, 80) },
+      "Multiple matches found for search string, attempting disambiguation",
+    );
+  }
+
+  const exactIndex = content.indexOf(edit.search);
+  if (exactIndex !== -1) {
+    if (occurrences > DUPLICATE_MATCH_THRESHOLD) {
+      const secondIndex = content.indexOf(edit.search, exactIndex + 1);
+      if (secondIndex !== -1) {
+        logger.debug({ path: filePath, occurrences }, "Applying to first occurrence (multiple found)");
+      }
+    }
+    return content.slice(0, exactIndex) + edit.replace + content.slice(exactIndex + edit.search.length);
+  }
+
+  const fuzzyResult = fuzzyLineMatch(content, edit.search);
   if (fuzzyResult) {
     logger.debug({ path: filePath, matchType: fuzzyResult.type }, "Edit matched with fuzzy fallback");
-    return content.slice(0, fuzzyResult.start) + replace + content.slice(fuzzyResult.end);
+    return content.slice(0, fuzzyResult.start) + edit.replace + content.slice(fuzzyResult.end);
   }
 
   logger.warn(
-    { path: filePath, searchPreview: search.slice(0, 150) },
+    { path: filePath, searchPreview: edit.search.slice(0, 150) },
     "Search string not found (will attempt correction)",
   );
   return null;
+}
+
+function applyLineBasedEdit(
+  content: string,
+  startLine: number,
+  endLine: number,
+  replace: string,
+): string | null {
+  const lines = content.split("\n");
+  const zeroStart = startLine - 1;
+  const zeroEnd = endLine - 1;
+
+  if (zeroStart < 0 || zeroEnd >= lines.length || zeroStart > zeroEnd) {
+    logger.debug({ startLine, endLine, totalLines: lines.length }, "Line-based edit out of range");
+    return null;
+  }
+
+  const before = lines.slice(0, zeroStart);
+  const after = lines.slice(zeroEnd + 1);
+  const replaced = replace.split("\n");
+
+  return [...before, ...replaced, ...after].join("\n");
+}
+
+function countOccurrences(content: string, search: string): number {
+  if (search.length === 0) return 0;
+  let count = 0;
+  let pos = 0;
+  while (true) {
+    const idx = content.indexOf(search, pos);
+    if (idx === -1) break;
+    count++;
+    pos = idx + 1;
+  }
+  return count;
 }
 
 interface FuzzyMatchResult {

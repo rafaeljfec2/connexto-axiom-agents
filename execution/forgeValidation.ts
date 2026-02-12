@@ -1,10 +1,35 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { logger } from "../config/logger.js";
+import {
+  parseTscErrors,
+  parseEslintErrors,
+  separateErrorsAndWarnings,
+} from "./forgeErrorParser.js";
+import type { StructuredError } from "./forgeErrorParser.js";
+import { applyAutoFixes } from "./forgeAutoFix.js";
+import type { AutoFixResult } from "./forgeAutoFix.js";
+import { detectMissingImports, installMissingPackages, detectPackageManager } from "./forgeDependencyInstaller.js";
+import { findRelatedTestFiles, runRelatedTests } from "./forgeTestRunner.js";
+import type { TestResult } from "./forgeTestRunner.js";
 
 export interface ValidationConfig {
   readonly runBuild: boolean;
   readonly buildTimeout: number;
+  readonly enableAutoFix: boolean;
+  readonly enableStructuredErrors: boolean;
+  readonly enableTestExecution: boolean;
+  readonly testTimeout: number;
+}
+
+export interface ValidationResult {
+  readonly success: boolean;
+  readonly output: string;
+  readonly errors: readonly StructuredError[];
+  readonly errorCount: number;
+  readonly warningCount: number;
+  readonly autoFixResult?: AutoFixResult;
+  readonly testResult?: TestResult;
 }
 
 type ExecFileAsync = (
@@ -22,45 +47,86 @@ const ESLINT_CONFIG_ERROR_PATTERNS = [
   "ESLintrc configuration is no longer supported",
 ] as const;
 
+const LINT_TIMEOUT_MS = 60_000;
+
 export async function runLintCheck(
   filePaths: readonly string[],
   workspacePath: string,
   validationConfig?: ValidationConfig,
-): Promise<{ readonly success: boolean; readonly output: string }> {
+): Promise<ValidationResult> {
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
   const execFileAsync = promisify(execFile);
 
-  const LINT_TIMEOUT_MS = 60_000;
   const lintableFiles = filePaths.filter(
     (f) => f.endsWith(".ts") || f.endsWith(".tsx") || f.endsWith(".js") || f.endsWith(".jsx"),
   );
 
-  if (lintableFiles.length > 0) {
-    await runEslintFix(execFileAsync, lintableFiles, workspacePath, LINT_TIMEOUT_MS);
+  await runPreFixPass(execFileAsync, lintableFiles, filePaths, workspacePath);
 
-    const firstLint = await runEslintCheck(execFileAsync, lintableFiles, workspacePath, LINT_TIMEOUT_MS);
+  const coreResult = await runCoreValidation(execFileAsync, lintableFiles, workspacePath, validationConfig);
 
-    if (!firstLint.success) {
-      const fixed = await fixUnusedImportsFromLint(filePaths, workspacePath, firstLint.output);
-      if (fixed) {
-        await runEslintFix(execFileAsync, lintableFiles, workspacePath, LINT_TIMEOUT_MS);
-      }
-    }
+  if (!coreResult.allSuccess && validationConfig?.enableAutoFix) {
+    const autoFixResult = await tryAutoFixAndRevalidate(
+      execFileAsync, coreResult.allErrors, lintableFiles, workspacePath, validationConfig,
+    );
+    if (autoFixResult) return autoFixResult;
   }
 
+  return buildFinalResult(coreResult, filePaths, workspacePath, validationConfig);
+}
+
+async function runPreFixPass(
+  execFileAsync: ExecFileAsync,
+  lintableFiles: readonly string[],
+  filePaths: readonly string[],
+  workspacePath: string,
+): Promise<void> {
+  if (lintableFiles.length === 0) return;
+
+  await runEslintFix(execFileAsync, lintableFiles, workspacePath, LINT_TIMEOUT_MS);
+  const firstLint = await runEslintCheck(execFileAsync, lintableFiles, workspacePath, LINT_TIMEOUT_MS);
+  if (firstLint.success) return;
+
+  const fixed = await fixUnusedImportsFromLint(filePaths, workspacePath, firstLint.output);
+  if (fixed) {
+    await runEslintFix(execFileAsync, lintableFiles, workspacePath, LINT_TIMEOUT_MS);
+  }
+}
+
+interface CoreValidationResult {
+  readonly outputs: readonly string[];
+  readonly allSuccess: boolean;
+  readonly allErrors: readonly StructuredError[];
+}
+
+async function runCoreValidation(
+  execFileAsync: ExecFileAsync,
+  lintableFiles: readonly string[],
+  workspacePath: string,
+  validationConfig?: ValidationConfig,
+): Promise<CoreValidationResult> {
   const outputs: string[] = [];
   let allSuccess = true;
+  let allErrors: StructuredError[] = [];
 
   if (lintableFiles.length > 0) {
     const eslintResult = await runEslintCheck(execFileAsync, lintableFiles, workspacePath, LINT_TIMEOUT_MS);
     outputs.push(eslintResult.output);
     if (!eslintResult.success) allSuccess = false;
+
+    if (validationConfig?.enableStructuredErrors) {
+      allErrors = [...allErrors, ...parseEslintErrors(eslintResult.output)];
+    }
   }
 
   const tscResult = await runTscCheck(execFileAsync, workspacePath, LINT_TIMEOUT_MS);
   outputs.push(tscResult.output);
   if (!tscResult.success) allSuccess = false;
+
+  if (validationConfig?.enableStructuredErrors) {
+    allErrors = [...allErrors, ...parseTscErrors(tscResult.output)];
+  }
 
   if (allSuccess && validationConfig?.runBuild) {
     const buildResult = await runBuildCheck(execFileAsync, workspacePath, validationConfig.buildTimeout);
@@ -68,7 +134,77 @@ export async function runLintCheck(
     if (!buildResult.success) allSuccess = false;
   }
 
-  return { success: allSuccess, output: outputs.join("\n") };
+  return { outputs, allSuccess, allErrors };
+}
+
+async function buildFinalResult(
+  coreResult: CoreValidationResult,
+  filePaths: readonly string[],
+  workspacePath: string,
+  validationConfig?: ValidationConfig,
+): Promise<ValidationResult> {
+  const { errors, warnings } = separateErrorsAndWarnings(coreResult.allErrors);
+  const outputs = [...coreResult.outputs];
+  let allSuccess = coreResult.allSuccess;
+
+  let testResult: TestResult | undefined;
+  if (allSuccess && validationConfig?.enableTestExecution) {
+    const testFiles = await findRelatedTestFiles(filePaths, workspacePath);
+    testResult = await runRelatedTests(testFiles, workspacePath, validationConfig.testTimeout);
+    outputs.push(testResult.output);
+    if (!testResult.success) allSuccess = false;
+  }
+
+  return {
+    success: allSuccess,
+    output: outputs.join("\n"),
+    errors: allSuccess ? [] : errors,
+    errorCount: errors.length,
+    warningCount: warnings.length,
+    testResult,
+  };
+}
+
+async function tryAutoFixAndRevalidate(
+  execFileAsync: ExecFileAsync,
+  allErrors: readonly StructuredError[],
+  lintableFiles: readonly string[],
+  workspacePath: string,
+  validationConfig: ValidationConfig,
+): Promise<ValidationResult | null> {
+  const missingPackages = await tryInstallMissingDeps(allErrors, workspacePath);
+  const autoFixResult = await applyAutoFixes(allErrors, workspacePath);
+
+  if (autoFixResult.fixedCount === 0 && missingPackages.length === 0) return null;
+
+  logger.info({ fixedCount: autoFixResult.fixedCount }, "Auto-fix applied, re-validating");
+
+  const revalidation = await runCoreValidation(execFileAsync, lintableFiles, workspacePath, validationConfig);
+  const { errors, warnings } = separateErrorsAndWarnings(revalidation.allErrors);
+
+  return {
+    success: revalidation.allSuccess,
+    output: revalidation.outputs.join("\n"),
+    errors: revalidation.allSuccess ? [] : errors,
+    errorCount: errors.length,
+    warningCount: warnings.length,
+    autoFixResult,
+  };
+}
+
+async function tryInstallMissingDeps(
+  errors: readonly StructuredError[],
+  workspacePath: string,
+): Promise<readonly string[]> {
+  const missingPackages = detectMissingImports(errors);
+  if (missingPackages.length === 0) return [];
+
+  const pm = await detectPackageManager(workspacePath);
+  const installResult = await installMissingPackages(missingPackages, workspacePath, pm);
+  if (installResult.success) {
+    logger.info({ packages: missingPackages }, "Auto-installed missing packages, re-validating");
+  }
+  return missingPackages;
 }
 
 function stripNpmWarnings(text: string): string {
@@ -137,7 +273,7 @@ async function runTscCheck(
   try {
     const { stdout, stderr } = await execFileAsync(
       "npx",
-      ["tsc", "--noEmit"],
+      ["tsc", "--noEmit", "--incremental"],
       { cwd: workspacePath, timeout: timeoutMs },
     );
     const cleaned = stripNpmWarnings(`${stdout}${stderr}`);
@@ -176,7 +312,7 @@ async function runBuildCheck(
     return { success: true, output: "[build] SKIPPED (no build script in package.json)" };
   }
 
-  const packageManager = await detectPackageManager(workspacePath);
+  const packageManager = await detectLocalPackageManager(workspacePath);
   logger.info({ buildScript, packageManager }, "Running project build check");
 
   try {
@@ -198,7 +334,7 @@ async function runBuildCheck(
   }
 }
 
-async function detectPackageManager(workspacePath: string): Promise<string> {
+async function detectLocalPackageManager(workspacePath: string): Promise<string> {
   try {
     await fs.access(path.join(workspacePath, "pnpm-lock.yaml"));
     return "pnpm";
@@ -331,3 +467,6 @@ function cleanImportStatement(importBlock: string, unusedSet: ReadonlySet<string
 
   return importBlock.replace(/\{[^}]*\}/, newSpecifiers);
 }
+
+export { formatErrorsForPrompt } from "./forgeErrorParser.js";
+export type { StructuredError } from "./forgeErrorParser.js";

@@ -3,6 +3,12 @@ import type { FileContext } from "./fileDiscovery.js";
 import type { ForgePlan } from "./forgeTypes.js";
 import { MAX_LINT_ERROR_CHARS } from "./forgeTypes.js";
 
+export interface CorrectionAttempt {
+  readonly round: number;
+  readonly errorType: "apply" | "validation" | "test";
+  readonly errorSummary: string;
+}
+
 export function buildPlanningSystemPrompt(language: string, framework: string): string {
   return [
     "Voce e o FORGE, agente de planejamento do sistema connexto-axiom.",
@@ -99,6 +105,7 @@ export function buildExecutionSystemPrompt(
     '1. Para action "create": use o campo "content" com o arquivo completo.',
     '2. Para action "modify": use o campo "edits" com blocos search/replace.',
     '   Cada edit tem "search" (trecho do arquivo original) e "replace" (trecho que substitui).',
+    '   Opcionalmente, adicione "line" e "endLine" para edits baseados em numero de linha.',
     '   REGRA CRITICA para "search":',
     "   - Copie o trecho EXATAMENTE como aparece no codigo fornecido no prompt.",
     "   - Inclua pelo menos 2-3 linhas ANTES e DEPOIS da linha que voce quer mudar.",
@@ -212,14 +219,28 @@ export function buildExecutionUserPrompt(
   ].join("\n");
 }
 
-export function buildCorrectionUserPrompt(
-  delegation: KairosDelegation,
-  plan: ForgePlan,
-  errorOutput: string,
-  currentFilesState: readonly { readonly path: string; readonly content: string }[],
-  fileTree: string,
-  allowedDirs: readonly string[],
-): string {
+export interface CorrectionPromptContext {
+  readonly delegation: KairosDelegation;
+  readonly plan: ForgePlan;
+  readonly errorOutput: string;
+  readonly currentFilesState: readonly { readonly path: string; readonly content: string }[];
+  readonly fileTree: string;
+  readonly allowedDirs: readonly string[];
+  readonly appliedFiles?: readonly string[];
+  readonly failedFile?: string;
+  readonly failedEditIndex?: number;
+  readonly attempts?: readonly CorrectionAttempt[];
+  readonly typeDefinitions?: string;
+  readonly escalationSnippets?: string;
+}
+
+export function buildCorrectionUserPrompt(promptCtx: CorrectionPromptContext): string {
+  const {
+    delegation, plan, errorOutput, currentFilesState, fileTree,
+    allowedDirs, appliedFiles, failedFile, failedEditIndex,
+    attempts, typeDefinitions, escalationSnippets,
+  } = promptCtx;
+
   const contextBlocks = currentFilesState.map(
     (f) => `--- ${f.path} (ESTADO ATUAL) ---\n${f.content}\n--- end ---`,
   );
@@ -230,7 +251,7 @@ export function buildCorrectionUserPrompt(
 
   const truncatedErrors = errorOutput.slice(0, MAX_LINT_ERROR_CHARS);
 
-  return [
+  const lines = [
     `Tarefa: ${delegation.task}`,
     `Resultado esperado: ${delegation.expected_output}`,
     `Goal ID: ${delegation.goal_id}`,
@@ -242,6 +263,51 @@ export function buildCorrectionUserPrompt(
     fileTree.slice(0, 2000),
     "",
     `Diretorios permitidos: ${allowedDirs.join(", ")}`,
+  ];
+
+  if (appliedFiles && appliedFiles.length > 0) {
+    lines.push(
+      "",
+      "EDITS JA APLICADOS COM SUCESSO:",
+      ...appliedFiles.map((f) => `  - ${f}`),
+      "NAO re-edite estes arquivos a menos que necessario para corrigir erros de validacao.",
+    );
+  }
+
+  if (failedFile !== undefined) {
+    lines.push(
+      "",
+      `EDIT QUE FALHOU: arquivo "${failedFile}"${failedEditIndex !== undefined ? ` (edit index ${failedEditIndex})` : ""}`,
+      "Corrija APENAS este edit. Releia o ESTADO ATUAL do arquivo acima e copie EXATAMENTE.",
+    );
+  }
+
+  if (attempts && attempts.length > 0) {
+    lines.push(
+      "",
+      "HISTORICO DE TENTATIVAS ANTERIORES:",
+      ...attempts.map((a) => `  Round ${a.round}: [${a.errorType}] ${a.errorSummary}`),
+      "ATENCAO: NAO repita os mesmos erros. Analise o que falhou e mude a estrategia.",
+    );
+  }
+
+  if (typeDefinitions && typeDefinitions.length > 0) {
+    lines.push(
+      "",
+      "DEFINICOES DE TIPOS RELEVANTES AOS ERROS:",
+      typeDefinitions,
+    );
+  }
+
+  if (escalationSnippets && escalationSnippets.length > 0) {
+    lines.push(
+      "",
+      "CONTEXTO ADICIONAL DE ESCALACAO (arquivos com erros):",
+      escalationSnippets,
+    );
+  }
+
+  lines.push(
     contextSection,
     "ERRO DA TENTATIVA ANTERIOR:",
     truncatedErrors,
@@ -252,6 +318,7 @@ export function buildCorrectionUserPrompt(
     "3. Se o erro for 'Search string not found':",
     "   - Sua string de busca NAO existe no arquivo.",
     "   - Releia o ESTADO ATUAL do arquivo e copie LETRA POR LETRA as linhas que quer substituir.",
+    "   - Alternativa: use 'line' e 'endLine' para edits baseados em numero de linha.",
     "   - Se o arquivo NAO precisa ser alterado, REMOVA-O da lista de files.",
     "4. NAO invente ou suponha conteudo. Copie LITERALMENTE do ESTADO ATUAL mostrado.",
     "5. Inclua 2-3 linhas de contexto antes e depois para garantir unicidade.",
@@ -260,5 +327,7 @@ export function buildCorrectionUserPrompt(
     "8. Se um arquivo NAO contribui para resolver a tarefa, REMOVA-O da resposta.",
     "9. Se o erro for um import nao utilizado, remova-o.",
     "10. Responda APENAS com JSON puro no formato obrigatorio.",
-  ].join("\n");
+  );
+
+  return lines.join("\n");
 }

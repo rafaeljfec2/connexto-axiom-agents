@@ -18,7 +18,8 @@
     "test": "node --import tsx --test '**/*.test.ts'",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "openclaw": "openclaw gateway --auth token --token dev-local"
+    "openclaw": "openclaw gateway --auth token --token dev-local",
+    "test:vitest": "vitest run"
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",
@@ -36,7 +37,8 @@
     "prettier": "^3.8.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.55.0"
+    "typescript-eslint": "^8.55.0",
+    "vitest": "^4.0.18"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

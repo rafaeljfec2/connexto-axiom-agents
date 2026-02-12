@@ -75,6 +75,8 @@ const ALLOWED_EXTENSIONS: ReadonlySet<string> = new Set([
 export interface FileEdit {
   readonly search: string;
   readonly replace: string;
+  readonly line?: number;
+  readonly endLine?: number;
 }
 
 export interface FileChange {

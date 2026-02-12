@@ -115,6 +115,11 @@ async function executeWithAgentLoop(
     enableImportExpansion: agentConfig.enableImportExpansion,
     enableFrameworkRules: agentConfig.enableFrameworkRules,
     enablePreLintCheck: agentConfig.enablePreLintCheck,
+    enableTestExecution: agentConfig.enableTestExecution,
+    testTimeout: agentConfig.testTimeout,
+    enableAutoFix: agentConfig.enableAutoFix,
+    enableAtomicEdits: agentConfig.enableAtomicEdits,
+    enableStructuredErrors: agentConfig.enableStructuredErrors,
   });
 
   logger.info(

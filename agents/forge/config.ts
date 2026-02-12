@@ -14,4 +14,9 @@ export const config: ForgeAgentConfig = {
   enableImportExpansion: true,
   enableFrameworkRules: true,
   enablePreLintCheck: true,
+  enableTestExecution: false,
+  testTimeout: 60_000,
+  enableAutoFix: true,
+  enableAtomicEdits: true,
+  enableStructuredErrors: true,
 };

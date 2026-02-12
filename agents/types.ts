@@ -15,4 +15,9 @@ export interface ForgeAgentConfig extends AgentConfig {
   readonly enableImportExpansion: boolean;
   readonly enableFrameworkRules: boolean;
   readonly enablePreLintCheck: boolean;
+  readonly enableTestExecution: boolean;
+  readonly testTimeout: number;
+  readonly enableAutoFix: boolean;
+  readonly enableAtomicEdits: boolean;
+  readonly enableStructuredErrors: boolean;
 }

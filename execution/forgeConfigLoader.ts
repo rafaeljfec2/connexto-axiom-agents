@@ -13,5 +13,10 @@ export function loadForgeAgentConfig(): ForgeExecutionConfig {
     enableImportExpansion: forgeConfig.enableImportExpansion,
     enableFrameworkRules: forgeConfig.enableFrameworkRules,
     enablePreLintCheck: forgeConfig.enablePreLintCheck,
+    enableTestExecution: forgeConfig.enableTestExecution,
+    testTimeout: forgeConfig.testTimeout,
+    enableAutoFix: forgeConfig.enableAutoFix,
+    enableAtomicEdits: forgeConfig.enableAtomicEdits,
+    enableStructuredErrors: forgeConfig.enableStructuredErrors,
   };
 }

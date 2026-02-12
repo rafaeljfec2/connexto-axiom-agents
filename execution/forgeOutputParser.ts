@@ -1,17 +1,17 @@
 import { logger } from "../config/logger.js";
 import type { KairosDelegation } from "../orchestration/types.js";
-import type { FileChange } from "./projectSecurity.js";
+import type { FileEdit, FileChange } from "./projectSecurity.js";
 import type { ForgeCodeOutput, ForgePlan } from "./forgeTypes.js";
 
 export function parsePlanningOutput(text: string): ForgePlan | null {
   try {
-    const jsonMatch = /\{[\s\S]*\}/.exec(text);
-    if (!jsonMatch) {
+    const jsonStr = extractFirstBalancedJson(text);
+    if (!jsonStr) {
       logger.error("No JSON object found in planning LLM output");
       return null;
     }
 
-    const raw = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+    const raw = JSON.parse(sanitizeJsonString(jsonStr)) as Record<string, unknown>;
 
     if (typeof raw.plan !== "string" || raw.plan.length === 0) {
       logger.error("Missing or invalid plan in planning output");
@@ -49,13 +49,13 @@ export function parsePlanningOutput(text: string): ForgePlan | null {
 
 export function parseCodeOutput(text: string): ForgeCodeOutput | null {
   try {
-    const jsonMatch = /\{[\s\S]*\}/.exec(text);
-    if (!jsonMatch) {
+    const jsonStr = extractFirstBalancedJson(text);
+    if (!jsonStr) {
       logger.error("No JSON object found in project code LLM output");
       return null;
     }
 
-    const raw = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+    const raw = JSON.parse(sanitizeJsonString(jsonStr)) as Record<string, unknown>;
 
     if (typeof raw.description !== "string" || raw.description.length === 0) {
       logger.error("Missing or invalid description in project code output");
@@ -110,6 +110,64 @@ export function buildFallbackPlan(delegation: KairosDelegation): ForgePlan {
   };
 }
 
+export function extractFirstBalancedJson(text: string): string | null {
+  const startIdx = text.indexOf("{");
+  if (startIdx === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+
+  for (let i = startIdx; i < text.length; i++) {
+    const ch = text[i];
+
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+
+    if (ch === "\\") {
+      escapeNext = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        return text.slice(startIdx, i + 1);
+      }
+    }
+  }
+
+  const fallback = /\{[\s\S]*\}/.exec(text);
+  if (fallback) {
+    logger.debug("Balanced JSON extraction failed, using greedy regex fallback");
+    return fallback[0];
+  }
+
+  return null;
+}
+
+function sanitizeJsonString(json: string): string {
+  let sanitized = json
+    .replaceAll("\u201C", '"')
+    .replaceAll("\u201D", '"')
+    .replaceAll("\u2018", "'")
+    .replaceAll("\u2019", "'");
+
+  sanitized = sanitized.replaceAll(/,(\s*[}\]])/g, "$1");
+
+  return sanitized;
+}
+
 function parseFileChanges(
   rawFiles: ReadonlyArray<Record<string, unknown>>,
 ): readonly FileChange[] | null {
@@ -135,8 +193,8 @@ function parseFileChanges(
 function parseEditsArray(
   rawEdits: ReadonlyArray<Record<string, unknown>>,
   filePath: string,
-): readonly { readonly search: string; readonly replace: string }[] | null {
-  const edits: { readonly search: string; readonly replace: string }[] = [];
+): readonly FileEdit[] | null {
+  const edits: FileEdit[] = [];
 
   for (const edit of rawEdits) {
     if (typeof edit.search !== "string" || edit.search.length === 0) {
@@ -147,7 +205,15 @@ function parseEditsArray(
       logger.warn({ path: filePath }, "Skipping edit with invalid replace string");
       continue;
     }
-    edits.push({ search: edit.search, replace: edit.replace });
+
+    const parsedEdit: FileEdit = {
+      search: edit.search,
+      replace: edit.replace,
+      ...(typeof edit.line === "number" ? { line: edit.line } : {}),
+      ...(typeof edit.endLine === "number" ? { endLine: edit.endLine } : {}),
+    };
+
+    edits.push(parsedEdit);
   }
 
   if (edits.length === 0) {
