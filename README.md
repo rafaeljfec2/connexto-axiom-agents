@@ -50,12 +50,54 @@ src/bot.ts           Entry point do bot Telegram (long-polling persistente)
 | Agente       | Papel                                                                          | Modelo LLM       | Status     |
 | ------------ | ------------------------------------------------------------------------------ | ----------------- | ---------- |
 | **KAIROS**   | Orquestrador estrategico — decide, delega e avalia com contexto historico      | `gpt-5.2`        | Ativo      |
-| **FORGE**    | Executor tecnico — le codigo real, gera edits search/replace via OpenClaw      | `gpt-5.3-codex`  | Ativo      |
+| **FORGE**    | Executor tecnico — planeja, gera edits search/replace e corrige iterativamente | `gpt-5.3-codex`  | Ativo      |
 | **NEXUS**    | Pesquisa tecnica — analisa opcoes, trade-offs e riscos                         | `gpt-4o-mini`    | Ativo      |
 | **VECTOR**   | Executor de marketing — gera posts, newsletters, landing copy                  | `gpt-4o-mini`    | Ativo      |
 | **QA**       | Validacao funcional — testes E2E hibridos (LLM + Playwright)                   | `gpt-4o-mini`    | Planejado  |
 | **SENTINEL** | Monitor de seguranca e compliance                                              | —                 | Planejado  |
 | **COVENANT** | Fiscalizador de governanca e politicas                                         | —                 | Planejado  |
+
+## Modelo de Execucao
+
+O OpenClaw **nao executa tarefas**. Ele e exclusivamente um **gateway de LLM** com API OpenAI-compatible (`/v1/chat/completions`) que recebe prompts e retorna texto (JSON ou Markdown).
+
+Toda execucao real — escrita de arquivos, lint, build, git — e feita pelo **axiom-agents** (este codebase).
+
+```mermaid
+sequenceDiagram
+    participant Kairos as KAIROS
+    participant Forge as FORGE
+    participant OC as OpenClaw
+    participant FS as Filesystem
+    participant CLI as ESLint / TSC / Git
+
+    Kairos->>Forge: Delega task
+    Forge->>FS: Cria workspace isolado (git clone --local)
+    Forge->>FS: Le arquivos de contexto (fs.readFile)
+    Forge->>OC: HTTP POST /v1/chat/completions (prompt)
+    OC-->>Forge: Retorna texto (JSON com edits)
+    Forge->>FS: Aplica edits (fs.writeFile)
+    Forge->>CLI: Valida (npx eslint + npx tsc)
+    alt Validacao falha
+        Forge->>OC: Envia erros para correcao (prompt)
+        OC-->>Forge: Retorna correcao (JSON)
+        Forge->>FS: Restaura e re-aplica edits
+    end
+    Forge->>CLI: Git branch + commit + push
+    Forge-->>Kairos: Retorna resultado
+```
+
+| Responsabilidade               | Quem executa                   |
+| ------------------------------ | ------------------------------ |
+| Receber prompt, retornar texto | OpenClaw (gateway HTTP de LLM) |
+| Escrever/modificar arquivos    | axiom-agents (`fs`)            |
+| ESLint, TypeScript, build      | axiom-agents (`child_process`) |
+| Git (branch, commit, push)     | axiom-agents (`child_process`) |
+| Instalar dependencias          | axiom-agents (`child_process`) |
+| Executar testes                | axiom-agents (`child_process`) |
+| Audit trail (SQLite)           | axiom-agents                   |
+
+> **Resumo:** OpenClaw = LLM gateway. axiom-agents = quem executa tudo no sistema operacional.
 
 ## Evolucao
 
@@ -96,7 +138,7 @@ src/bot.ts           Entry point do bot Telegram (long-polling persistente)
 | --------------- | ----------------------------------- |
 | Runtime         | Node.js >= 24 + TypeScript 5.9      |
 | Banco de Dados  | SQLite (modo WAL, better-sqlite3)   |
-| Runtime LLM     | OpenClaw (execucao isolada de agentes) |
+| Gateway LLM     | OpenClaw (gateway HTTP de LLM — apenas chat completions, sem execucao) |
 | Provedores LLM  | OpenAI (gpt-5.2, gpt-5.3-codex, gpt-4o-mini) |
 | Controle de Versao | Git (workspaces isolados, branch por task) |
 | Agendamento     | Cron (ciclos one-shot)              |
