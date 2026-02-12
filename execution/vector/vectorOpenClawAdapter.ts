@@ -10,7 +10,7 @@ import { incrementUsedTokens } from "../../state/budgets.js";
 import { recordTokenUsage } from "../../state/tokenUsage.js";
 import type { ExecutionResult } from "../shared/types.js";
 import { callOpenClaw } from "../shared/openclawClient.js";
-import type { TokenUsageInfo } from "../shared/openclawClient.js";
+import type { TokenUsageInfo, OpenClawResult } from "../shared/openclawClient.js";
 import { sanitizeOutput } from "../shared/outputSanitizer.js";
 import {
   ensureAgentSandbox,
@@ -32,11 +32,30 @@ export async function executeVectorViaOpenClaw(
     const artifactType = detectArtifactType(task);
     const prompt = buildPrompt(task, expected_output, goal_id, artifactType);
 
-    const response = await callOpenClaw({
+    const openClawResult: OpenClawResult = await callOpenClaw({
       agentId: AGENT_ID,
       prompt,
       systemPrompt: VECTOR_INSTRUCTIONS,
     });
+
+    if (!openClawResult.ok) {
+      const executionTimeMs = Math.round(performance.now() - startTime);
+      const isInfra = openClawResult.error.kind === "infra" || openClawResult.error.kind === "auth";
+      if (isInfra) {
+        return {
+          agent: AGENT_ID,
+          task,
+          status: "infra_unavailable" as const,
+          output: "",
+          error: openClawResult.error.message,
+          executionTimeMs,
+        };
+      }
+      logFailedAudit(db, task, prompt);
+      return { ...buildFailedResult(task, openClawResult.error.message), executionTimeMs };
+    }
+
+    const response = openClawResult.response;
 
     if (response.status === "failed") {
       const executionTimeMs = Math.round(performance.now() - startTime);

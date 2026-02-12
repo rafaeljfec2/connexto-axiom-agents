@@ -8,7 +8,7 @@ import { incrementUsedTokens } from "../../state/budgets.js";
 import { recordTokenUsage } from "../../state/tokenUsage.js";
 import type { ExecutionResult } from "../shared/types.js";
 import { callOpenClaw } from "../shared/openclawClient.js";
-import type { TokenUsageInfo } from "../shared/openclawClient.js";
+import type { TokenUsageInfo, OpenClawResult } from "../shared/openclawClient.js";
 import { sanitizeOutput } from "../shared/outputSanitizer.js";
 import { ensureSandbox, resolveSandboxPath, validateSandboxLimits } from "../shared/sandbox.js";
 
@@ -23,11 +23,37 @@ export async function executeForgeViaOpenClaw(
   try {
     const prompt = buildPrompt(task, expected_output, goal_id);
 
-    const response = await callOpenClaw({
+    const openClawResult: OpenClawResult = await callOpenClaw({
       agentId: "forge",
       prompt,
       systemPrompt: FORGE_INSTRUCTIONS,
     });
+
+    if (!openClawResult.ok) {
+      const executionTimeMs = Math.round(performance.now() - startTime);
+      const isInfra = openClawResult.error.kind === "infra" || openClawResult.error.kind === "auth";
+      if (isInfra) {
+        return {
+          agent: "forge",
+          task,
+          status: "infra_unavailable" as const,
+          output: "",
+          error: openClawResult.error.message,
+          executionTimeMs,
+        };
+      }
+      logAudit(db, {
+        agent: "forge",
+        action: task,
+        inputHash: hashContent(prompt),
+        outputHash: null,
+        sanitizerWarnings: [`openclaw_request_error: ${openClawResult.error.message}`],
+        runtime: "openclaw",
+      });
+      return { ...buildFailedResult(task, openClawResult.error.message), executionTimeMs };
+    }
+
+    const response = openClawResult.response;
 
     if (response.status === "failed") {
       const executionTimeMs = Math.round(performance.now() - startTime);

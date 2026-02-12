@@ -12,7 +12,7 @@ export type AgentAction = ForgeAction | VectorAction | NexusAction;
 export interface ExecutionResult {
   readonly agent: string;
   readonly task: string;
-  readonly status: "success" | "failed";
+  readonly status: "success" | "failed" | "infra_unavailable";
   readonly output: string;
   readonly error?: string;
   readonly tokensUsed?: number;

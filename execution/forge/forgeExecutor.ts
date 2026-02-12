@@ -8,12 +8,14 @@ import { isCodingTask, executeForgeCode } from "./forgeCodeExecutor.js";
 import { executeForgeViaOpenClaw } from "./forgeOpenClawAdapter.js";
 import { hasPermission } from "../shared/permissions.js";
 import { executeProjectCode } from "../project/projectCodeExecutor.js";
+import { checkOpenClawHealth } from "../shared/openclawClient.js";
 import { ensureSandbox, resolveSandboxPath, validateSandboxLimits } from "../shared/sandbox.js";
 
 export async function executeForge(
   db: BetterSqlite3.Database,
   delegation: KairosDelegation,
   projectId?: string,
+  traceId?: string,
 ): Promise<ExecutionResult> {
   if (delegation.agent !== "forge") {
     return buildFailedResult(delegation.task, `Agent "${delegation.agent}" is not forge`);
@@ -21,25 +23,42 @@ export async function executeForge(
 
   const useOpenClaw = process.env.USE_OPENCLAW === "true";
 
+  if (useOpenClaw) {
+    const healthy = await checkOpenClawHealth();
+    if (!healthy) {
+      logger.error(
+        { task: delegation.task, traceId },
+        "OpenClaw healthcheck failed — aborting execution",
+      );
+      return {
+        agent: "forge",
+        task: delegation.task,
+        status: "infra_unavailable",
+        output: "",
+        error: "OpenClaw unavailable (healthcheck failed)",
+      };
+    }
+  }
+
   if (projectId && useOpenClaw && isCodingTask(delegation)) {
     logger.info(
-      { task: delegation.task, projectId },
+      { task: delegation.task, projectId, traceId },
       "Routing to project code executor (project-aware coding task)",
     );
-    return executeProjectCode(db, delegation, projectId);
+    return executeProjectCode(db, delegation, projectId, traceId);
   }
 
   if (useOpenClaw && isCodingTask(delegation)) {
-    logger.info({ task: delegation.task }, "Routing to Forge code executor (coding task)");
+    logger.info({ task: delegation.task, traceId }, "Routing to Forge code executor (coding task)");
     return executeForgeCode(db, delegation);
   }
 
   if (useOpenClaw) {
-    logger.info({ task: delegation.task }, "Routing to OpenClaw runtime");
+    logger.info({ task: delegation.task, traceId }, "Routing to OpenClaw runtime");
     return executeForgeViaOpenClaw(db, delegation);
   }
 
-  logger.info({ task: delegation.task }, "Routing to local executor");
+  logger.info({ task: delegation.task, traceId }, "Routing to local executor");
   return executeForgeLocal(db, delegation);
 }
 

@@ -15,6 +15,7 @@ export interface ForgeAgentContext {
     readonly framework: string;
     readonly repo_source: string;
   };
+  readonly traceId?: string;
   readonly maxCorrectionRounds: number;
   readonly runBuild: boolean;
   readonly buildTimeout: number;

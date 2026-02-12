@@ -64,7 +64,8 @@ export async function runKairos(
   db: BetterSqlite3.Database,
   projectId?: string,
 ): Promise<void> {
-  logger.info({ projectId: projectId ?? "all" }, "Starting cycle...");
+  const traceId = crypto.randomUUID().slice(0, 8);
+  logger.info({ projectId: projectId ?? "all", traceId }, "Starting cycle...");
 
   await trySyncPRs(db);
 
@@ -149,9 +150,9 @@ export async function runKairos(
     "Delegations filtered",
   );
 
-  const nexusOutput = await executeApprovedNexus(db, filtered.approved);
-  const forgeOutput = await executeApprovedForge(db, filtered.approved, projectId);
-  const vectorOutput = await executeApprovedVector(db, filtered.approved);
+  const nexusOutput = await executeApprovedNexus(db, filtered.approved, traceId);
+  const forgeOutput = await executeApprovedForge(db, filtered.approved, projectId, traceId);
+  const vectorOutput = await executeApprovedVector(db, filtered.approved, traceId);
 
   const allResults = [...nexusOutput.results, ...forgeOutput.results, ...vectorOutput.results];
   const allBlocked = [...nexusOutput.blocked, ...forgeOutput.blocked, ...vectorOutput.blocked];
@@ -249,6 +250,7 @@ function buildEfficiencyInfo(
 async function executeApprovedNexus(
   db: BetterSqlite3.Database,
   approved: readonly KairosDelegation[],
+  traceId?: string,
 ): Promise<AgentExecutionOutput> {
   const nexusDelegations = approved.filter((d) => d.agent === "nexus");
 
@@ -277,12 +279,12 @@ async function executeApprovedNexus(
     }
 
     const result = await executeNexus(db, delegation);
-    saveOutcome(db, result);
+    saveOutcome(db, result, { traceId });
     results.push(result);
 
     if (result.status === "failed") {
       logger.error(
-        { task: delegation.task, error: result.error },
+        { task: delegation.task, error: result.error, traceId },
         "Nexus execution failed, aborting remaining",
       );
       break;
@@ -296,6 +298,7 @@ async function executeApprovedForge(
   db: BetterSqlite3.Database,
   approved: readonly KairosDelegation[],
   projectId?: string,
+  traceId?: string,
 ): Promise<AgentExecutionOutput> {
   const forgeDelegations = approved.filter((d) => d.agent === "forge");
 
@@ -304,7 +307,7 @@ async function executeApprovedForge(
     return { results: [], blocked: [] };
   }
 
-  logger.info({ count: forgeDelegations.length, projectId: projectId ?? "none" }, "Executing forge delegations");
+  logger.info({ count: forgeDelegations.length, projectId: projectId ?? "none", traceId }, "Executing forge delegations");
 
   const results: ExecutionResult[] = [];
   const blocked: BlockedTask[] = [];
@@ -323,13 +326,22 @@ async function executeApprovedForge(
       continue;
     }
 
-    const result = await executeForge(db, delegation, projectId);
-    saveOutcome(db, result);
+    const result = await executeForge(db, delegation, projectId, traceId);
+
+    if (result.status === "infra_unavailable") {
+      logger.error(
+        { task: delegation.task, error: result.error, traceId },
+        "Infra unavailable — skipping outcome (not a FORGE failure)",
+      );
+      continue;
+    }
+
+    saveOutcome(db, result, { traceId });
     results.push(result);
 
     if (result.status === "failed") {
       logger.error(
-        { task: delegation.task, error: result.error },
+        { task: delegation.task, error: result.error, traceId },
         "Forge execution failed, aborting remaining",
       );
       break;
@@ -401,6 +413,7 @@ interface AgentExecutionOutput {
 async function executeApprovedVector(
   db: BetterSqlite3.Database,
   approved: readonly KairosDelegation[],
+  traceId?: string,
 ): Promise<AgentExecutionOutput> {
   const vectorDelegations = approved.filter((d) => d.agent === "vector");
 
@@ -429,12 +442,12 @@ async function executeApprovedVector(
     }
 
     const result = await executeVector(db, delegation);
-    saveOutcome(db, result);
+    saveOutcome(db, result, { traceId });
     results.push(result);
 
     if (result.status === "failed") {
       logger.error(
-        { task: delegation.task, error: result.error },
+        { task: delegation.task, error: result.error, traceId },
         "Vector execution failed, aborting remaining",
       );
       break;

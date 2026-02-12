@@ -12,13 +12,22 @@ export interface Outcome {
   readonly execution_time_ms: number | null;
   readonly tokens_used: number | null;
   readonly artifact_size_bytes: number | null;
+  readonly trace_id: string | null;
   readonly created_at: string;
 }
 
-export function saveOutcome(db: BetterSqlite3.Database, result: ExecutionResult): void {
+interface SaveOutcomeOptions {
+  readonly traceId?: string;
+}
+
+export function saveOutcome(
+  db: BetterSqlite3.Database,
+  result: ExecutionResult,
+  options?: SaveOutcomeOptions,
+): void {
   db.prepare(
-    `INSERT INTO outcomes (id, agent_id, task, status, output, error, execution_time_ms, tokens_used, artifact_size_bytes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO outcomes (id, agent_id, task, status, output, error, execution_time_ms, tokens_used, artifact_size_bytes, trace_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     crypto.randomUUID(),
     result.agent,
@@ -29,13 +38,14 @@ export function saveOutcome(db: BetterSqlite3.Database, result: ExecutionResult)
     result.executionTimeMs ?? null,
     result.tokensUsed ?? null,
     result.artifactSizeBytes ?? null,
+    options?.traceId ?? null,
   );
 }
 
 export function loadRecentOutcomes(db: BetterSqlite3.Database, limit: number): readonly Outcome[] {
   return db
     .prepare(
-      `SELECT id, agent_id, task, status, output, error, execution_time_ms, tokens_used, artifact_size_bytes, created_at
+      `SELECT id, agent_id, task, status, output, error, execution_time_ms, tokens_used, artifact_size_bytes, trace_id, created_at
        FROM outcomes ORDER BY created_at DESC LIMIT ?`,
     )
     .all(limit) as Outcome[];

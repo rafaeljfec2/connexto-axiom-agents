@@ -12,7 +12,7 @@ import { recordTokenUsage } from "../../state/tokenUsage.js";
 import type { FileChange, ApplyResult } from "../shared/codeApplier.js";
 import { validateFilePaths, calculateRisk, applyCodeChangeWithBranch } from "../shared/codeApplier.js";
 import { callOpenClaw } from "../shared/openclawClient.js";
-import type { TokenUsageInfo } from "../shared/openclawClient.js";
+import type { TokenUsageInfo, OpenClawResult } from "../shared/openclawClient.js";
 import { isGitHubConfigured } from "../shared/githubClient.js";
 import type { ExecutionResult } from "../shared/types.js";
 import { createPRForCodeChange } from "../../services/pullRequestService.js";
@@ -89,6 +89,36 @@ export function isCodingTask(delegation: KairosDelegation): boolean {
   return CODING_KEYWORDS.some((keyword) => taskLower.includes(keyword));
 }
 
+async function callOpenClawForCode(
+  task: string,
+  prompt: string,
+  startTime: number,
+): Promise<{ readonly response: import("../shared/openclawClient.js").OpenClawResponse } | ExecutionResult> {
+  const openClawResult: OpenClawResult = await callOpenClaw({
+    agentId: "forge",
+    prompt,
+    systemPrompt: FORGE_CODER_SYSTEM_PROMPT,
+  });
+
+  if (!openClawResult.ok) {
+    const executionTimeMs = Math.round(performance.now() - startTime);
+    const isInfra = openClawResult.error.kind === "infra" || openClawResult.error.kind === "auth";
+    const status = isInfra ? ("infra_unavailable" as const) : ("failed" as const);
+    return buildResult(task, status, "", openClawResult.error.message, executionTimeMs);
+  }
+
+  if (openClawResult.response.status === "failed") {
+    const executionTimeMs = Math.round(performance.now() - startTime);
+    return buildResult(task, "failed", "", "OpenClaw returned status: failed", executionTimeMs);
+  }
+
+  return { response: openClawResult.response };
+}
+
+function isEarlyReturn(result: unknown): result is ExecutionResult {
+  return typeof result === "object" && result !== null && "agent" in result;
+}
+
 export async function executeForgeCode(
   db: BetterSqlite3.Database,
   delegation: KairosDelegation,
@@ -99,17 +129,10 @@ export async function executeForgeCode(
   try {
     const prompt = await buildCodePrompt(task, expected_output, goal_id);
 
-    const response = await callOpenClaw({
-      agentId: "forge",
-      prompt,
-      systemPrompt: FORGE_CODER_SYSTEM_PROMPT,
-    });
+    const callResult = await callOpenClawForCode(task, prompt, startTime);
+    if (isEarlyReturn(callResult)) return callResult;
 
-    if (response.status === "failed") {
-      const executionTimeMs = Math.round(performance.now() - startTime);
-      return buildResult(task, "failed", "", "OpenClaw returned status: failed", executionTimeMs);
-    }
-
+    const { response } = callResult;
     const usage = resolveUsage(response.usage, response.text, prompt);
     recordUsage(db, goal_id, usage);
 
@@ -477,14 +500,21 @@ async function attemptLintCorrection(
 
     const correctionPrompt = buildCorrectionPrompt(originalParsed, failedResult.lintOutput);
 
-    const response = await callOpenClaw({
+    const correctionResult: OpenClawResult = await callOpenClaw({
       agentId: "forge",
       prompt: correctionPrompt,
       systemPrompt: FORGE_CODER_SYSTEM_PROMPT,
     });
 
+    if (!correctionResult.ok) {
+      logger.warn({ changeId, attempt, kind: correctionResult.error.kind }, "LLM correction call failed");
+      return null;
+    }
+
+    const response = correctionResult.response;
+
     if (response.status === "failed") {
-      logger.warn({ changeId, attempt }, "LLM correction call failed");
+      logger.warn({ changeId, attempt }, "LLM correction returned status: failed");
       return null;
     }
 
@@ -558,12 +588,13 @@ function buildCorrectionPrompt(originalParsed: ForgeCodeOutput, lintOutput: stri
 
 function buildResult(
   task: string,
-  status: "success" | "failed",
+  status: "success" | "failed" | "infra_unavailable",
   output: string,
   error?: string,
   executionTimeMs?: number,
   tokensUsed?: number,
 ): ExecutionResult {
+  const effectiveTokens = tokensUsed && tokensUsed > 0 ? tokensUsed : undefined;
   return {
     agent: "forge",
     task,
@@ -571,7 +602,7 @@ function buildResult(
     output,
     error,
     executionTimeMs,
-    tokensUsed,
+    tokensUsed: effectiveTokens,
   };
 }
 

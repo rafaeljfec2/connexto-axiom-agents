@@ -28,6 +28,7 @@ export async function executeProjectCode(
   db: BetterSqlite3.Database,
   delegation: KairosDelegation,
   projectId: string,
+  traceId?: string,
 ): Promise<ExecutionResult> {
   const { task, goal_id } = delegation;
   const startTime = performance.now();
@@ -55,6 +56,7 @@ export async function executeProjectCode(
         workspacePath,
         project,
         startTime,
+        traceId,
       );
       return result;
     } finally {
@@ -96,6 +98,7 @@ async function executeWithAgentLoop(
     readonly repo_source: string;
   },
   startTime: number,
+  traceId?: string,
 ): Promise<ExecutionResult> {
   const { task } = delegation;
   const agentConfig = loadForgeAgentConfig();
@@ -106,6 +109,7 @@ async function executeWithAgentLoop(
     projectId,
     workspacePath,
     project,
+    traceId,
     maxCorrectionRounds: agentConfig.maxCorrectionRounds,
     runBuild: agentConfig.runBuild,
     buildTimeout: agentConfig.buildTimeout,
@@ -316,11 +320,12 @@ function formatApprovalRequest(
 
 function buildResult(
   task: string,
-  status: "success" | "failed",
+  status: "success" | "failed" | "infra_unavailable",
   output: string,
   error?: string,
   executionTimeMs?: number,
   tokensUsed?: number,
 ): ExecutionResult {
-  return { agent: "forge", task, status, output, error, executionTimeMs, tokensUsed };
+  const effectiveTokens = tokensUsed && tokensUsed > 0 ? tokensUsed : undefined;
+  return { agent: "forge", task, status, output, error, executionTimeMs, tokensUsed: effectiveTokens };
 }

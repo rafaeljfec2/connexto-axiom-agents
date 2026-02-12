@@ -52,13 +52,14 @@ CREATE TABLE IF NOT EXISTS outcomes (
   id                  TEXT PRIMARY KEY,
   agent_id            TEXT NOT NULL,
   task                TEXT NOT NULL,
-  status              TEXT NOT NULL CHECK (status IN ('success', 'failed')),
+  status              TEXT NOT NULL CHECK (status IN ('success', 'failed', 'infra_unavailable')),
   output              TEXT,
   error               TEXT,
   execution_time_ms   INTEGER,
   tokens_used         INTEGER,
   artifact_size_bytes INTEGER,
   project_id          TEXT,
+  trace_id            TEXT,
   created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 

@@ -28,6 +28,7 @@ function applyMigrations(db: BetterSqlite3.Database): void {
   migrateCodeChangesProjectId(db);
   migrateOutcomesProjectId(db);
   migrateGovernanceDecisions(db);
+  migrateOutcomesTraceId(db);
 }
 
 function migrateArtifactsColumns(db: BetterSqlite3.Database): void {
@@ -132,6 +133,16 @@ function migrateGovernanceDecisions(db: BetterSqlite3.Database): void {
       CREATE INDEX IF NOT EXISTS idx_governance_decisions_created_at ON governance_decisions(created_at);
       CREATE INDEX IF NOT EXISTS idx_governance_decisions_model_tier ON governance_decisions(model_tier);
     `);
+  }
+}
+
+function migrateOutcomesTraceId(db: BetterSqlite3.Database): void {
+  const columns = db.pragma("table_info(outcomes)") as ReadonlyArray<{ name: string }>;
+  const columnNames = new Set(columns.map((c) => c.name));
+
+  if (!columnNames.has("trace_id")) {
+    db.exec("ALTER TABLE outcomes ADD COLUMN trace_id TEXT");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_outcomes_trace_id ON outcomes(trace_id)");
   }
 }
 

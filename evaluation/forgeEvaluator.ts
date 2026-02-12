@@ -17,6 +17,13 @@ export function evaluateExecution(
   result: ExecutionResult,
   budgetConfig: BudgetConfig,
 ): ExecutionEvaluation {
+  if (result.status === "infra_unavailable") {
+    return {
+      grade: "PARTIAL",
+      reasons: ["infra_unavailable"],
+    };
+  }
+
   if (result.status === "failed") {
     return {
       grade: "FAILURE",
