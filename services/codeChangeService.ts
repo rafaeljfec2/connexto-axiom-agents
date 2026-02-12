@@ -1,9 +1,9 @@
 import type BetterSqlite3 from "better-sqlite3";
 import { logger } from "../config/logger.js";
-import { applyCodeChangeWithBranch } from "../execution/codeApplier.js";
-import type { FileChange } from "../execution/codeApplier.js";
-import { isGitHubConfigured } from "../execution/githubClient.js";
-import { deleteBranch } from "../execution/gitManager.js";
+import { applyCodeChangeWithBranch } from "../execution/shared/codeApplier.js";
+import type { FileChange } from "../execution/shared/codeApplier.js";
+import { isGitHubConfigured } from "../execution/shared/githubClient.js";
+import { deleteBranch } from "../execution/shared/gitManager.js";
 import { createPRForCodeChange } from "./pullRequestService.js";
 import {
   getCodeChangeById,

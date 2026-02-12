@@ -1,4 +1,4 @@
-import type { ExecutionResult } from "../execution/types.js";
+import type { ExecutionResult } from "../execution/shared/types.js";
 import type {
   KairosOutput,
   FilteredDelegations,

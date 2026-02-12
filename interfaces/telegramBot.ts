@@ -1,7 +1,7 @@
 import type BetterSqlite3 from "better-sqlite3";
 import { logger } from "../config/logger.js";
-import { listForgeBranches, getBranchCommits } from "../execution/gitManager.js";
-import { publishArtifact } from "../execution/publisher.js";
+import { listForgeBranches, getBranchCommits } from "../execution/shared/gitManager.js";
+import { publishArtifact } from "../execution/shared/publisher.js";
 import { listPendingDrafts, approveDraft, rejectDraft } from "../services/approvalService.js";
 import {
   listPendingCodeChanges,

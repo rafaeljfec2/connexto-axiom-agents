@@ -1,4 +1,4 @@
-import type { ExecutionResult } from "../execution/types.js";
+import type { ExecutionResult } from "../execution/shared/types.js";
 
 export interface KairosDecision {
   readonly goal_id: string;

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type BetterSqlite3 from "better-sqlite3";
-import type { ExecutionResult } from "../execution/types.js";
+import type { ExecutionResult } from "../execution/shared/types.js";
 
 export interface Outcome {
   readonly id: string;

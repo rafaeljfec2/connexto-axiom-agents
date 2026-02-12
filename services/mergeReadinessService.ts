@@ -4,8 +4,8 @@ import {
   getPullRequest,
   getPullRequestDetails,
   getCheckRunsStatus,
-} from "../execution/githubClient.js";
-import type { PRDetails, CheckRunsStatus } from "../execution/githubClient.js";
+} from "../execution/shared/githubClient.js";
+import type { PRDetails, CheckRunsStatus } from "../execution/shared/githubClient.js";
 import { sendTelegramMessage } from "../interfaces/telegram.js";
 import {
   getPullRequestById,

@@ -1,5 +1,5 @@
 import type { BudgetConfig } from "../config/budget.js";
-import type { ExecutionResult } from "../execution/types.js";
+import type { ExecutionResult } from "../execution/shared/types.js";
 
 export type EvaluationGrade = "SUCCESS" | "PARTIAL" | "FAILURE";
 

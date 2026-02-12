@@ -4,11 +4,11 @@ import { loadBudgetConfig } from "../config/budget.js";
 import { logger } from "../config/logger.js";
 import { evaluateExecution } from "../evaluation/forgeEvaluator.js";
 import { evaluateNexusExecution } from "../evaluation/nexusEvaluator.js";
-import { checkBudget } from "../execution/budgetGate.js";
-import { executeForge } from "../execution/forgeExecutor.js";
-import { executeNexus } from "../execution/nexusExecutor.js";
-import type { ExecutionResult } from "../execution/types.js";
-import { executeVector } from "../execution/vectorExecutor.js";
+import { checkBudget } from "../execution/shared/budgetGate.js";
+import { executeForge } from "../execution/forge/forgeExecutor.js";
+import { executeNexus } from "../execution/nexus/nexusExecutor.js";
+import type { ExecutionResult } from "../execution/shared/types.js";
+import { executeVector } from "../execution/vector/vectorExecutor.js";
 import type { LLMUsage } from "../llm/client.js";
 import { sendTelegramMessage } from "../interfaces/telegram.js";
 import { saveFeedback, normalizeTaskType, getFeedbackSummary } from "../state/agentFeedback.js";
@@ -17,7 +17,7 @@ import {
   getAverageEngagement7d,
   getMarketingPerformanceSummary,
 } from "../state/marketingFeedback.js";
-import { isGitHubConfigured } from "../execution/githubClient.js";
+import { isGitHubConfigured } from "../execution/shared/githubClient.js";
 import { syncOpenPRsStatus } from "../services/mergeReadinessService.js";
 import { getCodeChangeStats7d, getBranchStats7d } from "../state/codeChanges.js";
 import { getResearchStats7d } from "../state/nexusResearch.js";

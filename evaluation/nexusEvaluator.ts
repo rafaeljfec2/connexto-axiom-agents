@@ -1,5 +1,5 @@
 import type { BudgetConfig } from "../config/budget.js";
-import type { ExecutionResult } from "../execution/types.js";
+import type { ExecutionResult } from "../execution/shared/types.js";
 import type { ExecutionEvaluation, EvaluationGrade } from "./forgeEvaluator.js";
 
 const SLOW_EXECUTION_THRESHOLD_MS = 60_000;

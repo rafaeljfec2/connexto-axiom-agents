@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { evaluateNexusExecution } from "./nexusEvaluator.js";
-import type { ExecutionResult } from "../execution/types.js";
+import type { ExecutionResult } from "../execution/shared/types.js";
 import type { BudgetConfig } from "../config/budget.js";
 
 const DEFAULT_BUDGET_CONFIG: BudgetConfig = {

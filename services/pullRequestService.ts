@@ -1,6 +1,6 @@
 import type BetterSqlite3 from "better-sqlite3";
 import { logger } from "../config/logger.js";
-import { pushBranch, createPullRequest, closePullRequest } from "../execution/githubClient.js";
+import { pushBranch, createPullRequest, closePullRequest } from "../execution/shared/githubClient.js";
 import { getCodeChangeById } from "../state/codeChanges.js";
 import {
   savePullRequest,
