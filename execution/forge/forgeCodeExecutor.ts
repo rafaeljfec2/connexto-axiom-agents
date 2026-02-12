@@ -613,9 +613,9 @@ function resolveUsage(
   responseText: string,
   prompt: string,
 ): TokenUsageInfo {
-  if (usage) return usage;
+  if (usage && usage.totalTokens > 0) return usage;
 
-  logger.warn("OpenClaw did not return token usage for code task, using estimate");
+  logger.warn("OpenClaw did not return valid token usage for code task, using estimate");
   const inputTokens = Math.ceil(prompt.length / CHARS_PER_TOKEN_ESTIMATE);
   const outputTokens = Math.ceil(responseText.length / CHARS_PER_TOKEN_ESTIMATE);
   return { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };

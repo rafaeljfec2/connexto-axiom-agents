@@ -276,11 +276,11 @@ function resolveUsage(
   responseText: string,
   prompt: string,
 ): TokenUsageInfo {
-  if (usage) {
+  if (usage && usage.totalTokens > 0) {
     return usage;
   }
 
-  logger.warn("OpenClaw did not return token usage for vector, using character-based estimate");
+  logger.warn("OpenClaw did not return valid token usage for vector, using character-based estimate");
 
   const inputTokens = Math.ceil(prompt.length / CHARS_PER_TOKEN_ESTIMATE);
   const outputTokens = Math.ceil(responseText.length / CHARS_PER_TOKEN_ESTIMATE);
