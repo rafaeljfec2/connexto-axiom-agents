@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type BetterSqlite3 from "better-sqlite3";
 import { logger } from "../config/logger.js";
-import type { ProjectManifest, ProjectStatus } from "../projects/manifest.schema.js";
+import type { ForgeExecutorMode, ProjectManifest, ProjectStatus } from "../projects/manifest.schema.js";
 
 export interface Project {
   readonly id: string;
@@ -13,12 +13,13 @@ export interface Project {
   readonly autonomy_level: number;
   readonly token_budget_monthly: number;
   readonly status: string;
+  readonly forge_executor: ForgeExecutorMode;
   readonly tokens_used_month: number;
   readonly created_at: string;
   readonly updated_at: string;
 }
 
-const COLUMNS = `id, project_id, repo_source, language, framework, risk_profile, autonomy_level, token_budget_monthly, status, tokens_used_month, created_at, updated_at`;
+const COLUMNS = `id, project_id, repo_source, language, framework, risk_profile, autonomy_level, token_budget_monthly, status, forge_executor, tokens_used_month, created_at, updated_at`;
 
 export function saveProject(db: BetterSqlite3.Database, manifest: ProjectManifest): void {
   const existing = getProjectById(db, manifest.projectId);
@@ -33,6 +34,7 @@ export function saveProject(db: BetterSqlite3.Database, manifest: ProjectManifes
         autonomy_level = ?,
         token_budget_monthly = ?,
         status = ?,
+        forge_executor = ?,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
        WHERE project_id = ?`,
     ).run(
@@ -43,12 +45,13 @@ export function saveProject(db: BetterSqlite3.Database, manifest: ProjectManifes
       manifest.autonomyLevel,
       manifest.tokenBudgetMonthly,
       manifest.status,
+      manifest.forgeExecutor,
       manifest.projectId,
     );
   } else {
     db.prepare(
-      `INSERT INTO projects (id, project_id, repo_source, language, framework, risk_profile, autonomy_level, token_budget_monthly, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO projects (id, project_id, repo_source, language, framework, risk_profile, autonomy_level, token_budget_monthly, status, forge_executor)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       crypto.randomUUID(),
       manifest.projectId,
@@ -59,6 +62,7 @@ export function saveProject(db: BetterSqlite3.Database, manifest: ProjectManifes
       manifest.autonomyLevel,
       manifest.tokenBudgetMonthly,
       manifest.status,
+      manifest.forgeExecutor,
     );
   }
 }

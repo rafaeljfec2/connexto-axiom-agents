@@ -24,6 +24,11 @@ import {
   cleanupTaskWorkspace,
 } from "./projectWorkspace.js";
 import type { ExecutionResult } from "../shared/types.js";
+import type { ForgeExecutorMode } from "../../projects/manifest.schema.js";
+import {
+  executeWithOpenClaw,
+  buildForgeCodeOutput,
+} from "../forge/openclawAutonomousExecutor.js";
 
 const MAX_FILES_PER_CHANGE = 5;
 
@@ -52,15 +57,12 @@ export async function executeProjectCode(
     const workspacePath = await createTaskWorkspace(projectId, goal_id);
 
     try {
-      const result = await executeWithAgentLoop(
-        db,
-        delegation,
-        projectId,
-        workspacePath,
-        project,
-        startTime,
-        traceId,
-      );
+      const executorMode = (project.forge_executor ?? "legacy") as ForgeExecutorMode;
+
+      const result = executorMode === "openclaw"
+        ? await executeWithOpenClawMode(db, delegation, projectId, workspacePath, project, startTime, traceId)
+        : await executeWithAgentLoop(db, delegation, projectId, workspacePath, project, startTime, traceId);
+
       return result;
     } finally {
       if (process.env.FORGE_KEEP_WORKSPACE === "true") {
@@ -126,6 +128,102 @@ function isImplementationTask(task: string): boolean {
     if (normalized.includes(pattern)) return true;
   }
   return false;
+}
+
+async function executeWithOpenClawMode(
+  db: BetterSqlite3.Database,
+  delegation: KairosDelegation,
+  projectId: string,
+  workspacePath: string,
+  project: {
+    readonly language: string;
+    readonly framework: string;
+    readonly repo_source: string;
+    readonly forge_executor: string;
+    readonly project_id: string;
+  },
+  startTime: number,
+  traceId?: string,
+): Promise<ExecutionResult> {
+  const { task } = delegation;
+
+  logger.info(
+    { projectId, mode: "openclaw", task: task.slice(0, 80) },
+    "Routing to OpenClaw autonomous executor",
+  );
+
+  const openclawResult = await executeWithOpenClaw(
+    db,
+    delegation,
+    project as Parameters<typeof executeWithOpenClaw>[2],
+    workspacePath,
+    traceId,
+  );
+
+  logger.info(
+    {
+      projectId,
+      success: openclawResult.success,
+      filesChanged: openclawResult.filesChanged.length,
+      tokens: openclawResult.totalTokensUsed,
+      iterations: openclawResult.iterationsUsed,
+    },
+    "OpenClaw autonomous execution finished",
+  );
+
+  if (!openclawResult.success) {
+    const executionTimeMs = Math.round(performance.now() - startTime);
+    return buildResult(
+      task,
+      "failed",
+      "",
+      openclawResult.error ?? "OpenClaw autonomous execution failed",
+      executionTimeMs,
+      openclawResult.totalTokensUsed,
+    );
+  }
+
+  if (openclawResult.filesChanged.length === 0) {
+    const executionTimeMs = Math.round(performance.now() - startTime);
+
+    if (isImplementationTask(task)) {
+      logger.warn(
+        { projectId, task: task.slice(0, 100) },
+        "OpenClaw returned no file changes for implementation task",
+      );
+      return buildResult(
+        task,
+        "failed",
+        "",
+        `Implementation task produced no changes: ${openclawResult.description.slice(0, 120)}`,
+        executionTimeMs,
+        openclawResult.totalTokensUsed,
+      );
+    }
+
+    return buildResult(
+      task,
+      "success",
+      `[${projectId}] Nenhuma alteracao necessaria: ${openclawResult.description}`,
+      undefined,
+      executionTimeMs,
+      openclawResult.totalTokensUsed,
+    );
+  }
+
+  const parsed = buildForgeCodeOutput(openclawResult);
+
+  return handleSuccessfulAgentOutput({
+    db,
+    delegation,
+    projectId,
+    workspacePath,
+    repoSource: project.repo_source,
+    parsed,
+    totalTokensUsed: openclawResult.totalTokensUsed,
+    lintOutput: "",
+    startTime,
+  });
 }
 
 async function executeWithAgentLoop(

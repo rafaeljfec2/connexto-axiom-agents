@@ -1,6 +1,7 @@
 export type RiskProfile = "low" | "medium" | "high";
 export type AutonomyLevel = 1 | 2 | 3;
 export type ProjectStatus = "active" | "maintenance" | "paused";
+export type ForgeExecutorMode = "openclaw" | "legacy";
 
 export interface ProjectStack {
   readonly language: string;
@@ -15,6 +16,7 @@ export interface ProjectManifest {
   readonly autonomyLevel: AutonomyLevel;
   readonly tokenBudgetMonthly: number;
   readonly status: ProjectStatus;
+  readonly forgeExecutor: ForgeExecutorMode;
 }
 
 const PROJECT_ID_REGEX = /^[a-z][a-z0-9-]*[a-z0-9]$/;
@@ -24,6 +26,7 @@ const MAX_PROJECT_ID_LENGTH = 64;
 const VALID_RISK_PROFILES: readonly RiskProfile[] = ["low", "medium", "high"];
 const VALID_AUTONOMY_LEVELS: readonly AutonomyLevel[] = [1, 2, 3];
 const VALID_STATUSES: readonly ProjectStatus[] = ["active", "maintenance", "paused"];
+const VALID_FORGE_EXECUTORS: readonly ForgeExecutorMode[] = ["openclaw", "legacy"];
 
 export function validateManifest(raw: unknown): ProjectManifest {
   if (raw === null || typeof raw !== "object") {
@@ -39,6 +42,7 @@ export function validateManifest(raw: unknown): ProjectManifest {
   const autonomyLevel = validateAutonomyLevel(record["autonomy_level"] ?? record["autonomyLevel"]);
   const tokenBudgetMonthly = validateTokenBudget(record["token_budget_monthly"] ?? record["tokenBudgetMonthly"]);
   const status = validateStatus(record["status"]);
+  const forgeExecutor = validateForgeExecutor(record["forge_executor"] ?? record["forgeExecutor"]);
 
   return {
     projectId,
@@ -48,6 +52,7 @@ export function validateManifest(raw: unknown): ProjectManifest {
     autonomyLevel,
     tokenBudgetMonthly,
     status,
+    forgeExecutor,
   };
 }
 
@@ -131,6 +136,18 @@ function validateStatus(value: unknown): ProjectStatus {
     );
   }
   return value as ProjectStatus;
+}
+
+function validateForgeExecutor(value: unknown): ForgeExecutorMode {
+  if (value === undefined || value === null) {
+    return "legacy";
+  }
+  if (typeof value !== "string" || !VALID_FORGE_EXECUTORS.includes(value as ForgeExecutorMode)) {
+    throw new ManifestValidationError(
+      `forge_executor must be one of: ${VALID_FORGE_EXECUTORS.join(", ")}. Got: "${String(value)}"`,
+    );
+  }
+  return value as ForgeExecutorMode;
 }
 
 export class ManifestValidationError extends Error {

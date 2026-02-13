@@ -7,3 +7,4 @@ risk_profile: high
 autonomy_level: 2
 token_budget_monthly: 200000
 status: active
+forge_executor: openclaw

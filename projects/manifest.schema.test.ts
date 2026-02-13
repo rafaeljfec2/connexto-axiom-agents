@@ -186,4 +186,31 @@ describe("validateManifest", () => {
     assert.equal(result.projectId, "meu-saas");
     assert.equal(result.repoSource, ".");
   });
+
+  it("should default forge_executor to legacy when not provided", () => {
+    const result = validateManifest(VALID_MANIFEST);
+    assert.equal(result.forgeExecutor, "legacy");
+  });
+
+  it("should accept forge_executor openclaw", () => {
+    const result = validateManifest({ ...VALID_MANIFEST, forge_executor: "openclaw" });
+    assert.equal(result.forgeExecutor, "openclaw");
+  });
+
+  it("should accept forge_executor legacy", () => {
+    const result = validateManifest({ ...VALID_MANIFEST, forge_executor: "legacy" });
+    assert.equal(result.forgeExecutor, "legacy");
+  });
+
+  it("should accept camelCase forgeExecutor", () => {
+    const result = validateManifest({ ...VALID_MANIFEST, forgeExecutor: "openclaw" });
+    assert.equal(result.forgeExecutor, "openclaw");
+  });
+
+  it("should reject invalid forge_executor value", () => {
+    assert.throws(
+      () => validateManifest({ ...VALID_MANIFEST, forge_executor: "custom" }),
+      ManifestValidationError,
+    );
+  });
 });
