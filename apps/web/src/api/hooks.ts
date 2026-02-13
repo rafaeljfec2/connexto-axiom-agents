@@ -127,6 +127,23 @@ export function useAgents() {
   });
 }
 
+interface CreateGoalPayload {
+  readonly title: string;
+  readonly description?: string;
+  readonly priority?: number;
+}
+
+export function useCreateGoal() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: CreateGoalPayload) => api.post<Goal>("/goals", payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["goals"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+}
+
 export function useApproveCodeChange() {
   const queryClient = useQueryClient();
   return useMutation({

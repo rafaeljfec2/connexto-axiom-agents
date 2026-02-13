@@ -1,6 +1,19 @@
-import { useGoals } from "@/api/hooks";
+import { useRef, useState } from "react";
+import { useGoals, useCreateGoal } from "@/api/hooks";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Loader2, AlertCircle, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -11,8 +24,42 @@ const COLUMNS = [
   { id: "cancelled", label: "Canceladas", color: "bg-zinc-400" },
 ] as const;
 
+const PRIORITY_OPTIONS = [
+  { value: 0, label: "Baixa" },
+  { value: 1, label: "Média" },
+  { value: 2, label: "Alta" },
+  { value: 3, label: "Crítica" },
+] as const;
+
 export function KanbanBoard() {
   const { data: goals, isLoading, error } = useGoals({ includeStats: true });
+  const createGoal = useCreateGoal();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  function handleCreateGoal(e: SubmitEvent & { currentTarget: HTMLFormElement }) {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const title = (formData.get("title") as string).trim();
+    if (!title) return;
+
+    const description = (formData.get("description") as string).trim();
+    const priority = Number(formData.get("priority"));
+
+    createGoal.mutate(
+      {
+        title,
+        description: description || undefined,
+        priority,
+      },
+      {
+        onSuccess: () => {
+          setDialogOpen(false);
+          formRef.current?.reset();
+        },
+      },
+    );
+  }
 
   if (isLoading) {
     return (
@@ -40,10 +87,81 @@ export function KanbanBoard() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold md:text-2xl">Quadro Kanban</h2>
-        <Button size="sm" className="gap-2">
-          <Plus className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Novo Objetivo</span>
-        </Button>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button size="sm" className="gap-2">
+              <Plus className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Novo Objetivo</span>
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-md">
+            <form ref={formRef} onSubmit={handleCreateGoal}>
+              <DialogHeader>
+                <DialogTitle>Novo Objetivo</DialogTitle>
+                <DialogDescription>
+                  Crie um novo objetivo para os agentes executarem.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="mt-4 space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="goal-title">Título</Label>
+                  <Input
+                    id="goal-title"
+                    name="title"
+                    placeholder="Ex: Implementar autenticação OAuth"
+                    required
+                    autoFocus
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="goal-description">Descrição (opcional)</Label>
+                  <Textarea
+                    id="goal-description"
+                    name="description"
+                    placeholder="Detalhes adicionais sobre o objetivo..."
+                    rows={3}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="goal-priority">Prioridade</Label>
+                  <select
+                    id="goal-priority"
+                    name="priority"
+                    defaultValue="1"
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    {PRIORITY_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {createGoal.isError ? (
+                  <p className="text-sm text-destructive">
+                    {createGoal.error.message}
+                  </p>
+                ) : null}
+              </div>
+              <DialogFooter className="mt-6">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setDialogOpen(false)}
+                  disabled={createGoal.isPending}
+                >
+                  Cancelar
+                </Button>
+                <Button type="submit" disabled={createGoal.isPending}>
+                  {createGoal.isPending ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : null}
+                  Criar Objetivo
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
       </div>
 
       <div className="flex gap-4 overflow-x-auto pb-4 md:grid md:grid-cols-4 md:overflow-x-visible">
