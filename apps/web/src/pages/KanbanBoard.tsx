@@ -5,10 +5,10 @@ import { Loader2, AlertCircle, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const COLUMNS = [
-  { id: "active", label: "Active", color: "bg-blue-500" },
-  { id: "in_progress", label: "In Progress", color: "bg-amber-500" },
-  { id: "completed", label: "Done", color: "bg-emerald-500" },
-  { id: "cancelled", label: "Cancelled", color: "bg-zinc-400" },
+  { id: "active", label: "Ativas", color: "bg-blue-500" },
+  { id: "in_progress", label: "Em Progresso", color: "bg-amber-500" },
+  { id: "completed", label: "Concluídas", color: "bg-emerald-500" },
+  { id: "cancelled", label: "Canceladas", color: "bg-zinc-400" },
 ] as const;
 
 export function KanbanBoard() {
@@ -26,7 +26,7 @@ export function KanbanBoard() {
     return (
       <div className="flex h-64 flex-col items-center justify-center gap-2 text-muted-foreground">
         <AlertCircle className="h-8 w-8" />
-        <p className="text-sm">Failed to load goals</p>
+        <p className="text-sm">Erro ao carregar objetivos</p>
       </div>
     );
   }
@@ -39,10 +39,10 @@ export function KanbanBoard() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold md:text-2xl">Kanban Board</h2>
+        <h2 className="text-xl font-bold md:text-2xl">Quadro Kanban</h2>
         <Button size="sm" className="gap-2">
           <Plus className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">New Goal</span>
+          <span className="hidden sm:inline">Novo Objetivo</span>
         </Button>
       </div>
 
@@ -81,7 +81,7 @@ export function KanbanBoard() {
 
               {column.goals.length === 0 && (
                 <div className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">
-                  No goals
+                  Nenhum objetivo
                 </div>
               )}
             </div>

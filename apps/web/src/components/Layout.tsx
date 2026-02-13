@@ -20,7 +20,7 @@ export function Layout() {
             <SheetTrigger asChild>
               <Button variant="ghost" size="icon" className="md:hidden">
                 <Menu className="h-5 w-5" />
-                <span className="sr-only">Toggle menu</span>
+                <span className="sr-only">Abrir menu</span>
               </Button>
             </SheetTrigger>
             <SheetContent side="left" className="w-60 p-0">
@@ -29,7 +29,7 @@ export function Layout() {
           </Sheet>
 
           <div className="flex flex-1 items-center gap-2">
-            <h1 className="text-sm font-semibold md:text-base">Axiom Dashboard</h1>
+            <h1 className="text-sm font-semibold md:text-base">Painel Axiom</h1>
           </div>
 
           <div className="flex items-center gap-2">

@@ -1,6 +1,7 @@
 import { useDashboardSummary } from "@/api/hooks";
 import { MetricCard } from "@/components/MetricCard";
 import { StatusBadge } from "@/components/StatusBadge";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Loader2, Play, Clock, AlertCircle } from "lucide-react";
@@ -34,7 +35,7 @@ export function DailyReport() {
     return (
       <div className="flex h-64 flex-col items-center justify-center gap-2 text-muted-foreground">
         <AlertCircle className="h-8 w-8" />
-        <p className="text-sm">Failed to load dashboard data</p>
+        <p className="text-sm">Erro ao carregar dados do painel</p>
         <p className="text-xs">{error.message}</p>
       </div>
     );
@@ -47,10 +48,10 @@ export function DailyReport() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold md:text-2xl">Daily Report</h2>
+        <h2 className="text-xl font-bold md:text-2xl">Resumo Diário</h2>
         <Button size="sm" className="gap-2">
           <Play className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Run Cycle</span>
+          <span className="hidden sm:inline">Rodar Ciclo</span>
         </Button>
       </div>
 
@@ -60,15 +61,15 @@ export function DailyReport() {
             key={agent.agent_id}
             title={agent.agent_id.toUpperCase()}
             value={`${agent.success_rate}%`}
-            subtitle={`${agent.total} executions`}
+            subtitle={`${agent.total} execuções`}
             variant={resolveRateVariant(agent.success_rate)}
           />
         ))}
         {data.budget ? (
           <MetricCard
-            title="Budget"
+            title="Orçamento"
             value={`${data.budget.remaining_pct}%`}
-            subtitle="remaining"
+            subtitle="restante"
             variant={resolveBudgetVariant(data.budget.remaining_pct)}
           />
         ) : null}
@@ -77,55 +78,55 @@ export function DailyReport() {
       {totalPending > 0 && (
         <section>
           <h3 className="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-            Pending Actions ({totalPending})
+            Ações Pendentes ({totalPending})
           </h3>
-          <div className="grid gap-3 md:grid-cols-2">
-            {data.pending.codeChanges.map((item) => (
-              <Card key={item.id}>
-                <CardContent className="flex items-center justify-between p-4">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{item.description}</p>
-                    <p className="text-xs text-muted-foreground">Code Change</p>
+          <Card>
+            <CardContent className="p-0">
+              <div className="divide-y">
+                {data.pending.codeChanges.map((item) => (
+                  <div key={item.id} className="flex items-center gap-3 px-4 py-2.5">
+                    <Badge variant="outline" className="shrink-0 text-[10px]">
+                      Código
+                    </Badge>
+                    <p className="min-w-0 flex-1 truncate text-sm">{item.description}</p>
+                    <div className="flex shrink-0 gap-1.5">
+                      <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs">
+                        Rejeitar
+                      </Button>
+                      <Button size="sm" className="h-7 px-2.5 text-xs">
+                        Aprovar
+                      </Button>
+                    </div>
                   </div>
-                  <div className="ml-3 flex gap-2">
-                    <Button size="sm" variant="outline" className="text-xs">
-                      Reject
-                    </Button>
-                    <Button size="sm" className="text-xs">
-                      Approve
-                    </Button>
+                ))}
+                {data.pending.artifacts.map((item) => (
+                  <div key={item.id} className="flex items-center gap-3 px-4 py-2.5">
+                    <Badge variant="secondary" className="shrink-0 text-[10px]">
+                      Artefato
+                    </Badge>
+                    <p className="min-w-0 flex-1 truncate text-sm">{item.description}</p>
+                    <div className="flex shrink-0 gap-1.5">
+                      <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs">
+                        Rejeitar
+                      </Button>
+                      <Button size="sm" className="h-7 px-2.5 text-xs">
+                        Aprovar
+                      </Button>
+                    </div>
                   </div>
-                </CardContent>
-              </Card>
-            ))}
-            {data.pending.artifacts.map((item) => (
-              <Card key={item.id}>
-                <CardContent className="flex items-center justify-between p-4">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{item.description}</p>
-                    <p className="text-xs text-muted-foreground">Artifact Draft</p>
-                  </div>
-                  <div className="ml-3 flex gap-2">
-                    <Button size="sm" variant="outline" className="text-xs">
-                      Reject
-                    </Button>
-                    <Button size="sm" className="text-xs">
-                      Approve
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
         </section>
       )}
 
       <section>
         <h3 className="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-          Latest Cycle
+          Último Ciclo
         </h3>
         {data.timeline.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No cycle data available</p>
+          <p className="text-sm text-muted-foreground">Nenhum dado de ciclo disponível</p>
         ) : (
           <div className="space-y-1">
             {data.timeline.map((entry) => (
@@ -140,7 +141,7 @@ export function DailyReport() {
                     <p className="truncate text-xs text-muted-foreground">{entry.task}</p>
                   </div>
                   <span className="shrink-0 text-xs text-muted-foreground">
-                    {new Date(entry.created_at).toLocaleTimeString()}
+                    {new Date(entry.created_at).toLocaleTimeString("pt-BR")}
                   </span>
                 </CardContent>
               </Card>
@@ -153,12 +154,12 @@ export function DailyReport() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-              7-Day History
+              Histórico 7 Dias
             </CardTitle>
           </CardHeader>
           <CardContent>
             {data.weekHistory.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No history data available</p>
+              <p className="text-sm text-muted-foreground">Nenhum histórico disponível</p>
             ) : (
               <div className="flex h-32 items-end gap-1 md:h-40">
                 {data.weekHistory.map((entry, i) => {

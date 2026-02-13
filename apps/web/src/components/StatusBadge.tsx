@@ -7,16 +7,16 @@ const STATUS_MAP: Record<
     readonly variant: "success" | "destructive" | "warning" | "secondary" | "default";
   }
 > = {
-  success: { label: "SUCCESS", variant: "success" },
-  failed: { label: "FAILURE", variant: "destructive" },
+  success: { label: "SUCESSO", variant: "success" },
+  failed: { label: "FALHA", variant: "destructive" },
   infra_unavailable: { label: "INFRA", variant: "warning" },
-  active: { label: "ACTIVE", variant: "success" },
-  completed: { label: "DONE", variant: "secondary" },
-  cancelled: { label: "CANCELLED", variant: "secondary" },
-  pending_approval: { label: "PENDING", variant: "warning" },
-  draft: { label: "DRAFT", variant: "warning" },
-  approved: { label: "APPROVED", variant: "success" },
-  rejected: { label: "REJECTED", variant: "destructive" },
+  active: { label: "ATIVO", variant: "success" },
+  completed: { label: "CONCLUÍDO", variant: "secondary" },
+  cancelled: { label: "CANCELADO", variant: "secondary" },
+  pending_approval: { label: "PENDENTE", variant: "warning" },
+  draft: { label: "RASCUNHO", variant: "warning" },
+  approved: { label: "APROVADO", variant: "success" },
+  rejected: { label: "REJEITADO", variant: "destructive" },
 };
 
 interface StatusBadgeProps {

@@ -7,9 +7,9 @@ interface SidebarProps {
 }
 
 const NAV_ITEMS = [
-  { to: "/", label: "Daily Report", icon: LayoutDashboard },
-  { to: "/kanban", label: "Kanban Board", icon: Columns3 },
-  { to: "/agents", label: "Agents", icon: Bot },
+  { to: "/", label: "Resumo Diário", icon: LayoutDashboard },
+  { to: "/kanban", label: "Quadro Kanban", icon: Columns3 },
+  { to: "/agents", label: "Agentes", icon: Bot },
 ] as const;
 
 export function Sidebar({ onNavigate }: SidebarProps) {

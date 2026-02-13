@@ -20,7 +20,7 @@ function resolveBadgeVariant(
 
 function resolveBadgeLabel(variant: MetricCardProps["variant"]): string {
   if (variant === "success") return "OK";
-  if (variant === "destructive") return "ALERT";
+  if (variant === "destructive") return "ALERTA";
   return "—";
 }
 
