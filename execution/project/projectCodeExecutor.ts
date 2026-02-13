@@ -116,7 +116,8 @@ function loadGoalContext(
 
 const IMPLEMENTATION_TASK_PATTERNS: ReadonlySet<string> = new Set([
   "implementar", "implement", "criar", "create", "adicionar", "add",
-  "alterar", "change", "modificar", "modify",
+  "alterar", "change", "modificar", "modify", "aplicar", "apply",
+  "override", "substituir", "replace", "trocar", "swap",
 ]);
 
 function isImplementationTask(task: string): boolean {

@@ -126,9 +126,31 @@ export async function runForgeAgentLoop(
   }
 
   const taskKeywords = buildEnrichedKeywords(ctx);
-  const coherenceCheck = await validatePlanCoherence(validatedPlan, workspacePath, taskKeywords);
-
   const replanFlowCtx: ReplanFlowContext = { ctx, structure, fileTree, allowedDirs, projectConfig, indexPromptSection };
+
+  const emptyPlanForImplTask = isImplementationLikeTask(delegation.task)
+    && validatedPlan.filesToModify.length === 0
+    && validatedPlan.filesToCreate.length === 0;
+
+  if (emptyPlanForImplTask) {
+    logger.warn(
+      { projectId, task: delegation.task.slice(0, 80), approach: validatedPlan.approach.slice(0, 100) },
+      "FORGE agent loop - Plan has 0 files_to_modify for implementation task, forcing replan",
+    );
+
+    const emptyPlanReplanResult = await handleEmptyPlanReplan(replanFlowCtx, validatedPlan, totalTokensUsed);
+    if (emptyPlanReplanResult) return emptyPlanReplanResult;
+
+    return {
+      success: false,
+      parsed: null,
+      totalTokensUsed,
+      phasesCompleted: 1,
+      error: "Planning failed: plan has no files to modify for an implementation task, and re-planning did not help",
+    };
+  }
+
+  const coherenceCheck = await validatePlanCoherence(validatedPlan, workspacePath, taskKeywords);
 
   if (!coherenceCheck.isCoherent) {
     const earlyReplanResult = await handleIncoherentPlan(replanFlowCtx, validatedPlan, coherenceCheck, totalTokensUsed);
@@ -192,6 +214,22 @@ async function executeAndVerifyPlan(
   }
 
   if (editResult.parsed.files.length === 0) {
+    const planHadFiles = plan.filesToModify.length > 0 || plan.filesToCreate.length > 0;
+
+    if (planHadFiles) {
+      logger.warn(
+        { projectId, plannedModify: plan.filesToModify, plannedCreate: plan.filesToCreate, description: editResult.parsed.description.slice(0, 80) },
+        "FORGE agent loop - execution returned 0 files despite plan having files to modify (suspicious)",
+      );
+      return {
+        success: false,
+        parsed: editResult.parsed,
+        totalTokensUsed,
+        phasesCompleted: 2,
+        error: "Execution phase returned no edits despite plan specifying files to modify",
+      };
+    }
+
     logger.info(
       { projectId, description: editResult.parsed.description.slice(0, 80) },
       "FORGE agent loop - no files to modify (task already done or no changes needed)",
@@ -358,6 +396,40 @@ async function handlePostCorrectionReplan(
   }
 
   return result;
+}
+
+const IMPLEMENTATION_VERBS: ReadonlySet<string> = new Set([
+  "aplicar", "apply", "implementar", "implement",
+  "criar", "create", "adicionar", "add",
+  "alterar", "change", "modificar", "modify",
+  "override", "substituir", "replace", "trocar",
+]);
+
+function isImplementationLikeTask(task: string): boolean {
+  const normalized = task.toLowerCase();
+  for (const verb of IMPLEMENTATION_VERBS) {
+    if (normalized.includes(verb)) return true;
+  }
+  return false;
+}
+
+async function handleEmptyPlanReplan(
+  flowCtx: ReplanFlowContext,
+  emptyPlan: ForgePlan,
+  baseTokensUsed: number,
+): Promise<ForgeAgentResult | null> {
+  const replanContext: ReplanContext = {
+    failedPlan: emptyPlan,
+    failedFiles: [],
+    failureReason: "O plano anterior nao escolheu nenhum arquivo para modificar, "
+      + "mas a tarefa exige mudancas de codigo. "
+      + "Voce DEVE escolher arquivos em files_to_modify. "
+      + "Use o indice de exports e a arvore de arquivos para identificar "
+      + "o arquivo correto que contem o codigo relacionado a tarefa.",
+    fileSnippets: [],
+  };
+
+  return executeReplanFlow(flowCtx, replanContext, baseTokensUsed);
 }
 
 function buildEnrichedKeywords(ctx: ForgeAgentContext): readonly string[] {
