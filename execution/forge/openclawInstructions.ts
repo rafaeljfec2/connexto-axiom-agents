@@ -10,16 +10,18 @@ export interface InstructionsContext {
   readonly goalContext?: GoalContext;
   readonly repositoryIndexSummary?: string;
   readonly baselineBuildFailed: boolean;
+  readonly workspaceSubdir?: string;
 }
 
 export function buildOpenClawInstructions(ctx: InstructionsContext): string {
   const sections: string[] = [
     buildIdentitySection(),
+    buildWorkspacePathSection(ctx.workspaceSubdir),
     buildTaskSection(ctx),
     buildGoalSection(ctx.goalContext),
     buildNexusSection(ctx.nexusResearch),
     buildRepositorySection(ctx.repositoryIndexSummary),
-    buildToolUsageRules(ctx.baselineBuildFailed),
+    buildToolUsageRules(ctx.baselineBuildFailed, ctx.workspaceSubdir),
     buildQualityRules(),
     buildSecurityRules(),
   ];
@@ -34,6 +36,25 @@ function buildIdentitySection(): string {
     "You are FORGE, an autonomous coding agent. Your purpose is to implement code changes in a project workspace.",
     "You have tools to read files, write files, edit files, run commands, list directories, and search code.",
     "You operate independently: plan your approach, execute it, verify the results, and fix any issues.",
+  ].join("\n");
+}
+
+function buildWorkspacePathSection(workspaceSubdir?: string): string {
+  if (!workspaceSubdir) return "";
+
+  return [
+    "# CRITICAL — Workspace Path",
+    "",
+    `ALL project source files are located inside the \`${workspaceSubdir}/\` directory.`,
+    `You MUST prefix EVERY file path with \`${workspaceSubdir}/\` when using ANY tool.`,
+    "",
+    "Examples:",
+    `- To read \`src/index.ts\`, use path: \`${workspaceSubdir}/src/index.ts\``,
+    `- To list the root, use path: \`${workspaceSubdir}/\``,
+    `- To search code, use paths relative to: \`${workspaceSubdir}/\``,
+    "",
+    `NEVER use paths without the \`${workspaceSubdir}/\` prefix. Files outside this directory are NOT part of the project.`,
+    `Start EVERY task by running \`list_directory\` on \`${workspaceSubdir}/\` to see the project structure.`,
   ].join("\n");
 }
 
@@ -105,17 +126,19 @@ function buildRepositorySection(summary?: string): string {
   ].join("\n");
 }
 
-function buildToolUsageRules(baselineBuildFailed: boolean): string {
+function buildToolUsageRules(baselineBuildFailed: boolean, workspaceSubdir?: string): string {
+  const pathPrefix = workspaceSubdir ? `${workspaceSubdir}/` : "";
+
   const lines = [
     "# Tool Usage Rules",
     "",
     "## Workflow",
-    "1. Start by understanding the codebase: use `search_code` and `list_directory` to find relevant files",
-    "2. Use `read_file` before editing ANY file to understand its current state",
-    "3. Make changes using `edit_file` (preferred for partial changes) or `write_file` (for new files or complete rewrites)",
+    `1. Start by understanding the codebase: use \`list_directory\` on \`${pathPrefix}\` then \`search_code\` and \`read_file\` to find relevant files`,
+    `2. Use \`read_file\` before editing ANY file to understand its current state`,
+    `3. Make changes using \`edit_file\` (preferred for partial changes) or \`write_file\` (for new files or complete rewrites)`,
     "4. After making changes, verify them:",
-    "   - Run `run_command` with 'npx tsc --noEmit' to check TypeScript errors",
-    "   - Run `run_command` with 'npx eslint <changed-files>' to check lint",
+    `   - Run \`run_command\` with 'cd ${pathPrefix.replace(/\/$/, "")} && npx tsc --noEmit' to check TypeScript errors`,
+    `   - Run \`run_command\` with 'cd ${pathPrefix.replace(/\/$/, "")} && npx eslint <changed-files>' to check lint`,
   ];
 
   if (baselineBuildFailed) {
@@ -133,7 +156,7 @@ function buildToolUsageRules(baselineBuildFailed: boolean): string {
     "## Important",
     "- The `search` parameter in `edit_file` must match the file content EXACTLY (copy from `read_file` output)",
     "- Never guess file contents — always `read_file` first",
-    "- All paths must be relative to the workspace root",
+    `- ALL paths MUST start with \`${pathPrefix}\` — this is where the project files live`,
     "- Edit the minimum number of files necessary to complete the task",
     "- Do not add unnecessary comments to the code",
     "- When the task is complete, stop calling tools and provide your summary",
