@@ -121,14 +121,15 @@ export class DashboardService {
           'code_change' as type,
           cc.risk,
           cc.files_changed,
-          t.agent_id,
-          g.id as goal_id,
-          g.title as goal_title,
+          COALESCE(t.agent_id, '') as agent_id,
+          COALESCE(g_task.id, g_direct.id) as goal_id,
+          COALESCE(g_task.title, g_direct.title) as goal_title,
           t.title as task_title,
           cc.created_at
         FROM code_changes cc
         LEFT JOIN tasks t ON t.id = cc.task_id
-        LEFT JOIN goals g ON g.id = t.goal_id
+        LEFT JOIN goals g_task ON g_task.id = t.goal_id
+        LEFT JOIN goals g_direct ON g_direct.id LIKE (cc.task_id || '%') AND g_task.id IS NULL
         WHERE cc.status = 'pending_approval'
         ORDER BY cc.created_at DESC`,
       )

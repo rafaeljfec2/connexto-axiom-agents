@@ -18,6 +18,8 @@ connexto-axiom-agents e um sistema operacional de execucao com IA que orquestra 
 ```
 src/main.ts          Entry point do ciclo Kairos (one-shot via cron)
 src/bot.ts           Entry point do bot Telegram (long-polling persistente)
+apps/api/            Dashboard API (NestJS)
+apps/web/            Dashboard Frontend (Vite + React)
                               |
          ┌────────────────────┼────────────────────┐
          v                    v                    v
@@ -40,9 +42,10 @@ src/bot.ts           Entry point do bot Telegram (long-polling persistente)
          └────────────────────┼────────────────────┘
                               v
                        SQLite (modo WAL)
-                              |
-                              v
-                    Telegram (Briefing Diario)
+                         |         |
+                         v         v
+              Telegram        Dashboard Web
+          (Briefing Diario)   (Daily Report + Kanban)
 ```
 
 ## Agentes
@@ -117,6 +120,8 @@ sequenceDiagram
 | 25    | Governanca Explicita de Decisao     | Classificacao pre-decisao, selecao dinamica de modelo, log de governanca  | Feito  |
 | 26    | Agente QA (Validacao Funcional)     | Testes E2E hibridos (LLM gera + Playwright executa) com retroalimentacao | Planejado |
 | 27    | FORGE Agent Loop Hibrido            | 3 fases (Planning + Execution + Correction Loop) com ate 4 correcoes     | Feito     |
+| 28    | Hardening Infra OpenClaw            | Classificacao de erros, retry transparente, healthcheck, trace_id E2E    | Feito     |
+| 29    | Dashboard Web                       | NestJS API + React SPA: Daily Report, Kanban, gestao de agentes          | Em andamento |
 
 ## Funcionalidades Principais
 
@@ -134,17 +139,20 @@ sequenceDiagram
 
 ## Stack Tecnologica
 
-| Componente      | Tecnologia                          |
-| --------------- | ----------------------------------- |
-| Runtime         | Node.js >= 24 + TypeScript 5.9      |
-| Banco de Dados  | SQLite (modo WAL, better-sqlite3)   |
-| Gateway LLM     | OpenClaw (gateway HTTP de LLM — apenas chat completions, sem execucao) |
-| Provedores LLM  | OpenAI (gpt-5.2, gpt-5.3-codex, gpt-4o-mini) |
+| Componente         | Tecnologia                          |
+| ------------------ | ----------------------------------- |
+| Runtime            | Node.js >= 24 + TypeScript 5.9      |
+| Banco de Dados     | SQLite (modo WAL, better-sqlite3)   |
+| Gateway LLM        | OpenClaw (gateway HTTP de LLM — apenas chat completions, sem execucao) |
+| Provedores LLM     | OpenAI (gpt-5.2, gpt-5.3-codex, gpt-4o-mini) |
 | Controle de Versao | Git (workspaces isolados, branch por task) |
-| Agendamento     | Cron (ciclos one-shot)              |
-| Interface Humana | Bot Telegram (long-polling)         |
-| Logging         | Pino (JSON estruturado)             |
-| Linting         | ESLint 9 + Prettier 3               |
+| Agendamento        | Cron (ciclos one-shot)              |
+| Interface Humana   | Bot Telegram (long-polling)         |
+| Dashboard API      | NestJS 10 + better-sqlite3          |
+| Dashboard Frontend | Vite 6 + React 19 + Tailwind CSS 4 + shadcn/ui |
+| Monorepo           | Turborepo + pnpm workspaces         |
+| Logging            | Pino (JSON estruturado)             |
+| Linting            | ESLint 9 + Prettier 3               |
 
 ## Tabelas do Banco de Dados
 
@@ -172,6 +180,9 @@ sequenceDiagram
 ## Estrutura do Projeto
 
 ```
+apps/                Dashboard Web (monorepo via Turborepo)
+  api/               NestJS REST API (le/escreve no mesmo SQLite)
+  web/               Vite + React SPA (Daily Report, Kanban, Agents)
 agents/              Configs de agentes, system prompts, memoria
   kairos/            Orquestrador (gpt-5.2)
   forge/             Executor tecnico (gpt-5.3-codex via OpenClaw)
@@ -202,6 +213,66 @@ state/               Schema SQLite, migrations, modulos CRUD de todas as tabelas
   governanceLog      Log de decisoes de governanca
 workspaces/          Clones Git isolados temporarios para execucao do FORGE (gitignored)
 ```
+
+## Dashboard Web
+
+O projeto inclui um dashboard web para gestao visual dos agentes, composto por uma **API NestJS** e um **SPA React**.
+
+```
+apps/
+  api/    NestJS — REST API que le/escreve no mesmo SQLite (state/local.db)
+  web/    Vite + React 19 + Tailwind CSS + shadcn/ui — SPA mobile-first
+```
+
+### Stack do Dashboard
+
+| Componente | Tecnologia |
+| ---------- | ---------- |
+| API | NestJS 10 + better-sqlite3 (mesmo driver do axiom-agents) |
+| Frontend | Vite 6 + React 19 + TypeScript 5 |
+| Estilo | Tailwind CSS 4 + shadcn/ui + Radix UI |
+| Data fetching | TanStack Query 5 |
+| Roteamento | React Router 6 |
+| Monorepo | Turborepo (turbo) + pnpm workspaces |
+
+### Paginas
+
+- **Daily Report** — versao visual do briefing do Telegram: cards de metricas (success rate por agente, budget), timeline do ultimo ciclo, pendentes com botoes de aprovar/rejeitar, grafico de historico 7 dias, botao "Rodar Ciclo"
+- **Kanban Board** — goals organizadas em colunas por status (Backlog, Active, In Progress, Done, Failed) com drag-and-drop. Criar goals direto pela UI
+- **Agents** — card por agente com success rate, tokens consumidos, alertas. Expandir para ver historico de execucoes e editar configuracoes
+
+### Iniciar o Dashboard
+
+```bash
+# API + Frontend juntos (via Turborepo)
+pnpm dev:dashboard
+
+# Ou separadamente
+pnpm dev:api    # NestJS na porta 3200
+pnpm dev:web    # Vite na porta 5173 (com proxy para API)
+```
+
+### Endpoints Principais da API
+
+| Metodo | Endpoint | Descricao |
+| ------ | -------- | --------- |
+| GET | `/dashboard/summary` | Payload completo do daily report |
+| GET | `/goals` | Listar goals (filtro: status, project_id) |
+| POST | `/goals` | Criar goal |
+| PATCH | `/goals/:id` | Atualizar status/prioridade |
+| DELETE | `/goals/:id` | Remover goal |
+| GET | `/outcomes` | Listar execucoes (filtro: agent, status, trace_id) |
+| GET | `/code-changes?status=pending_approval` | Changes pendentes |
+| POST | `/code-changes/:id/approve` | Aprovar code change |
+| POST | `/code-changes/:id/reject` | Rejeitar code change |
+| GET | `/artifacts?status=draft` | Drafts pendentes |
+| POST | `/artifacts/:id/approve` | Aprovar draft |
+| POST | `/artifacts/:id/reject` | Rejeitar draft |
+| POST | `/cycle/run` | Disparar ciclo KAIROS |
+| GET | `/agents` | Listar agentes com stats |
+| PATCH | `/agents/:id/config` | Editar config do agente |
+
+---
 
 ## Guia Completo: Da Instalacao ate a Primeira Task
 
@@ -450,13 +521,18 @@ pnpm dev
 
 ## Scripts
 
-| Script              | Descricao                                              |
-| ------------------- | ------------------------------------------------------ |
-| `pnpm dev`          | Rodar ciclo Kairos com hot-reload e logs formatados    |
-| `pnpm bot`          | Iniciar bot Telegram (long-polling persistente)        |
-| `pnpm build`        | Compilar TypeScript                                    |
-| `pnpm start`        | Rodar output compilado                                 |
-| `pnpm lint`         | Verificar erros de linting                             |
-| `pnpm lint:fix`     | Corrigir erros de linting automaticamente              |
-| `pnpm format`       | Formatar todos os arquivos                             |
-| `pnpm format:check` | Verificar formatacao                                   |
+| Script                  | Descricao                                              |
+| ----------------------- | ------------------------------------------------------ |
+| `pnpm dev`              | Rodar ciclo Kairos com hot-reload e logs formatados    |
+| `pnpm bot`              | Iniciar bot Telegram (long-polling persistente)        |
+| `pnpm dev:dashboard`    | Iniciar Dashboard (API + Frontend via Turborepo)       |
+| `pnpm dev:api`          | Iniciar apenas a API NestJS (porta 3200)               |
+| `pnpm dev:web`          | Iniciar apenas o frontend React (porta 5173)           |
+| `pnpm build:dashboard`  | Compilar Dashboard (API + Frontend)                    |
+| `pnpm lint:dashboard`   | Lint do Dashboard (API + Frontend)                     |
+| `pnpm build`            | Compilar TypeScript (agentes)                          |
+| `pnpm start`            | Rodar output compilado                                 |
+| `pnpm lint`             | Verificar erros de linting                             |
+| `pnpm lint:fix`         | Corrigir erros de linting automaticamente              |
+| `pnpm format`           | Formatar todos os arquivos                             |
+| `pnpm format:check`     | Verificar formatacao                                   |

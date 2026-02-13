@@ -1,10 +1,17 @@
-import { useDashboardSummary } from "@/api/hooks";
+import { useState, useMemo } from "react";
+import {
+  useDashboardSummary,
+  useApproveCodeChange,
+  useRejectCodeChange,
+  useApproveArtifact,
+  useRejectArtifact,
+} from "@/api/hooks";
 import { MetricCard } from "@/components/MetricCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, Play, Clock, AlertCircle, ShieldAlert } from "lucide-react";
+import { Loader2, Play, Clock, AlertCircle, ShieldAlert, Filter } from "lucide-react";
 
 type MetricVariant = "success" | "warning" | "destructive";
 
@@ -39,8 +46,43 @@ function RiskBadge({ risk }: { readonly risk: number }) {
   return null;
 }
 
+const ALL_GOALS_FILTER = "__all__";
+const NO_GOAL_FILTER = "__no_goal__";
+
 export function DailyReport() {
   const { data, isLoading, error } = useDashboardSummary();
+  const [goalFilter, setGoalFilter] = useState(ALL_GOALS_FILTER);
+
+  const approveCode = useApproveCodeChange();
+  const rejectCode = useRejectCodeChange();
+  const approveArtifact = useApproveArtifact();
+  const rejectArtifact = useRejectArtifact();
+
+  const goalOptions = useMemo(() => {
+    if (!data) return [];
+    const goalsMap = new Map<string, string>();
+    for (const item of data.pending.codeChanges) {
+      if (item.goal_id && item.goal_title) {
+        goalsMap.set(item.goal_id, item.goal_title);
+      }
+    }
+    return Array.from(goalsMap, ([id, title]) => ({ id, title }));
+  }, [data]);
+
+  const filteredCodeChanges = useMemo(() => {
+    if (!data) return [];
+    if (goalFilter === ALL_GOALS_FILTER) return data.pending.codeChanges;
+    if (goalFilter === NO_GOAL_FILTER) return data.pending.codeChanges.filter((i) => !i.goal_id);
+    return data.pending.codeChanges.filter((i) => i.goal_id === goalFilter);
+  }, [data, goalFilter]);
+
+  const filteredArtifacts = useMemo(() => {
+    if (!data) return [];
+    if (goalFilter === ALL_GOALS_FILTER || goalFilter === NO_GOAL_FILTER) return data.pending.artifacts;
+    return [];
+  }, [data, goalFilter]);
+
+  const filteredTotal = filteredCodeChanges.length + filteredArtifacts.length;
 
   if (isLoading) {
     return (
@@ -96,85 +138,161 @@ export function DailyReport() {
 
       {totalPending > 0 && (
         <section>
-          <h3 className="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-            Ações Pendentes ({totalPending})
-          </h3>
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+              Ações Pendentes ({totalPending})
+            </h3>
+            {goalOptions.length > 0 && (
+              <div className="flex items-center gap-2">
+                <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+                <select
+                  value={goalFilter}
+                  onChange={(e) => setGoalFilter(e.target.value)}
+                  className="h-8 rounded-md border border-input bg-background px-2.5 text-xs ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                >
+                  <option value={ALL_GOALS_FILTER}>Todos os goals</option>
+                  {goalOptions.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.title}
+                    </option>
+                  ))}
+                  <option value={NO_GOAL_FILTER}>Sem goal vinculado</option>
+                </select>
+              </div>
+            )}
+          </div>
+          {filteredTotal === 0 ? (
+            <Card>
+              <CardContent className="flex items-center justify-center py-8">
+                <p className="text-sm text-muted-foreground">Nenhuma ação pendente para este goal</p>
+              </CardContent>
+            </Card>
+          ) : (
           <Card>
             <CardContent className="p-0">
               <div className="divide-y">
-                {data.pending.codeChanges.map((item) => (
-                  <div key={item.id} className="space-y-1.5 px-4 py-3">
-                    <div className="flex items-start gap-3">
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <Badge variant="outline" className="shrink-0 text-[10px]">
-                            Código
-                          </Badge>
-                          {item.agent_id ? (
-                            <Badge variant="secondary" className="shrink-0 text-[10px]">
-                              {item.agent_id.toUpperCase()}
+                {filteredCodeChanges.map((item) => {
+                  const isMutating =
+                    (approveCode.isPending && approveCode.variables === item.id) ||
+                    (rejectCode.isPending && rejectCode.variables === item.id);
+                  return (
+                    <div key={item.id} className="space-y-1.5 px-4 py-3">
+                      <div className="flex items-start gap-3">
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Badge variant="outline" className="shrink-0 text-[10px]">
+                              Código
                             </Badge>
-                          ) : null}
-                          <RiskBadge risk={item.risk} />
+                            {item.agent_id ? (
+                              <Badge variant="secondary" className="shrink-0 text-[10px]">
+                                {item.agent_id.toUpperCase()}
+                              </Badge>
+                            ) : null}
+                            <RiskBadge risk={item.risk} />
+                          </div>
+                          <p className="text-sm leading-snug">{item.description}</p>
+                          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                            {item.goal_title ? (
+                              <span>
+                                <span className="font-medium text-foreground/70">Goal:</span> {item.goal_title}
+                              </span>
+                            ) : null}
+                            {item.task_title ? (
+                              <span>
+                                <span className="font-medium text-foreground/70">Task:</span> {item.task_title}
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
-                        <p className="text-sm leading-snug">{item.description}</p>
-                        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-                          {item.goal_title ? (
-                            <span>
-                              <span className="font-medium text-foreground/70">Goal:</span> {item.goal_title}
-                            </span>
-                          ) : null}
-                          {item.task_title ? (
-                            <span>
-                              <span className="font-medium text-foreground/70">Task:</span> {item.task_title}
-                            </span>
-                          ) : null}
+                        <div className="flex shrink-0 gap-1.5 pt-0.5">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2.5 text-xs"
+                            disabled={isMutating}
+                            onClick={() => rejectCode.mutate(item.id)}
+                          >
+                            {rejectCode.isPending && rejectCode.variables === item.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              "Rejeitar"
+                            )}
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="h-7 px-2.5 text-xs"
+                            disabled={isMutating}
+                            onClick={() => approveCode.mutate(item.id)}
+                          >
+                            {approveCode.isPending && approveCode.variables === item.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              "Aprovar"
+                            )}
+                          </Button>
                         </div>
-                      </div>
-                      <div className="flex shrink-0 gap-1.5 pt-0.5">
-                        <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs">
-                          Rejeitar
-                        </Button>
-                        <Button size="sm" className="h-7 px-2.5 text-xs">
-                          Aprovar
-                        </Button>
                       </div>
                     </div>
-                  </div>
-                ))}
-                {data.pending.artifacts.map((item) => (
-                  <div key={item.id} className="space-y-1.5 px-4 py-3">
-                    <div className="flex items-start gap-3">
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <Badge variant="secondary" className="shrink-0 text-[10px]">
-                            Artefato
-                          </Badge>
-                          {item.agent_id ? (
+                  );
+                })}
+                {filteredArtifacts.map((item) => {
+                  const isMutating =
+                    (approveArtifact.isPending && approveArtifact.variables === item.id) ||
+                    (rejectArtifact.isPending && rejectArtifact.variables === item.id);
+                  return (
+                    <div key={item.id} className="space-y-1.5 px-4 py-3">
+                      <div className="flex items-start gap-3">
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
                             <Badge variant="secondary" className="shrink-0 text-[10px]">
-                              {item.agent_id.toUpperCase()}
+                              Artefato
                             </Badge>
-                          ) : null}
-                          <Badge variant="outline" className="shrink-0 text-[10px]">
-                            {item.artifact_type}
-                          </Badge>
+                            {item.agent_id ? (
+                              <Badge variant="secondary" className="shrink-0 text-[10px]">
+                                {item.agent_id.toUpperCase()}
+                              </Badge>
+                            ) : null}
+                            <Badge variant="outline" className="shrink-0 text-[10px]">
+                              {item.artifact_type}
+                            </Badge>
+                          </div>
+                          <p className="text-sm leading-snug">{item.description}</p>
                         </div>
-                        <p className="text-sm leading-snug">{item.description}</p>
-                      </div>
-                      <div className="flex shrink-0 gap-1.5 pt-0.5">
-                        <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs">
-                          Rejeitar
-                        </Button>
-                        <Button size="sm" className="h-7 px-2.5 text-xs">
-                          Aprovar
-                        </Button>
+                        <div className="flex shrink-0 gap-1.5 pt-0.5">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2.5 text-xs"
+                            disabled={isMutating}
+                            onClick={() => rejectArtifact.mutate(item.id)}
+                          >
+                            {rejectArtifact.isPending && rejectArtifact.variables === item.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              "Rejeitar"
+                            )}
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="h-7 px-2.5 text-xs"
+                            disabled={isMutating}
+                            onClick={() => approveArtifact.mutate(item.id)}
+                          >
+                            {approveArtifact.isPending && approveArtifact.variables === item.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              "Aprovar"
+                            )}
+                          </Button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </CardContent>
           </Card>
+          )}
         </section>
       )}
 
