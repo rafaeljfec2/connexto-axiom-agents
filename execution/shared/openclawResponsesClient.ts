@@ -14,6 +14,16 @@ export interface ResponseItem {
   readonly role: "user" | "assistant" | "tool";
   readonly content: string;
   readonly tool_call_id?: string;
+  readonly tool_calls?: readonly ChatToolCall[];
+}
+
+interface ChatToolCall {
+  readonly id: string;
+  readonly type: "function";
+  readonly function: {
+    readonly name: string;
+    readonly arguments: string;
+  };
 }
 
 export interface OpenClawToolRequest {
@@ -36,32 +46,28 @@ export interface OpenClawToolResponse {
   readonly text?: string;
   readonly toolCalls?: readonly ToolCall[];
   readonly usage?: TokenUsageInfo;
-  readonly rawOutput?: readonly Record<string, unknown>[];
+  readonly rawAssistantMessage?: ChatCompletionMessage;
 }
 
-interface ResponsesApiOutput {
-  readonly id?: string;
-  readonly type?: string;
-  readonly name?: string;
-  readonly call_id?: string;
-  readonly arguments?: string;
-  readonly text?: string;
-  readonly content?: readonly { readonly type: string; readonly text?: string }[];
-  readonly role?: string;
+interface ChatCompletionMessage {
+  readonly role: string;
+  readonly content: string | null;
+  readonly tool_calls?: readonly ChatToolCall[];
 }
 
-interface ResponsesApiResult {
-  readonly id: string;
-  readonly status: string;
-  readonly output: readonly ResponsesApiOutput[];
+interface ChatCompletionResponse {
+  readonly choices: ReadonlyArray<{
+    readonly message: ChatCompletionMessage;
+    readonly finish_reason: string;
+  }>;
   readonly usage?: {
-    readonly input_tokens: number;
-    readonly output_tokens: number;
+    readonly prompt_tokens: number;
+    readonly completion_tokens: number;
     readonly total_tokens: number;
   };
 }
 
-interface ResponsesClientConfig {
+interface ClientConfig {
   readonly endpoint: string;
   readonly apiKey: string;
   readonly timeoutMs: number;
@@ -70,7 +76,7 @@ interface ResponsesClientConfig {
 const MAX_RETRIES = 3;
 const BACKOFF_MS: readonly number[] = [300, 900, 2000];
 
-function loadConfig(): ResponsesClientConfig {
+function loadConfig(): ClientConfig {
   const endpoint = process.env.OPENCLAW_ENDPOINT;
   if (!endpoint) {
     throw new Error("OPENCLAW_ENDPOINT is required");
@@ -84,7 +90,7 @@ function loadConfig(): ResponsesClientConfig {
 }
 
 function buildHeaders(
-  config: ResponsesClientConfig,
+  config: ClientConfig,
   agentId: string,
   traceId?: string,
 ): Record<string, string> {
@@ -104,107 +110,85 @@ function buildHeaders(
   return headers;
 }
 
-function buildRequestBody(
+function buildChatMessages(
   request: OpenClawToolRequest,
-): Record<string, unknown> {
-  const messages = request.input.map((item) => {
-    if (item.tool_call_id) {
-      return {
-        role: item.role,
+): readonly Record<string, unknown>[] {
+  const messages: Record<string, unknown>[] = [];
+
+  messages.push({ role: "system", content: request.instructions });
+
+  for (const item of request.input) {
+    if (item.role === "tool" && item.tool_call_id) {
+      messages.push({
+        role: "tool",
         content: item.content,
         tool_call_id: item.tool_call_id,
-      };
+      });
+    } else if (item.role === "assistant" && item.tool_calls) {
+      messages.push({
+        role: "assistant",
+        content: item.content || null,
+        tool_calls: item.tool_calls,
+      });
+    } else {
+      messages.push({ role: item.role, content: item.content });
     }
-    return { role: item.role, content: item.content };
-  });
+  }
 
+  return messages;
+}
+
+function buildRequestBody(request: OpenClawToolRequest): Record<string, unknown> {
   return {
     model: `openclaw:${request.agentId}`,
-    input: messages,
-    instructions: request.instructions,
-    tools: request.tools.map((t) => ({
-      type: t.type,
-      function: {
-        name: t.function.name,
-        description: t.function.description,
-        parameters: t.function.parameters,
-      },
-    })),
+    messages: buildChatMessages(request),
+    tools: request.tools,
     tool_choice: "auto",
-    max_output_tokens: request.maxOutputTokens,
+    max_tokens: request.maxOutputTokens,
+    stream: false,
   };
 }
 
-function mapUsage(raw: ResponsesApiResult["usage"]): TokenUsageInfo | undefined {
+function mapUsage(raw: ChatCompletionResponse["usage"]): TokenUsageInfo | undefined {
   if (!raw) return undefined;
 
   return {
-    inputTokens: raw.input_tokens,
-    outputTokens: raw.output_tokens,
-    totalTokens: raw.total_tokens,
+    inputTokens: raw.prompt_tokens,
+    outputTokens: raw.completion_tokens,
+    totalTokens: raw.prompt_tokens + raw.completion_tokens,
   };
 }
 
-function extractToolCalls(output: readonly ResponsesApiOutput[]): readonly ToolCall[] {
-  return output
-    .filter((item) => item.type === "function_call")
-    .map((item) => ({
-      callId: item.call_id ?? "",
-      name: item.name ?? "",
-      arguments: item.arguments ?? "{}",
-    }));
-}
-
-function extractTextContent(output: readonly ResponsesApiOutput[]): string | undefined {
-  for (const item of output) {
-    if (item.type === "message" && item.content) {
-      for (const part of item.content) {
-        if (part.type === "output_text" && part.text) {
-          return part.text;
-        }
-      }
-    }
-
-    if (item.type === "text" && item.text) {
-      return item.text;
-    }
+function parseChatResponse(data: ChatCompletionResponse): OpenClawToolResponse {
+  const choice = data.choices[0];
+  if (!choice) {
+    return { status: "failed", text: "No choices in response" };
   }
 
-  return undefined;
-}
-
-function parseApiResponse(data: ResponsesApiResult): OpenClawToolResponse {
-  const toolCalls = extractToolCalls(data.output);
-  const text = extractTextContent(data.output);
+  const message = choice.message;
   const usage = mapUsage(data.usage);
 
-  if (toolCalls.length > 0) {
+  if (message.tool_calls && message.tool_calls.length > 0) {
+    const toolCalls: readonly ToolCall[] = message.tool_calls.map((tc) => ({
+      callId: tc.id,
+      name: tc.function.name,
+      arguments: tc.function.arguments,
+    }));
+
     return {
       status: "requires_action",
+      text: message.content ?? undefined,
       toolCalls,
       usage,
-      rawOutput: data.output as readonly Record<string, unknown>[],
+      rawAssistantMessage: message,
     };
-  }
-
-  if (text) {
-    return {
-      status: "completed",
-      text,
-      usage,
-      rawOutput: data.output as readonly Record<string, unknown>[],
-    };
-  }
-
-  if (data.status === "failed") {
-    return { status: "failed", usage };
   }
 
   return {
     status: "completed",
-    text: "",
+    text: message.content ?? "",
     usage,
-    rawOutput: data.output as readonly Record<string, unknown>[],
+    rawAssistantMessage: message,
   };
 }
 
@@ -224,7 +208,7 @@ async function trySingleAttempt(
   url: string,
   headers: Record<string, string>,
   body: Record<string, unknown>,
-  config: ResponsesClientConfig,
+  config: ClientConfig,
   attempt: number,
   traceId?: string,
 ): Promise<AttemptResult> {
@@ -238,7 +222,7 @@ async function trySingleAttempt(
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    logger.warn({ attempt, error: msg, traceId }, "OpenClaw /v1/responses network error");
+    logger.warn({ attempt, error: msg, traceId }, "OpenClaw tool call network error");
 
     if (attempt < MAX_RETRIES) {
       await sleep(BACKOFF_MS[attempt - 1]);
@@ -262,7 +246,7 @@ async function handleHttpError(
   const errorBody = await response.text().catch(() => "(unreadable)");
   logger.warn(
     { attempt, httpStatus: response.status, body: errorBody.slice(0, 300), traceId },
-    "OpenClaw /v1/responses HTTP error",
+    "OpenClaw tool call HTTP error",
   );
 
   if (isRetryableError(response.status) && attempt < MAX_RETRIES) {
@@ -280,14 +264,14 @@ async function parseSuccessResponse(
   response: Response,
   traceId?: string,
 ): Promise<AttemptResult> {
-  let data: ResponsesApiResult;
+  let data: ChatCompletionResponse;
   try {
-    data = (await response.json()) as ResponsesApiResult;
+    data = (await response.json()) as ChatCompletionResponse;
   } catch {
-    return { retry: false, response: { status: "failed", text: "Failed to parse OpenClaw /v1/responses JSON" } };
+    return { retry: false, response: { status: "failed", text: "Failed to parse OpenClaw JSON response" } };
   }
 
-  const result = parseApiResponse(data);
+  const result = parseChatResponse(data);
 
   logger.info(
     {
@@ -297,7 +281,7 @@ async function parseSuccessResponse(
       usage: result.usage,
       traceId,
     },
-    "OpenClaw /v1/responses completed",
+    "OpenClaw tool call completed",
   );
 
   return { retry: false, response: result };
@@ -307,14 +291,14 @@ export async function callOpenClawWithTools(
   request: OpenClawToolRequest,
 ): Promise<OpenClawToolResponse> {
   const config = loadConfig();
-  const url = `${config.endpoint}/v1/responses`;
+  const url = `${config.endpoint}/v1/chat/completions`;
   const headers = buildHeaders(config, request.agentId, request.traceId);
   const body = buildRequestBody(request);
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     logger.info(
       { attempt, agent: request.agentId, traceId: request.traceId, toolCount: request.tools.length },
-      "Calling OpenClaw /v1/responses",
+      "Calling OpenClaw with tools",
     );
 
     const result = await trySingleAttempt(url, headers, body, config, attempt, request.traceId);

@@ -29,6 +29,7 @@ function applyMigrations(db: BetterSqlite3.Database): void {
   migrateOutcomesProjectId(db);
   migrateGovernanceDecisions(db);
   migrateOutcomesTraceId(db);
+  migrateProjectsForgeExecutor(db);
 }
 
 function migrateArtifactsColumns(db: BetterSqlite3.Database): void {
@@ -143,6 +144,15 @@ function migrateOutcomesTraceId(db: BetterSqlite3.Database): void {
   if (!columnNames.has("trace_id")) {
     db.exec("ALTER TABLE outcomes ADD COLUMN trace_id TEXT");
     db.exec("CREATE INDEX IF NOT EXISTS idx_outcomes_trace_id ON outcomes(trace_id)");
+  }
+}
+
+function migrateProjectsForgeExecutor(db: BetterSqlite3.Database): void {
+  const columns = db.pragma("table_info(projects)") as ReadonlyArray<{ name: string }>;
+  const columnNames = new Set(columns.map((c) => c.name));
+
+  if (!columnNames.has("forge_executor")) {
+    db.exec("ALTER TABLE projects ADD COLUMN forge_executor TEXT NOT NULL DEFAULT 'legacy'");
   }
 }
 

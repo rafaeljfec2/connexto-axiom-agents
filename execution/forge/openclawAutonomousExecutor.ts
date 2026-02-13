@@ -103,7 +103,11 @@ async function detectChangedFiles(workspacePath: string): Promise<readonly strin
     const tracked = stdout.trim().split("\n").filter(Boolean);
     const untracked = untrackedResult.stdout.trim().split("\n").filter(Boolean);
 
-    return [...new Set([...tracked, ...untracked])];
+    const IGNORED_PREFIXES = ["node_modules", ".git", "dist", "build", ".next", ".turbo"];
+
+    return [...new Set([...tracked, ...untracked])].filter(
+      (f) => !IGNORED_PREFIXES.some((prefix) => f.startsWith(prefix)),
+    );
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     logger.warn({ error: msg }, "Failed to detect changed files via git");
@@ -223,6 +227,26 @@ async function handleCompletedResponse(
   const filesChanged = await detectChangedFiles(ctx.workspacePath);
   const description = extractFinalDescription(response);
 
+  const noToolsUsed = state.iterationsUsed === 1 && filesChanged.length === 0;
+  if (noToolsUsed) {
+    logger.warn(
+      { iterations: state.iterationsUsed, textPreview: description.slice(0, 200) },
+      "OpenClaw completed without using any tools and no files changed — model may not support function calling",
+    );
+
+    return {
+      done: true,
+      result: {
+        success: false,
+        description,
+        filesChanged: [],
+        totalTokensUsed: state.totalTokensUsed,
+        iterationsUsed: state.iterationsUsed,
+        error: "Agent completed without using tools or making changes. The model may not support function calling.",
+      },
+    };
+  }
+
   logger.info(
     {
       iterations: state.iterationsUsed,
@@ -246,10 +270,12 @@ async function handleToolCallResponse(
 ): Promise<void> {
   const toolResults = await executeToolCalls(ctx.toolExecutorConfig, response.toolCalls!);
 
-  if (response.rawOutput) {
-    for (const item of response.rawOutput) {
-      state.conversationHistory.push({ role: "assistant", content: JSON.stringify(item) });
-    }
+  if (response.rawAssistantMessage) {
+    state.conversationHistory.push({
+      role: "assistant",
+      content: response.rawAssistantMessage.content ?? "",
+      tool_calls: response.rawAssistantMessage.tool_calls,
+    });
   }
 
   const resultItems = buildToolResultItems(response.toolCalls!, toolResults);
