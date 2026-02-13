@@ -168,10 +168,17 @@ function formatSingleError(err: StructuredError): string {
   return `${sourceTag} ${severity} ${err.file}:${err.line}:${err.column} - ${err.code}: ${err.message}`;
 }
 
+const TYPE_MISMATCH_CODES = new Set(["TS2345", "TS2322", "TS2741", "TS2559", "TS2304"]);
+
+const PRIMITIVE_TYPES = new Set([
+  "String", "Number", "Boolean", "Null", "Undefined",
+  "Object", "Array", "Function", "Promise", "Record",
+  "Partial", "Required", "Readonly", "Pick", "Omit",
+]);
+
 export function extractTypeNamesFromErrors(
   errors: readonly StructuredError[],
 ): readonly string[] {
-  const TYPE_MISMATCH_CODES = new Set(["TS2345", "TS2322", "TS2741", "TS2559", "TS2304"]);
   const typeNames = new Set<string>();
   const typeRegex = /type '([A-Z]\w+)'/gi;
 
@@ -180,20 +187,11 @@ export function extractTypeNamesFromErrors(
 
     for (const match of err.message.matchAll(typeRegex)) {
       const name = match[1];
-      if (name.length >= 3 && !isPrimitiveType(name)) {
+      if (name.length >= 3 && !PRIMITIVE_TYPES.has(name)) {
         typeNames.add(name);
       }
     }
   }
 
   return [...typeNames];
-}
-
-function isPrimitiveType(name: string): boolean {
-  const primitives = new Set([
-    "String", "Number", "Boolean", "Null", "Undefined",
-    "Object", "Array", "Function", "Promise", "Record",
-    "Partial", "Required", "Readonly", "Pick", "Omit",
-  ]);
-  return primitives.has(name);
 }

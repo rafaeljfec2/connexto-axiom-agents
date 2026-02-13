@@ -1,7 +1,7 @@
 import { logger } from "../../config/logger.js";
 import { getAllowedWritePaths } from "../../shared/policies/project-allowed-paths.js";
 import { discoverProjectStructure } from "../discovery/fileDiscovery.js";
-import type { FileContext } from "../discovery/fileDiscovery.js";
+import type { FileContext, ProjectStructure } from "../discovery/fileDiscovery.js";
 import {
   buildPlanningPreview,
   loadContextFiles,
@@ -84,28 +84,40 @@ export async function runForgeAgentLoop(
     };
   }
 
+  const validatedPlan = validatePlanAgainstWorkspace(planResult.plan, structure);
+
   logger.info(
     {
       projectId,
-      filesToRead: planResult.plan.filesToRead.length,
-      filesToModify: planResult.plan.filesToModify.length,
-      approach: planResult.plan.approach.slice(0, 100),
+      filesToRead: validatedPlan.filesToRead.length,
+      filesToModify: validatedPlan.filesToModify.length,
+      approach: validatedPlan.approach.slice(0, 100),
     },
     "FORGE agent loop - Phase 1 complete, loading context",
   );
 
-  const contextFiles = await loadContextFiles(ctx, planResult.plan, structure);
+  if (validatedPlan.filesToModify.length === 0 && validatedPlan.filesToCreate.length === 0) {
+    return {
+      success: false,
+      parsed: null,
+      totalTokensUsed,
+      phasesCompleted,
+      error: "Planning phase failed: all planned files_to_modify do not exist in the workspace",
+    };
+  }
+
+  const contextFiles = await loadContextFiles(ctx, validatedPlan, structure);
 
   let preExistingErrors = "";
   if (ctx.enablePreLintCheck) {
     preExistingErrors = await getPreExistingErrors(
-      planResult.plan.filesToModify,
+      validatedPlan.filesToModify,
       workspacePath,
     );
   }
 
   const fileHashes = ctx.enableAtomicEdits
-    ? await computeFileHashes(planResult.plan.filesToModify, workspacePath)
+    ? await computeFileHashes(validatedPlan.filesToModify, workspacePath)
     : new Map<string, string>();
 
   logger.info(
@@ -114,7 +126,7 @@ export async function runForgeAgentLoop(
   );
 
   const editResult = await executeEditPhase(
-    ctx, planResult.plan, contextFiles, fileTree, allowedDirs, projectConfig, preExistingErrors,
+    ctx, validatedPlan, contextFiles, fileTree, allowedDirs, projectConfig, preExistingErrors,
   );
   totalTokensUsed += editResult.tokensUsed;
   phasesCompleted = 2;
@@ -138,7 +150,7 @@ export async function runForgeAgentLoop(
   }
 
   if (fileHashes.size > 0) {
-    await checkFileHashDrift(planResult.plan.filesToModify, workspacePath, fileHashes);
+    await checkFileHashDrift(validatedPlan.filesToModify, workspacePath, fileHashes);
   }
 
   logger.info(
@@ -151,7 +163,7 @@ export async function runForgeAgentLoop(
   );
 
   const correctionResult = await verifyAndCorrectLoop(
-    ctx, editResult.parsed, planResult.plan, fileTree, allowedDirs, totalTokensUsed,
+    ctx, editResult.parsed, validatedPlan, fileTree, allowedDirs, totalTokensUsed,
   );
 
   return {
@@ -207,4 +219,46 @@ async function executeEditPhase(
 
   const parsed = parseCodeOutput(result.text);
   return { parsed, tokensUsed: result.tokensUsed };
+}
+
+function validatePlanAgainstWorkspace(plan: ForgePlan, structure: ProjectStructure): ForgePlan {
+  const knownPaths = new Set(structure.files.map((f) => f.relativePath));
+
+  const validModify = plan.filesToModify.filter((p) => {
+    if (knownPaths.has(p)) return true;
+
+    const similar = findSimilarPaths(p, knownPaths);
+    logger.warn(
+      { planned: p, suggestions: similar.slice(0, 3) },
+      "Planned file_to_modify does not exist in workspace",
+    );
+    return false;
+  });
+
+  const validRead = plan.filesToRead.filter((p) => {
+    if (knownPaths.has(p)) return true;
+
+    logger.debug({ planned: p }, "Planned file_to_read does not exist in workspace, skipping");
+    return false;
+  });
+
+  return { ...plan, filesToModify: validModify, filesToRead: validRead };
+}
+
+function findSimilarPaths(target: string, knownPaths: ReadonlySet<string>): readonly string[] {
+  const targetName = target.split("/").pop() ?? target;
+  const targetNameNoExt = targetName.replace(/\.[^.]+$/, "");
+
+  const matches: string[] = [];
+
+  for (const known of knownPaths) {
+    const knownName = known.split("/").pop() ?? known;
+    const knownNameNoExt = knownName.replace(/\.[^.]+$/, "");
+
+    if (knownNameNoExt === targetNameNoExt || knownName.includes(targetNameNoExt)) {
+      matches.push(known);
+    }
+  }
+
+  return matches;
 }

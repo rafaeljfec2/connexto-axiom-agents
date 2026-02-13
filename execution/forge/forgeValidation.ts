@@ -225,6 +225,12 @@ function isEslintConfigError(output: string): boolean {
   return ESLINT_CONFIG_ERROR_PATTERNS.some((pattern) => output.includes(pattern));
 }
 
+function extractExecErrorOutput(error: unknown): string {
+  const execError = error as { stdout?: string; stderr?: string; message?: string };
+  const raw = `${execError.stdout ?? ""}${execError.stderr ?? execError.message ?? ""}`;
+  return stripNpmWarnings(raw);
+}
+
 async function runEslintFix(
   execFileAsync: ExecFileAsync,
   files: readonly string[],
@@ -257,9 +263,7 @@ async function runEslintCheck(
     const cleaned = stripNpmWarnings(`${stdout}${stderr}`);
     return { success: true, output: `[eslint] ${cleaned}` };
   } catch (error) {
-    const execError = error as { stdout?: string; stderr?: string; message?: string };
-    const raw = `${execError.stdout ?? ""}${execError.stderr ?? execError.message ?? ""}`;
-    const cleaned = stripNpmWarnings(raw);
+    const cleaned = extractExecErrorOutput(error);
     if (cleaned.length === 0) {
       return { success: true, output: "[eslint] OK (warnings only)" };
     }
@@ -285,9 +289,7 @@ async function runTscCheck(
     const cleaned = stripNpmWarnings(`${stdout}${stderr}`);
     return { success: true, output: `[tsc] ${cleaned}` };
   } catch (error) {
-    const execError = error as { stdout?: string; stderr?: string; message?: string };
-    const raw = `${execError.stdout ?? ""}${execError.stderr ?? execError.message ?? ""}`;
-    const cleaned = stripNpmWarnings(raw);
+    const cleaned = extractExecErrorOutput(error);
     if (cleaned.length === 0) {
       return { success: true, output: "[tsc] OK (warnings only)" };
     }
@@ -330,9 +332,7 @@ async function runBuildCheck(
     const cleaned = stripNpmWarnings(`${stdout}${stderr}`);
     return { success: true, output: `[build] ${cleaned}` };
   } catch (error) {
-    const execError = error as { stdout?: string; stderr?: string; message?: string };
-    const raw = `${execError.stdout ?? ""}${execError.stderr ?? execError.message ?? ""}`;
-    const cleaned = stripNpmWarnings(raw);
+    const cleaned = extractExecErrorOutput(error);
     if (cleaned.length === 0) {
       return { success: true, output: "[build] OK (warnings only)" };
     }

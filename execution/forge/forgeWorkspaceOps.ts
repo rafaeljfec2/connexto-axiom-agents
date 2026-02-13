@@ -59,17 +59,7 @@ async function applyEditsAtomic(
       const edit = file.edits[editIdx];
       const result = applyOneEdit(content, edit, file.path);
       if (result === null) {
-        const snippet = buildFileSnippetForError(content, edit.search);
-        return {
-          success: false,
-          error: [
-            `Search string not found in ${file.path} (edit ${editIdx + 1} of ${file.edits.length}): "${edit.search.slice(0, 100)}..."`,
-            snippet,
-          ].join("\n"),
-          appliedFiles,
-          failedFile: file.path,
-          failedEditIndex: editIdx,
-        };
+        return buildSearchNotFoundError(file.path, editIdx, file.edits.length, edit.search, content);
       }
       content = result;
     }
@@ -111,17 +101,7 @@ async function applyEditsSequential(
           const edit = file.edits[editIdx];
           const result = applyOneEdit(content, edit, file.path);
           if (result === null) {
-            const snippet = buildFileSnippetForError(content, edit.search);
-            return {
-              success: false,
-              error: [
-                `Search string not found in ${file.path} (edit ${editIdx + 1} of ${file.edits.length}): "${edit.search.slice(0, 100)}..."`,
-                snippet,
-              ].join("\n"),
-              appliedFiles,
-              failedFile: file.path,
-              failedEditIndex: editIdx,
-            };
+            return buildSearchNotFoundError(file.path, editIdx, file.edits.length, edit.search, content);
           }
           content = result;
         }
@@ -142,11 +122,32 @@ async function applyEditsSequential(
 
 const MAX_SNIPPET_CHARS = 1500;
 const DUPLICATE_MATCH_THRESHOLD = 1;
+const MIN_WORD_MATCH_SCORE = 2;
+
+function buildSearchNotFoundError(
+  filePath: string,
+  editIdx: number,
+  totalEdits: number,
+  searchPreview: string,
+  fileContent: string,
+): ApplyResult {
+  const snippet = buildFileSnippetForError(fileContent, searchPreview);
+  return {
+    success: false,
+    error: [
+      `Search string not found in ${filePath} (edit ${editIdx + 1} of ${totalEdits}): "${searchPreview.slice(0, 100)}..."`,
+      snippet,
+    ].join("\n"),
+    appliedFiles: [],
+    failedFile: filePath,
+    failedEditIndex: editIdx,
+  };
+}
 
 function buildFileSnippetForError(fileContent: string, failedSearch: string): string {
   const lines = fileContent.split("\n");
+  const searchWords = failedSearch.split("\n")[0].trim().toLowerCase().split(/\s+/).filter((w) => w.length > 2);
 
-  const searchFirstLine = failedSearch.split("\n")[0].trim().toLowerCase();
   let bestLineIdx = -1;
   let bestScore = 0;
 
@@ -154,16 +155,14 @@ function buildFileSnippetForError(fileContent: string, failedSearch: string): st
     const lineLower = lines[i].trim().toLowerCase();
     if (lineLower.length === 0) continue;
 
-    const words = searchFirstLine.split(/\s+/).filter((w) => w.length > 2);
-    const matchCount = words.filter((w) => lineLower.includes(w)).length;
-
+    const matchCount = searchWords.filter((w) => lineLower.includes(w)).length;
     if (matchCount > bestScore) {
       bestScore = matchCount;
       bestLineIdx = i;
     }
   }
 
-  if (bestLineIdx >= 0 && bestScore >= 2) {
+  if (bestLineIdx >= 0 && bestScore >= MIN_WORD_MATCH_SCORE) {
     const start = Math.max(0, bestLineIdx - 5);
     const end = Math.min(lines.length, bestLineIdx + 15);
     const snippet = lines
@@ -188,13 +187,46 @@ export async function restoreWorkspaceFiles(
   const { promisify } = await import("node:util");
   const execFileAsync = promisify(execFile);
 
-  try {
-    const filePaths = files.map((f) => f.path);
-    await execFileAsync("git", ["checkout", "--", ...filePaths], { cwd: workspacePath });
-    logger.debug({ fileCount: filePaths.length }, "Workspace files restored via git checkout");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.warn({ error: message }, "git checkout restore failed, attempting manual restore");
+  const trackedFiles = files.filter((f) => f.action !== "create").map((f) => f.path);
+  const createdFiles = files.filter((f) => f.action === "create").map((f) => f.path);
+
+  if (trackedFiles.length > 0) {
+    try {
+      await execFileAsync("git", ["checkout", "--", ...trackedFiles], { cwd: workspacePath });
+      logger.debug({ fileCount: trackedFiles.length }, "Tracked files restored via git checkout");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn({ error: message }, "git checkout restore partially failed, restoring individually");
+      await restoreTrackedFilesIndividually(execFileAsync, trackedFiles, workspacePath);
+    }
+  }
+
+  for (const filePath of createdFiles) {
+    const fullPath = path.join(workspacePath, filePath);
+    try {
+      await fs.unlink(fullPath);
+      logger.debug({ path: filePath }, "Created file removed during workspace restore");
+    } catch {
+      logger.debug({ path: filePath }, "Created file already absent during restore");
+    }
+  }
+}
+
+async function restoreTrackedFilesIndividually(
+  execFileAsync: (
+    file: string,
+    args: readonly string[],
+    options: { readonly cwd: string },
+  ) => Promise<{ readonly stdout: string; readonly stderr: string }>,
+  filePaths: readonly string[],
+  workspacePath: string,
+): Promise<void> {
+  for (const filePath of filePaths) {
+    try {
+      await execFileAsync("git", ["checkout", "--", filePath], { cwd: workspacePath });
+    } catch {
+      logger.debug({ path: filePath }, "File not tracked by git, skipping restore");
+    }
   }
 }
 

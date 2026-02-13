@@ -350,6 +350,13 @@ async function enrichErrorContext(
   return definitions.length > 0 ? definitions.join("\n") : "";
 }
 
+function isFileRelevantToErrors(filePath: string, errorFiles: ReadonlySet<string>): boolean {
+  for (const ef of errorFiles) {
+    if (ef.endsWith(filePath) || filePath.endsWith(ef)) return true;
+  }
+  return false;
+}
+
 function buildValidationEscalation(
   errors: readonly StructuredError[],
   currentState: readonly { readonly path: string; readonly content: string }[],
@@ -359,8 +366,7 @@ function buildValidationEscalation(
   let totalChars = 0;
 
   for (const state of currentState) {
-    const relevant = [...errorFiles].some((ef) => ef.endsWith(state.path) || state.path.endsWith(ef));
-    if (!relevant) continue;
+    if (!isFileRelevantToErrors(state.path, errorFiles)) continue;
 
     const lines = state.content.split("\n").slice(0, ESCALATION_LINES);
     const snippet = `--- ${state.path} (first ${ESCALATION_LINES} lines) ---\n${lines.join("\n")}\n--- end ---`;
@@ -414,41 +420,14 @@ function buildSearchFailureEscalation(
   ].join("\n");
 }
 
-interface CorrectionRoundParams {
-  readonly plan: ForgePlan;
-  readonly errorOutput: string;
-  readonly currentFilesState: readonly { readonly path: string; readonly content: string }[];
-  readonly fileTree: string;
-  readonly allowedDirs: readonly string[];
-  readonly appliedFiles?: readonly string[];
-  readonly failedFile?: string;
-  readonly failedEditIndex?: number;
-  readonly attempts?: readonly CorrectionAttempt[];
-  readonly typeDefinitions?: string;
-  readonly escalationSnippets?: string;
-  readonly isWorkspaceRestored?: boolean;
-}
+type CorrectionRoundParams = Omit<import("./forgePrompts.js").CorrectionPromptContext, "delegation">;
 
 async function executeCorrectionRound(
   ctx: ForgeAgentContext,
   params: CorrectionRoundParams,
 ): Promise<CorrectionRoundResult> {
   const systemPrompt = buildExecutionSystemPrompt(ctx.project.language, ctx.project.framework, params.allowedDirs);
-  const userPrompt = buildCorrectionUserPrompt({
-    delegation: ctx.delegation,
-    plan: params.plan,
-    errorOutput: params.errorOutput,
-    currentFilesState: params.currentFilesState,
-    fileTree: params.fileTree,
-    allowedDirs: params.allowedDirs,
-    appliedFiles: params.appliedFiles,
-    failedFile: params.failedFile,
-    failedEditIndex: params.failedEditIndex,
-    attempts: params.attempts,
-    typeDefinitions: params.typeDefinitions,
-    escalationSnippets: params.escalationSnippets,
-    isWorkspaceRestored: params.isWorkspaceRestored,
-  });
+  const userPrompt = buildCorrectionUserPrompt({ ...params, delegation: ctx.delegation });
 
   const result = await callLlmWithAudit(ctx, systemPrompt, userPrompt, "correction");
   if (!result) return { parsed: null, tokensUsed: 0 };
