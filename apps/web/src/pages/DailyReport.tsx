@@ -5,6 +5,7 @@ import {
   useRejectCodeChange,
   useApproveArtifact,
   useRejectArtifact,
+  useRunCycle,
 } from "@/api/hooks";
 import { MetricCard } from "@/components/MetricCard";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -57,6 +58,7 @@ export function DailyReport() {
   const rejectCode = useRejectCodeChange();
   const approveArtifact = useApproveArtifact();
   const rejectArtifact = useRejectArtifact();
+  const runCycle = useRunCycle();
 
   const goalOptions = useMemo(() => {
     if (!data) return [];
@@ -110,8 +112,17 @@ export function DailyReport() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold md:text-2xl">Resumo Diário</h2>
-        <Button size="sm" className="gap-2">
-          <Play className="h-3.5 w-3.5" />
+        <Button
+          size="sm"
+          className="gap-2"
+          disabled={runCycle.isPending}
+          onClick={() => runCycle.mutate()}
+        >
+          {runCycle.isPending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Play className="h-3.5 w-3.5" />
+          )}
           <span className="hidden sm:inline">Rodar Ciclo</span>
         </Button>
       </div>
