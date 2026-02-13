@@ -96,7 +96,10 @@ export async function runForgeAgentLoop(
     "FORGE agent loop - Phase 1 complete, loading context",
   );
 
-  if (validatedPlan.filesToModify.length === 0 && validatedPlan.filesToCreate.length === 0) {
+  const hadPlannedFiles = planResult.plan.filesToModify.length > 0 || planResult.plan.filesToCreate.length > 0;
+  const allFilesRemoved = validatedPlan.filesToModify.length === 0 && validatedPlan.filesToCreate.length === 0;
+
+  if (hadPlannedFiles && allFilesRemoved) {
     return {
       success: false,
       parsed: null,

@@ -41,7 +41,7 @@ const HIGH_RISK_THRESHOLD = 4;
 const HIGH_COMPLEXITY_THRESHOLD = 4;
 
 const NEXUS_RESEARCH_RECENT_DAYS = 7;
-const MAX_NEXUS_CONTEXT_CHARS = 400;
+const MAX_NEXUS_CONTEXT_CHARS = 700;
 
 export interface GovernanceClassification {
   readonly complexity: number;
@@ -233,6 +233,8 @@ export function loadGovernanceInputData(db: BetterSqlite3.Database): GovernanceI
   };
 }
 
+const RESEARCH_SATURATION_THRESHOLD = 3;
+
 export function resolveNexusPreResearchContext(
   db: BetterSqlite3.Database,
   goals: readonly Goal[],
@@ -244,14 +246,14 @@ export function resolveNexusPreResearchContext(
     if (research.length > 0) {
       const recent = research[0];
       if (recent && isRecentResearch(recent)) {
-        return formatNexusPreContext(recent);
+        return formatNexusPreContext(recent, research.length);
       }
     }
   }
 
   const recentResearch = getRecentResearch(db, NEXUS_RESEARCH_RECENT_DAYS);
   if (recentResearch.length > 0 && recentResearch[0]) {
-    return formatNexusPreContext(recentResearch[0]);
+    return formatNexusPreContext(recentResearch[0], 0);
   }
 
   return "";
@@ -265,13 +267,25 @@ function isRecentResearch(research: NexusResearch): boolean {
   return diffDays <= NEXUS_RESEARCH_RECENT_DAYS;
 }
 
-function formatNexusPreContext(research: NexusResearch): string {
+function formatNexusPreContext(research: NexusResearch, totalResearchCount: number): string {
   const lines = [
     "NEXUS_PRE_RESEARCH:",
     `- Pergunta: ${truncate(research.question, 80)}`,
     `- Recomendacao: ${truncate(research.recommendation, 120)}`,
     `- Riscos: ${truncate(research.risk_analysis, 120)}`,
   ];
+
+  if (totalResearchCount >= RESEARCH_SATURATION_THRESHOLD) {
+    lines.push(
+      "",
+      `ATENCAO CRITICA: Ja existem ${totalResearchCount} pesquisas para este goal.`,
+      "A pesquisa esta SATURADA. NAO delegue NEXUS nem VECTOR.",
+      "DELEGUE PARA FORGE uma task de IMPLEMENTACAO CONCRETA.",
+      "A task do FORGE deve pedir para ALTERAR ARQUIVOS REAIS, NAO 'planejar'.",
+      "Exemplo: 'Trocar as cores do dark theme de X para Y nos arquivos A, B, C'.",
+      "NUNCA delegue 'sem codar' ou 'apenas plano' para FORGE.",
+    );
+  }
 
   const text = lines.join("\n");
   if (text.length > MAX_NEXUS_CONTEXT_CHARS) {

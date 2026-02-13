@@ -179,6 +179,22 @@ async function handleSuccessfulAgentOutput(
   const { db, delegation, projectId, workspacePath, repoSource, parsed, totalTokensUsed, lintOutput, startTime } = ctx;
   const { task, goal_id } = delegation;
 
+  if (parsed.files.length === 0) {
+    const executionTimeMs = Math.round(performance.now() - startTime);
+    logger.info(
+      { projectId, description: parsed.description.slice(0, 80) },
+      "FORGE returned no file changes, completing without commit",
+    );
+    return buildResult(
+      task,
+      "success",
+      `[${projectId}] Nenhuma alteracao necessaria: ${parsed.description}`,
+      undefined,
+      executionTimeMs,
+      totalTokensUsed,
+    );
+  }
+
   if (parsed.files.length > MAX_FILES_PER_CHANGE) {
     const executionTimeMs = Math.round(performance.now() - startTime);
     return buildResult(

@@ -20,7 +20,7 @@ import {
 import { isGitHubConfigured } from "../execution/shared/githubClient.js";
 import { syncOpenPRsStatus } from "../services/mergeReadinessService.js";
 import { getCodeChangeStats7d, getBranchStats7d } from "../state/codeChanges.js";
-import { getResearchStats7d } from "../state/nexusResearch.js";
+import { getResearchStats7d, getResearchByGoalId } from "../state/nexusResearch.js";
 import { getPRStats7d } from "../state/pullRequests.js";
 import { getPublicationCount7d } from "../state/publications.js";
 import { getCurrentBudget, incrementUsedTokens } from "../state/budgets.js";
@@ -140,24 +140,36 @@ export async function runKairos(
   const budgetConfig = loadBudgetConfig();
   const filterResult = filterDelegations(output.delegations, db, budgetConfig);
   const filtered = filterResult.delegations;
+
+  const effectiveApproved = resolveNeedsApproval(
+    filtered.approved,
+    filtered.needsApproval,
+    validation.status,
+  );
+
+  const goalIds = goals.map((g) => g.id);
+  const finalApproved = applyResearchSaturationFilter(db, effectiveApproved, goalIds);
+
   logger.info(
     {
-      approved: filtered.approved.length,
+      approved: finalApproved.length,
       needsApproval: filtered.needsApproval.length,
       rejected: filtered.rejected.length,
       adjustmentsApplied: filterResult.adjustmentsApplied,
+      autoApproved: effectiveApproved.length - filtered.approved.length,
+      researchFiltered: effectiveApproved.length - finalApproved.length,
     },
     "Delegations filtered",
   );
 
-  const nexusOutput = await executeApprovedNexus(db, filtered.approved, traceId);
-  const forgeOutput = await executeApprovedForge(db, filtered.approved, projectId, traceId);
-  const vectorOutput = await executeApprovedVector(db, filtered.approved, traceId);
+  const nexusOutput = await executeApprovedNexus(db, finalApproved, traceId);
+  const forgeOutput = await executeApprovedForge(db, finalApproved, projectId, traceId);
+  const vectorOutput = await executeApprovedVector(db, finalApproved, traceId);
 
   const allResults = [...nexusOutput.results, ...forgeOutput.results, ...vectorOutput.results];
   const allBlocked = [...nexusOutput.blocked, ...forgeOutput.blocked, ...vectorOutput.blocked];
 
-  evaluateAndRecordFeedback(db, allResults, filtered.approved, budgetConfig);
+  evaluateAndRecordFeedback(db, allResults, finalApproved, budgetConfig);
 
   const budgetInfo = buildBudgetInfo(db, allBlocked);
   const efficiencyInfo = buildEfficiencyInfo(db, kairosUsage, output);
@@ -578,6 +590,64 @@ function buildHistoricalInfo(db: BetterSqlite3.Database): HistoricalPatternInfo 
     frequentFiles,
     historicalContextUsed: summary.totalExecutions > 0,
   };
+}
+
+const RESEARCH_SATURATION_THRESHOLD = 3;
+
+function applyResearchSaturationFilter(
+  db: BetterSqlite3.Database,
+  delegations: readonly KairosDelegation[],
+  goalIds: readonly string[],
+): readonly KairosDelegation[] {
+  const hasForge = delegations.some((d) => d.agent === "forge");
+  if (!hasForge) return delegations;
+
+  const isSaturated = goalIds.some((goalId) => {
+    const research = getResearchByGoalId(db, goalId);
+    return research.length >= RESEARCH_SATURATION_THRESHOLD;
+  });
+
+  if (!isSaturated) return delegations;
+
+  const filtered = delegations.filter((d) => {
+    if (d.agent === "nexus" || d.agent === "vector") {
+      logger.info(
+        { agent: d.agent, task: d.task.slice(0, 80) },
+        "Skipping delegation: research saturated, prioritizing FORGE execution",
+      );
+      return false;
+    }
+    return true;
+  });
+
+  return filtered;
+}
+
+function resolveNeedsApproval(
+  approved: readonly KairosDelegation[],
+  needsApproval: readonly KairosDelegation[],
+  validationStatus: "match" | "mismatch" | "escalation_needed",
+): readonly KairosDelegation[] {
+  if (needsApproval.length === 0) return approved;
+
+  if (validationStatus === "escalation_needed") {
+    logger.warn(
+      { count: needsApproval.length, agents: needsApproval.map((d) => d.agent) },
+      "Delegations blocked: governance requires escalation",
+    );
+    return approved;
+  }
+
+  logger.info(
+    {
+      autoApproved: needsApproval.length,
+      agents: needsApproval.map((d) => d.agent),
+      reason: "governance post-validation did not require escalation",
+    },
+    "Auto-approving needsApproval delegations",
+  );
+
+  return [...approved, ...needsApproval];
 }
 
 function buildFallbackOutput(errorMessage: string): KairosOutput {
