@@ -12,6 +12,7 @@ import {
   checkFileHashDrift,
 } from "./forgeContextLoader.js";
 import { verifyAndCorrectLoop } from "./forgeCorrectionLoop.js";
+import { checkBaselineBuild } from "./forgeWorkspaceOps.js";
 import { callLlmWithAudit } from "./forgeLlmClient.js";
 import { parseCodeOutput, parsePlanningOutput, buildFallbackPlan } from "./forgeOutputParser.js";
 import {
@@ -126,7 +127,13 @@ export async function runForgeAgentLoop(
   }
 
   const taskKeywords = buildEnrichedKeywords(ctx);
-  const replanFlowCtx: ReplanFlowContext = { ctx, structure, fileTree, allowedDirs, projectConfig, indexPromptSection };
+
+  let baselineBuildFailed = false;
+  if (ctx.runBuild) {
+    baselineBuildFailed = await checkBaselineBuild(workspacePath, ctx.buildTimeout);
+  }
+
+  const replanFlowCtx: ReplanFlowContext = { ctx, structure, fileTree, allowedDirs, projectConfig, indexPromptSection, baselineBuildFailed };
 
   const emptyPlanForImplTask = isImplementationLikeTask(delegation.task)
     && validatedPlan.filesToModify.length === 0
@@ -246,12 +253,13 @@ async function executeAndVerifyPlan(
       projectId,
       filesCount: editResult.parsed.files.length,
       description: editResult.parsed.description.slice(0, 80),
+      baselineBuildFailed: replanFlowCtx.baselineBuildFailed,
     },
     "FORGE agent loop - Phase 3: Apply & Verify",
   );
 
   const correctionResult = await verifyAndCorrectLoop(
-    ctx, editResult.parsed, plan, fileTree, allowedDirs, totalTokensUsed,
+    ctx, editResult.parsed, plan, fileTree, allowedDirs, totalTokensUsed, replanFlowCtx.baselineBuildFailed,
   );
 
   if (correctionResult.success) {
@@ -286,6 +294,7 @@ interface ReplanFlowContext {
   readonly allowedDirs: readonly string[];
   readonly projectConfig: ProjectConfig;
   readonly indexPromptSection: string;
+  readonly baselineBuildFailed: boolean;
 }
 
 async function executeReplanFlow(
@@ -324,7 +333,7 @@ async function executeReplanFlow(
   if (!replanEditResult.parsed || replanEditResult.parsed.files.length === 0) return null;
 
   const replanCorrectionResult = await verifyAndCorrectLoop(
-    ctx, replanEditResult.parsed, revalidated, fileTree, allowedDirs, tokensAfterEdit,
+    ctx, replanEditResult.parsed, revalidated, fileTree, allowedDirs, tokensAfterEdit, flowCtx.baselineBuildFailed,
   );
 
   return {

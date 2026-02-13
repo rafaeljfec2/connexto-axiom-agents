@@ -24,7 +24,6 @@ import {
   applyEditsToWorkspace,
   restoreWorkspaceFiles,
   runLintCheck,
-  checkBaselineBuild,
   readModifiedFilesState,
 } from "./forgeWorkspaceOps.js";
 import type { ApplyResult, ValidationConfig, ValidationResult } from "./forgeWorkspaceOps.js";
@@ -52,13 +51,9 @@ export async function verifyAndCorrectLoop(
   fileTree: string,
   allowedDirs: readonly string[],
   previousTokens: number,
+  baselineBuildFailed: boolean = false,
 ): Promise<CorrectionResult> {
   const { maxCorrectionRounds } = ctx;
-
-  let baselineBuildFailed = false;
-  if (ctx.runBuild) {
-    baselineBuildFailed = await checkBaselineBuild(ctx.workspacePath, ctx.buildTimeout);
-  }
 
   const state: CorrectionLoopState = {
     currentParsed: initialParsed,
