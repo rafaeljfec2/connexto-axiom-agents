@@ -108,4 +108,47 @@ describe("validatePlanCoherence", () => {
     const result = await validatePlanCoherence(plan, tmpDir, ["theme"]);
     expect(result.isCoherent).toBe(true);
   });
+
+  it("should treat CSS files as coherent when task has style/theme keywords", async () => {
+    const filePath = "apps/web/src/shared/styles/globals.css";
+    const fullDir = path.join(tmpDir, "apps/web/src/shared/styles");
+    await fs.mkdir(fullDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, filePath),
+      ":root {\n  --color-brand-900: #0b1f3b;\n}\n",
+    );
+
+    const plan = buildPlan([filePath]);
+    const result = await validatePlanCoherence(plan, tmpDir, ["override", "tema", "vermelho", "dark"]);
+    expect(result.isCoherent).toBe(true);
+    expect(result.suspiciousFiles).toEqual([]);
+  });
+
+  it("should treat CSS files as suspicious when task has no style keywords", async () => {
+    const filePath = "apps/web/src/shared/styles/globals.css";
+    const fullDir = path.join(tmpDir, "apps/web/src/shared/styles");
+    await fs.mkdir(fullDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, filePath),
+      ":root {\n  --color-brand-900: #0b1f3b;\n}\n",
+    );
+
+    const plan = buildPlan([filePath]);
+    const result = await validatePlanCoherence(plan, tmpDir, ["auth", "login", "user"]);
+    expect(result.isCoherent).toBe(false);
+    expect(result.suspiciousFiles).toContain(filePath);
+  });
+
+  it("should detect keyword .dark deep in CSS file content", async () => {
+    const filePath = "apps/web/src/shared/styles/globals.css";
+    const fullDir = path.join(tmpDir, "apps/web/src/shared/styles");
+    await fs.mkdir(fullDir, { recursive: true });
+    const lines = Array.from({ length: 80 }, (_, i) => `  --var-${i}: #000;`);
+    lines[77] = ".dark {";
+    await fs.writeFile(path.join(tmpDir, filePath), lines.join("\n"));
+
+    const plan = buildPlan([filePath]);
+    const result = await validatePlanCoherence(plan, tmpDir, ["dark", "override"]);
+    expect(result.isCoherent).toBe(true);
+  });
 });

@@ -631,11 +631,37 @@ function findSimilarPaths(target: string, knownPaths: ReadonlySet<string>): read
   return matches;
 }
 
-const COHERENCE_MAX_LINES = 50;
+const COHERENCE_MAX_LINES = 600;
 
 export interface CoherenceValidation {
   readonly isCoherent: boolean;
   readonly suspiciousFiles: readonly string[];
+}
+
+const STYLE_FILE_EXTENSIONS: ReadonlySet<string> = new Set([".css", ".scss", ".less"]);
+const STYLE_TASK_KEYWORDS: ReadonlySet<string> = new Set([
+  "theme", "dark", "light", "color", "style", "css", "token",
+  "override", "vermelho", "red", "brand", "palette", "tema",
+]);
+
+function isStyleFileForStyleTask(filePath: string, lowerKeywords: readonly string[]): boolean {
+  const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
+  if (!STYLE_FILE_EXTENSIONS.has(ext)) return false;
+  return lowerKeywords.some((kw) => STYLE_TASK_KEYWORDS.has(kw));
+}
+
+function fileMatchesKeywords(
+  filePath: string,
+  content: string,
+  lowerKeywords: readonly string[],
+): boolean {
+  const contentToCheck = content.split("\n").slice(0, COHERENCE_MAX_LINES).join("\n").toLowerCase();
+  if (lowerKeywords.some((kw) => contentToCheck.includes(kw))) return true;
+
+  const pathLower = filePath.toLowerCase();
+  if (lowerKeywords.some((kw) => pathLower.includes(kw))) return true;
+
+  return isStyleFileForStyleTask(filePath, lowerKeywords);
 }
 
 export async function validatePlanCoherence(
@@ -664,18 +690,11 @@ export async function validatePlanCoherence(
     if (result.status !== "fulfilled") continue;
 
     const { filePath, content } = result.value;
-    const firstLines = content.split("\n").slice(0, COHERENCE_MAX_LINES).join("\n").toLowerCase();
 
-    const hasRelevantKeyword = lowerKeywords.some((kw) => firstLines.includes(kw));
-
-    if (hasRelevantKeyword) {
+    if (fileMatchesKeywords(filePath, content, lowerKeywords)) {
       anyFileHasKeyword = true;
     } else {
-      const pathLower = filePath.toLowerCase();
-      const pathHasKeyword = lowerKeywords.some((kw) => pathLower.includes(kw));
-      if (!pathHasKeyword) {
-        suspiciousFiles.push(filePath);
-      }
+      suspiciousFiles.push(filePath);
     }
   }
 

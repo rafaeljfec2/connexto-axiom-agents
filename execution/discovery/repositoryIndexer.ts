@@ -6,14 +6,14 @@ import type { RipgrepResult } from "./ripgrepSearch.js";
 import { readFirstLines } from "./fileReadUtils.js";
 
 const INDEXABLE_EXTENSIONS: ReadonlySet<string> = new Set([
-  ".ts", ".tsx", ".js", ".jsx",
+  ".ts", ".tsx", ".js", ".jsx", ".css", ".scss",
 ]);
 
 const MAX_INDEX_PROMPT_CHARS = 16_000;
 const MANUAL_FALLBACK_MAX_FILES = 200;
 const MANUAL_FALLBACK_MAX_LINES = 60;
 
-const BONUS_TYPES: ReadonlySet<string> = new Set(["component", "hook", "config"]);
+const BONUS_TYPES: ReadonlySet<string> = new Set(["component", "hook", "config", "style"]);
 const BONUS_EXPORT_THRESHOLD = 3;
 
 export type FileType =
@@ -137,6 +137,42 @@ function extractExportsFromFileContent(content: string): readonly string[] {
   return exports;
 }
 
+const CSS_SELECTOR_REGEX = /^([.:][a-zA-Z_-][\w-]*)\s*\{/;
+const CSS_VAR_DEF_REGEX = /^\s*(--[\w-]+)\s*:/;
+
+function extractCssSymbols(content: string): readonly string[] {
+  const symbols: string[] = [];
+  const seen = new Set<string>();
+
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+
+    const selectorMatch = CSS_SELECTOR_REGEX.exec(trimmed);
+    if (selectorMatch) {
+      const selector = selectorMatch[1];
+      if (!seen.has(selector)) {
+        symbols.push(selector);
+        seen.add(selector);
+      }
+    }
+
+    const varMatch = CSS_VAR_DEF_REGEX.exec(trimmed);
+    if (varMatch) {
+      const varName = varMatch[1];
+      if (!seen.has(varName)) {
+        symbols.push(varName);
+        seen.add(varName);
+      }
+    }
+  }
+
+  return symbols;
+}
+
+function isCssFile(filePath: string): boolean {
+  return filePath.endsWith(".css") || filePath.endsWith(".scss");
+}
+
 const MANUAL_FALLBACK_BATCH_SIZE = 20;
 
 async function readAndExtractExports(
@@ -146,7 +182,9 @@ async function readAndExtractExports(
   const fullPath = path.join(workspacePath, file.relativePath);
   try {
     const content = await readFirstLines(fullPath, MANUAL_FALLBACK_MAX_LINES);
-    const exports = extractExportsFromFileContent(content);
+    const exports = isCssFile(file.relativePath)
+      ? extractCssSymbols(content)
+      : extractExportsFromFileContent(content);
     return exports.length > 0 ? { relativePath: file.relativePath, exports } : null;
   } catch {
     return null;
@@ -288,12 +326,12 @@ export function formatIndexForPrompt(
   let totalChars = header.length;
 
   const typeOrder: Record<FileType, number> = {
-    component: 0,
-    hook: 1,
-    config: 2,
-    type: 3,
-    util: 4,
-    style: 5,
+    style: 0,
+    component: 1,
+    hook: 2,
+    config: 3,
+    type: 4,
+    util: 5,
     other: 6,
     test: 7,
   };
@@ -355,6 +393,11 @@ function scorePathForKeyword(
   return score;
 }
 
+const STYLE_BOOST_KEYWORDS: ReadonlySet<string> = new Set([
+  "theme", "dark", "light", "color", "palette", "style", "css",
+  "token", "override", "vermelho", "red", "brand",
+]);
+
 function scoreEntryAgainstKeywords(
   entry: FileSymbolIndex,
   lowerKeywords: readonly string[],
@@ -371,6 +414,11 @@ function scoreEntryAgainstKeywords(
   if (score > 0) {
     if (entry.exports.length >= BONUS_EXPORT_THRESHOLD) score += 2;
     if (BONUS_TYPES.has(entry.type)) score += 2;
+  }
+
+  if (entry.type === "style" && score > 0) {
+    const hasStyleKeyword = lowerKeywords.some((kw) => STYLE_BOOST_KEYWORDS.has(kw));
+    if (hasStyleKeyword) score += 20;
   }
 
   return score;

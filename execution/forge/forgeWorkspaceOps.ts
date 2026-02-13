@@ -5,7 +5,7 @@ import { sanitizeWorkspacePath } from "../project/projectSecurity.js";
 import type { FileChange, FileEdit } from "../project/projectSecurity.js";
 
 export type { ValidationConfig, ValidationResult } from "./forgeValidation.js";
-export { runLintCheck } from "./forgeValidation.js";
+export { runLintCheck, checkBaselineBuild } from "./forgeValidation.js";
 
 export interface ApplyResult {
   readonly success: boolean;

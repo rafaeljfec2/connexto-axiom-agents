@@ -30,7 +30,7 @@ const GREPPABLE_DIRS: ReadonlySet<string> = new Set([
 ]);
 
 const GREPPABLE_EXTENSIONS: ReadonlySet<string> = new Set([
-  ".ts", ".tsx", ".js", ".jsx",
+  ".ts", ".tsx", ".js", ".jsx", ".css", ".scss",
 ]);
 
 const IGNORED_DIRS: ReadonlySet<string> = new Set([
@@ -288,7 +288,7 @@ async function grepWithRipgrep(
   const allFilesMap = new Map(files.map((f) => [f.relativePath, f]));
   const pattern = keywords.join("|");
   const rgResults = await ripgrepSearch(workspacePath, pattern, {
-    glob: "*.{ts,tsx,js,jsx}",
+    glob: "*.{ts,tsx,js,jsx,css,scss}",
     maxResults: RIPGREP_MAX_RESULTS,
   });
 
@@ -498,35 +498,57 @@ function mergeScored(
   }
 }
 
+const STRUCTURAL_PATH_SEGMENTS: ReadonlySet<string> = new Set([
+  "component", "page", "layout",
+]);
+
+const STYLE_PATH_SEGMENTS: ReadonlySet<string> = new Set([
+  "styles", "theme", "globals", "tokens",
+]);
+
+const STYLE_EXTENSIONS: ReadonlySet<string> = new Set([".css", ".scss"]);
+const CODE_EXTENSIONS: ReadonlySet<string> = new Set([".tsx", ".ts", ".jsx"]);
+
+function computeExtensionBonus(ext: string): number {
+  if (CODE_EXTENSIONS.has(ext)) return 1;
+  if (STYLE_EXTENSIONS.has(ext)) return 3;
+  return 0;
+}
+
+function computePathSegmentBonus(lowerPath: string): number {
+  let bonus = 0;
+  for (const seg of STRUCTURAL_PATH_SEGMENTS) {
+    if (lowerPath.includes(seg)) { bonus += 1; break; }
+  }
+  for (const seg of STYLE_PATH_SEGMENTS) {
+    if (lowerPath.includes(seg)) { bonus += 5; break; }
+  }
+  return bonus;
+}
+
+function scoreKeywordsAgainstPath(
+  lowerPath: string,
+  pathParts: readonly string[],
+  keywords: readonly string[],
+): number {
+  let score = 0;
+  for (const keyword of keywords) {
+    if (lowerPath.includes(keyword)) score += 3;
+    for (const part of pathParts) {
+      if (part === keyword) score += 5;
+      else if (part.includes(keyword)) score += 2;
+    }
+  }
+  return score;
+}
+
 function calculateFileRelevance(filePath: string, keywords: readonly string[]): number {
   const lowerPath = filePath.toLowerCase();
   const pathParts = lowerPath.split(/[/\\.-]/);
-  let score = 0;
 
-  for (const keyword of keywords) {
-    if (lowerPath.includes(keyword)) {
-      score += 3;
-    }
+  const score = scoreKeywordsAgainstPath(lowerPath, pathParts, keywords);
+  if (score === 0) return 0;
 
-    for (const part of pathParts) {
-      if (part === keyword) {
-        score += 5;
-      } else if (part.includes(keyword)) {
-        score += 2;
-      }
-    }
-  }
-
-  if (score > 0) {
-    const ext = path.extname(filePath);
-    if ([".tsx", ".ts", ".jsx"].includes(ext)) {
-      score += 1;
-    }
-
-    if (lowerPath.includes("component") || lowerPath.includes("page") || lowerPath.includes("layout")) {
-      score += 1;
-    }
-  }
-
-  return score;
+  const ext = path.extname(filePath);
+  return score + computeExtensionBonus(ext) + computePathSegmentBonus(lowerPath);
 }

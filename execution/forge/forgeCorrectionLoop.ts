@@ -24,6 +24,7 @@ import {
   applyEditsToWorkspace,
   restoreWorkspaceFiles,
   runLintCheck,
+  checkBaselineBuild,
   readModifiedFilesState,
 } from "./forgeWorkspaceOps.js";
 import type { ApplyResult, ValidationConfig, ValidationResult } from "./forgeWorkspaceOps.js";
@@ -41,6 +42,7 @@ interface CorrectionLoopState {
   consecutiveSearchFailures: number;
   consecutiveValidationFailures: number;
   attempts: CorrectionAttempt[];
+  baselineBuildFailed: boolean;
 }
 
 export async function verifyAndCorrectLoop(
@@ -52,6 +54,12 @@ export async function verifyAndCorrectLoop(
   previousTokens: number,
 ): Promise<CorrectionResult> {
   const { maxCorrectionRounds } = ctx;
+
+  let baselineBuildFailed = false;
+  if (ctx.runBuild) {
+    baselineBuildFailed = await checkBaselineBuild(ctx.workspacePath, ctx.buildTimeout);
+  }
+
   const state: CorrectionLoopState = {
     currentParsed: initialParsed,
     totalTokensUsed: previousTokens,
@@ -60,6 +68,7 @@ export async function verifyAndCorrectLoop(
     consecutiveSearchFailures: 0,
     consecutiveValidationFailures: 0,
     attempts: [],
+    baselineBuildFailed,
   };
 
   for (let round = 0; round <= maxCorrectionRounds; round++) {
@@ -190,6 +199,7 @@ async function handleApplySuccess(
     enableStructuredErrors: ctx.enableStructuredErrors,
     enableTestExecution: ctx.enableTestExecution,
     testTimeout: ctx.testTimeout,
+    baselineBuildFailed: state.baselineBuildFailed,
   };
 
   const touchedFiles = state.currentParsed.files.map((f) => f.path);
@@ -257,6 +267,7 @@ async function handleValidationFailure(
     errorSummary: summarizeValidationErrors(lintResult),
   });
 
+  const hasZeroStructuredErrors = lintResult.errorCount === 0 && lintResult.warningCount === 0;
   logger.warn(
     {
       projectId: ctx.projectId,
@@ -264,8 +275,11 @@ async function handleValidationFailure(
       errorCount: lintResult.errorCount,
       warningCount: lintResult.warningCount,
       consecutiveValFail: state.consecutiveValidationFailures,
+      ...(hasZeroStructuredErrors ? { rawOutput: lintResult.output.slice(0, 500) } : {}),
     },
-    "Validation failed, attempting correction",
+    hasZeroStructuredErrors
+      ? "Validation failed with 0 parsed errors (build output below)"
+      : "Validation failed, attempting correction",
   );
 
   if (round >= ctx.maxCorrectionRounds) {

@@ -3,6 +3,14 @@ import type { FileContext } from "../discovery/fileDiscovery.js";
 import type { ForgePlan } from "./forgeTypes.js";
 import { MAX_LINT_ERROR_CHARS } from "./forgeTypes.js";
 
+function addLineNumbers(content: string): string {
+  const lines = content.split("\n");
+  const padWidth = String(lines.length).length;
+  return lines
+    .map((line, i) => `${String(i + 1).padStart(padWidth)}| ${line}`)
+    .join("\n");
+}
+
 export interface CorrectionAttempt {
   readonly round: number;
   readonly errorType: "apply" | "validation" | "test";
@@ -163,12 +171,25 @@ export function buildExecutionSystemPrompt(
     '1. Para action "create": use o campo "content" com o arquivo completo.',
     '2. Para action "modify": use o campo "edits" com blocos search/replace.',
     '   Cada edit tem "search" (trecho do arquivo original) e "replace" (trecho que substitui).',
-    '   Opcionalmente, adicione "line" e "endLine" para edits baseados em numero de linha.',
-    '   REGRA CRITICA para "search":',
-    "   - Copie o trecho EXATAMENTE como aparece no codigo fornecido no prompt.",
+    "",
+    "   METODO PREFERIDO - Edits por numero de linha:",
+    '   Adicione "line" e "endLine" nos edits para especificar a posicao exata.',
+    '   Quando usar line/endLine, o campo "search" pode ser apenas a primeira linha da regiao.',
+    "   Exemplo: { \"search\": \"  --th-page-bg: #0a0a0a;\", \"replace\": \"  --th-page-bg: #1a0000;\", \"line\": 82, \"endLine\": 82 }",
+    "",
+    '   REGRA CRITICA para "search" (LEIA COM ATENCAO):',
+    "   - O campo 'search' e o conteudo que JA EXISTE no arquivo. NAO e o resultado da mudanca.",
+    "   - Copie o trecho EXATAMENTE como aparece no CODIGO REAL fornecido no prompt.",
     "   - Inclua pelo menos 2-3 linhas ANTES e DEPOIS da linha que voce quer mudar.",
-    "   - NAO invente codigo. Copie literalmente do contexto fornecido.",
+    "   - NAO invente codigo. NAO coloque no search o que voce QUER que fique. Coloque o que JA ESTA la.",
     "   - Preserve a indentacao original (espacos/tabs).",
+    "",
+    "   ERRO COMUM (NAO FACA ISSO):",
+    "   Se o arquivo tem: --th-page-bg: #0a0a0a;",
+    "   E voce quer mudar para: --th-page-bg: #1a0000;",
+    "   ERRADO: { \"search\": \"--th-page-bg: #1a0000;\", \"replace\": \"--th-page-bg: #1a0000;\" }",
+    "   CORRETO: { \"search\": \"--th-page-bg: #0a0a0a;\", \"replace\": \"--th-page-bg: #1a0000;\" }",
+    "",
     '   Para remover codigo, use "replace" como string vazia "".',
     '   Para remover uma linha do meio, inclua as linhas ao redor no search E no replace (sem a linha removida).',
     '   NUNCA use "content" para modify. Sempre use "edits".',
@@ -222,7 +243,7 @@ export function buildExecutionUserPrompt(promptCtx: ExecutionPromptContext): str
     nexusContextSection = "", goalSection = "",
   } = promptCtx;
   const contextBlocks = contextFiles.map(
-    (f) => `--- ${f.path} ---\n${f.content}\n--- end ---`,
+    (f) => `--- ${f.path} ---\n${addLineNumbers(f.content)}\n--- end ---`,
   );
 
   const contextSection = contextBlocks.length > 0
@@ -392,7 +413,7 @@ function buildContextSection(
 ): string {
   const stateLabel = isWorkspaceRestored ? "ORIGINAL" : "ESTADO ATUAL";
   const contextBlocks = currentFilesState.map(
-    (f) => `--- ${f.path} (${stateLabel}) ---\n${f.content}\n--- end ---`,
+    (f) => `--- ${f.path} (${stateLabel}) ---\n${addLineNumbers(f.content)}\n--- end ---`,
   );
 
   const contextHeader = isWorkspaceRestored
@@ -447,12 +468,14 @@ function buildCorrectionInstructions(isWorkspaceRestored: boolean): readonly str
 
   return [
     "INSTRUCOES DE CORRECAO:",
-    `1. Os arquivos acima mostram o ${stateRef} REAL dos arquivos no disco.`,
-    `2. O campo 'search' DEVE ser uma copia EXATA de linhas que existem no ${stateRef} acima.`,
+    `1. Os arquivos acima mostram o ${stateRef} REAL, COM NUMEROS DE LINHA (ex: "82| conteudo").`,
+    `2. O campo 'search' DEVE ser uma copia EXATA de linhas que existem no ${stateRef} acima (SEM o prefixo do numero de linha).`,
     "3. Se o erro for 'Search string not found':",
     "   - Sua string de busca NAO existe no arquivo.",
-    `   - Releia o ${stateRef} do arquivo e copie LETRA POR LETRA as linhas que quer substituir.`,
-    "   - Alternativa: use 'line' e 'endLine' para edits baseados em numero de linha.",
+    "   - SOLUCAO PREFERIDA: use 'line' e 'endLine' com os numeros de linha do conteudo acima.",
+    `   - Exemplo: { "search": "conteudo da linha 82", "replace": "novo conteudo", "line": 82, "endLine": 82 }`,
+    `   - Releia o ${stateRef} do arquivo e copie LETRA POR LETRA (sem o numero de linha no inicio).`,
+    "   - ERRO COMUM: voce colocou no 'search' o conteudo NOVO (que quer mudar PARA). O 'search' e o conteudo ANTIGO que JA EXISTE.",
     "   - Se o arquivo NAO precisa ser alterado, REMOVA-O da lista de files.",
     "4. NAO invente ou suponha conteudo. Copie LITERALMENTE do conteudo mostrado acima.",
     "5. Inclua 2-3 linhas de contexto antes e depois para garantir unicidade.",

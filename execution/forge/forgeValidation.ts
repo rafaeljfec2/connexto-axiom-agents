@@ -21,6 +21,7 @@ export interface ValidationConfig {
   readonly enableStructuredErrors: boolean;
   readonly enableTestExecution: boolean;
   readonly testTimeout: number;
+  readonly baselineBuildFailed?: boolean;
 }
 
 export interface ValidationResult {
@@ -49,6 +50,28 @@ const ESLINT_CONFIG_ERROR_PATTERNS = [
 ] as const;
 
 const LINT_TIMEOUT_MS = 60_000;
+
+export async function checkBaselineBuild(
+  workspacePath: string,
+  buildTimeout: number,
+): Promise<boolean> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+
+  const buildResult = await runBuildCheck(execFileAsync, workspacePath, buildTimeout);
+
+  if (!buildResult.success) {
+    logger.warn(
+      { workspacePath, outputPreview: buildResult.output.slice(0, 300) },
+      "Baseline build check FAILED (pre-existing issue). Build validation will be skipped for this task.",
+    );
+    return true;
+  }
+
+  logger.info("Baseline build check passed");
+  return false;
+}
 
 export async function runLintCheck(
   filePaths: readonly string[],
@@ -129,7 +152,7 @@ async function runCoreValidation(
     allErrors = [...allErrors, ...parseTscErrors(tscResult.output)];
   }
 
-  if (allSuccess && validationConfig?.runBuild) {
+  if (allSuccess && validationConfig?.runBuild && !validationConfig.baselineBuildFailed) {
     const buildResult = await runBuildCheck(execFileAsync, workspacePath, validationConfig.buildTimeout);
     outputs.push(buildResult.output);
     if (!buildResult.success) {
@@ -138,6 +161,8 @@ async function runCoreValidation(
         allErrors = [...allErrors, ...parseBuildErrors(buildResult.output)];
       }
     }
+  } else if (validationConfig?.baselineBuildFailed) {
+    outputs.push("[build] SKIPPED (baseline build already failing before edits)");
   }
 
   return { outputs, allSuccess, allErrors };
