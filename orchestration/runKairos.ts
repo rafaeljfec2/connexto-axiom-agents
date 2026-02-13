@@ -602,25 +602,30 @@ function applyResearchSaturationFilter(
   const hasForge = delegations.some((d) => d.agent === "forge");
   if (!hasForge) return delegations;
 
-  const isSaturated = goalIds.some((goalId) => {
+  const isResearchSaturated = goalIds.some((goalId) => {
     const research = getResearchByGoalId(db, goalId);
     return research.length >= RESEARCH_SATURATION_THRESHOLD;
   });
 
-  if (!isSaturated) return delegations;
-
-  const filtered = delegations.filter((d) => {
-    if (d.agent === "nexus" || d.agent === "vector") {
+  return delegations.filter((d) => {
+    if (d.agent === "vector") {
       logger.info(
         { agent: d.agent, task: d.task.slice(0, 80) },
-        "Skipping delegation: research saturated, prioritizing FORGE execution",
+        "Skipping VECTOR: FORGE is executing, VECTOR runs after implementation",
       );
       return false;
     }
+
+    if (d.agent === "nexus" && isResearchSaturated) {
+      logger.info(
+        { agent: d.agent, task: d.task.slice(0, 80) },
+        "Skipping NEXUS: research saturated, prioritizing FORGE execution",
+      );
+      return false;
+    }
+
     return true;
   });
-
-  return filtered;
 }
 
 function resolveNeedsApproval(

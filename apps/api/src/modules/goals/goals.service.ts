@@ -14,6 +14,46 @@ export interface GoalRow {
   readonly updated_at: string;
 }
 
+export interface GoalTaskRow {
+  readonly id: string;
+  readonly goal_id: string;
+  readonly agent_id: string;
+  readonly title: string;
+  readonly description: string | null;
+  readonly status: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface GoalCodeChangeRow {
+  readonly id: string;
+  readonly task_id: string;
+  readonly description: string;
+  readonly files_changed: string;
+  readonly risk: number;
+  readonly status: string;
+  readonly branch_name: string | null;
+  readonly created_at: string;
+}
+
+export interface GoalOutcomeRow {
+  readonly id: string;
+  readonly agent_id: string;
+  readonly task: string;
+  readonly status: string;
+  readonly error: string | null;
+  readonly execution_time_ms: number | null;
+  readonly tokens_used: number | null;
+  readonly created_at: string;
+}
+
+export interface GoalDetails {
+  readonly goal: GoalRow;
+  readonly tasks: ReadonlyArray<GoalTaskRow>;
+  readonly codeChanges: ReadonlyArray<GoalCodeChangeRow>;
+  readonly outcomes: ReadonlyArray<GoalOutcomeRow>;
+}
+
 interface GoalFilters {
   readonly status?: string;
   readonly projectId?: string;
@@ -119,6 +159,44 @@ export class GoalsService {
     this.db.prepare(`UPDATE goals SET ${fields.join(", ")} WHERE id = @id`).run(params);
 
     return this.db.prepare("SELECT * FROM goals WHERE id = ?").get(id);
+  }
+
+  findOneWithDetails(id: string): GoalDetails {
+    const goal = this.db.prepare("SELECT * FROM goals WHERE id = ?").get(id) as GoalRow | undefined;
+    if (!goal) {
+      throw new NotFoundException(`Goal ${id} not found`);
+    }
+
+    const tasks = this.db
+      .prepare(
+        `SELECT id, goal_id, agent_id, title, description, status, created_at, updated_at
+        FROM tasks
+        WHERE goal_id = @goalId
+        ORDER BY created_at ASC`,
+      )
+      .all({ goalId: id }) as ReadonlyArray<GoalTaskRow>;
+
+    const codeChanges = this.db
+      .prepare(
+        `SELECT cc.id, cc.task_id, cc.description, cc.files_changed, cc.risk, cc.status, cc.branch_name, cc.created_at
+        FROM code_changes cc
+        JOIN tasks t ON t.id = cc.task_id
+        WHERE t.goal_id = @goalId
+        ORDER BY cc.created_at DESC`,
+      )
+      .all({ goalId: id }) as ReadonlyArray<GoalCodeChangeRow>;
+
+    const outcomes = this.db
+      .prepare(
+        `SELECT id, agent_id, task, status, error, execution_time_ms, tokens_used, created_at
+        FROM outcomes
+        WHERE task LIKE '%' || @goalId || '%'
+        ORDER BY created_at DESC
+        LIMIT 10`,
+      )
+      .all({ goalId: id }) as ReadonlyArray<GoalOutcomeRow>;
+
+    return { goal, tasks, codeChanges, outcomes };
   }
 
   remove(id: string) {

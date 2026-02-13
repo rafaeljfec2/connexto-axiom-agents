@@ -1,5 +1,6 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useGoals, useCreateGoal } from "@/api/hooks";
+import { GoalDetailSheet } from "@/components/GoalDetailSheet";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -35,7 +36,9 @@ export function KanbanBoard() {
   const { data: goals, isLoading, error } = useGoals({ includeStats: true });
   const createGoal = useCreateGoal();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
+  const handleCloseDetail = useCallback(() => setSelectedGoalId(null), []);
 
   function handleCreateGoal(e: SubmitEvent & { currentTarget: HTMLFormElement }) {
     e.preventDefault();
@@ -177,7 +180,11 @@ export function KanbanBoard() {
 
             <div className="space-y-2">
               {column.goals.map((goal) => (
-                <Card key={goal.id} className="cursor-pointer transition-shadow hover:shadow-md">
+                <Card
+                  key={goal.id}
+                  className="cursor-pointer transition-shadow hover:shadow-md"
+                  onClick={() => setSelectedGoalId(goal.id)}
+                >
                   <CardContent className="p-3">
                     <p className="text-sm font-medium leading-snug">{goal.title}</p>
                     {goal.project_id ? (

@@ -5,7 +5,7 @@ import { logger } from "../../config/logger.js";
 import { readFirstLines, truncateWithBudget } from "./fileReadUtils.js";
 import { parseImportPaths, resolveImportPath } from "./importResolver.js";
 import { extractKeywords } from "./keywordExtraction.js";
-import { ripgrepSearch } from "./ripgrepSearch.js";
+import { ripgrepSearch, isRipgrepAvailable } from "./ripgrepSearch.js";
 
 export type { RipgrepResult } from "./ripgrepSearch.js";
 export { ripgrepSearch, findSymbolDefinitions, globSearch } from "./ripgrepSearch.js";
@@ -171,7 +171,8 @@ export async function findRelevantFiles(
     }
   }
 
-  const grepResults = await grepFilesForKeywords(workspacePath, structure.files, keywords, scoredPaths);
+  const useRipgrep = await isRipgrepAvailable();
+  const grepResults = await grepFilesForKeywords(workspacePath, structure.files, keywords, scoredPaths, useRipgrep);
   mergeScored(scored, grepResults, scoredPaths);
 
   const importedFiles = await followImports(workspacePath, scored, allFilePaths, scoredPaths, allFilesMap);

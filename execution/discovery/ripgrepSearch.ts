@@ -44,6 +44,16 @@ export async function isRipgrepAvailable(): Promise<boolean> {
   return ripgrepAvailable;
 }
 
+export async function warnIfRipgrepMissing(): Promise<void> {
+  const available = await isRipgrepAvailable();
+  if (!available) {
+    logger.warn(
+      "ripgrep (rg) is NOT installed. FORGE indexing and file discovery will use a limited manual fallback. " +
+      "Install via: sudo apt install ripgrep",
+    );
+  }
+}
+
 export async function ripgrepSearch(
   workspacePath: string,
   pattern: string,

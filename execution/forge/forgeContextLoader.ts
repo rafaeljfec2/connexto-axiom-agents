@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import path from "node:path";
+import fsPromises from "node:fs/promises";
 import { logger } from "../../config/logger.js";
 import {
   findRelevantFiles,
@@ -8,41 +10,86 @@ import {
   extractKeywords,
 } from "../discovery/fileDiscovery.js";
 import type { FileContext, ProjectStructure } from "../discovery/fileDiscovery.js";
+import { findRelevantFilesFromIndex } from "../discovery/repositoryIndexer.js";
+import type { RepositoryIndex } from "../discovery/repositoryIndexer.js";
 import { getFrameworkDiscoveryRules, getContextualPatternsForTask } from "../discovery/frameworkRules.js";
+import { truncateWithBudget } from "../discovery/fileReadUtils.js";
 import type { ForgeAgentContext, ForgePlan } from "./forgeTypes.js";
 import { loadForgeAgentConfig } from "./forgeTypes.js";
 
 const MIN_REMAINING_CHARS_FOR_EXPANSION = 2000;
-const PREVIEW_MAX_FILES = 3;
-const PREVIEW_MAX_CHARS = 4000;
+const PREVIEW_MAX_FILES = 5;
+const PREVIEW_MAX_CHARS = 6000;
 const PREVIEW_MIN_AVAILABLE = 200;
 const PRE_EXISTING_ERRORS_MAX_CHARS = 1500;
 
 export async function buildPlanningPreview(
   ctx: ForgeAgentContext,
   _structure: ProjectStructure,
+  repoIndex: RepositoryIndex | null = null,
 ): Promise<readonly FileContext[]> {
-  const preview = await findRelevantFiles(
+  const keywords = extractKeywords(ctx.delegation.task);
+  const indexRanked = repoIndex
+    ? findRelevantFilesFromIndex(repoIndex, keywords, PREVIEW_MAX_FILES)
+    : [];
+
+  const indexPaths = new Set(indexRanked.map((f) => f.path));
+
+  const discoveryFiles = await findRelevantFiles(
     ctx.workspacePath,
     ctx.delegation.task,
     PREVIEW_MAX_FILES,
   );
 
+  const merged = mergePreviewSources(indexRanked, discoveryFiles, indexPaths, PREVIEW_MAX_FILES);
+
+  const readResults = await Promise.allSettled(
+    merged.map((filePath) =>
+      fsPromises.readFile(path.join(ctx.workspacePath, filePath), "utf-8"),
+    ),
+  );
+
   let usedChars = 0;
   const limited: FileContext[] = [];
-  for (const file of preview) {
-    const available = PREVIEW_MAX_CHARS - usedChars;
-    if (available <= PREVIEW_MIN_AVAILABLE) break;
+  for (let i = 0; i < readResults.length; i++) {
+    if (usedChars + PREVIEW_MIN_AVAILABLE > PREVIEW_MAX_CHARS) break;
 
-    const trimmed = file.content.length > available
-      ? file.content.slice(0, available) + "\n// ... truncated ..."
-      : file.content;
+    const result = readResults[i];
+    if (result.status !== "fulfilled") {
+      logger.debug({ path: merged[i] }, "Failed to read preview file");
+      continue;
+    }
 
-    limited.push({ path: file.path, content: trimmed, score: file.score });
+    const trimmed = truncateWithBudget(result.value, usedChars, PREVIEW_MAX_CHARS);
+    limited.push({ path: merged[i], content: trimmed, score: 1 });
     usedChars += trimmed.length;
   }
 
   return limited;
+}
+
+function mergePreviewSources(
+  indexRanked: readonly { readonly path: string }[],
+  discoveryFiles: readonly FileContext[],
+  indexPaths: ReadonlySet<string>,
+  maxFiles: number,
+): readonly string[] {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of indexRanked) {
+    if (seen.has(entry.path) || merged.length >= maxFiles) break;
+    merged.push(entry.path);
+    seen.add(entry.path);
+  }
+
+  for (const file of discoveryFiles) {
+    if (seen.has(file.path) || merged.length >= maxFiles) break;
+    merged.push(file.path);
+    seen.add(file.path);
+  }
+
+  return merged;
 }
 
 export async function loadContextFiles(

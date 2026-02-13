@@ -5,8 +5,10 @@ import { loadAllManifests } from "../projects/manifestLoader.js";
 import { ensureCurrentBudget } from "../state/budgets.js";
 import { openDatabase } from "../state/db.js";
 import { syncProjectsFromManifests, getActiveProject } from "../state/projects.js";
+import { warnIfRipgrepMissing } from "../execution/discovery/ripgrepSearch.js";
 
 logger.info("connexto-axiom initializing...");
+await warnIfRipgrepMissing();
 
 const db = openDatabase();
 try {

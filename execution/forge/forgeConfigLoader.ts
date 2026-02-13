@@ -18,5 +18,6 @@ export function loadForgeAgentConfig(): ForgeExecutionConfig {
     enableAutoFix: forgeConfig.enableAutoFix,
     enableAtomicEdits: forgeConfig.enableAtomicEdits,
     enableStructuredErrors: forgeConfig.enableStructuredErrors,
+    enableRepositoryIndex: forgeConfig.enableRepositoryIndex,
   };
 }

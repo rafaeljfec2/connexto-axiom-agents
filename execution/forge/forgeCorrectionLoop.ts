@@ -18,6 +18,7 @@ import type {
   ForgePlan,
   CorrectionResult,
   CorrectionRoundResult,
+  ReplanContext,
 } from "./forgeTypes.js";
 import {
   applyEditsToWorkspace,
@@ -115,11 +116,29 @@ async function handleApplyFailure(
     "Edit application failed",
   );
 
-  if (round >= ctx.maxCorrectionRounds || state.consecutiveSearchFailures >= 3) {
-    const reason = state.consecutiveSearchFailures >= 3
+  if (round >= ctx.maxCorrectionRounds || state.consecutiveSearchFailures >= 2) {
+    const reason = state.consecutiveSearchFailures >= 2
       ? `Search string repeatedly not found in ${failedFile} (${state.consecutiveSearchFailures} times)`
       : `Edit application failed: ${applyResult.error}`;
-    return buildFailureResult(state, reason);
+
+    const currentFileState = await readModifiedFilesState(
+      [failedFile].filter(Boolean),
+      ctx.workspacePath,
+    );
+    const fileSnippets = currentFileState.map((f) => ({
+      path: f.path,
+      snippet: f.content.split("\n").slice(0, 40).join("\n"),
+    }));
+
+    return buildFailureResult(state, reason, {
+      shouldReplan: state.consecutiveSearchFailures >= 2,
+      replanContext: {
+        failedPlan: plan,
+        failedFiles: [failedFile].filter(Boolean),
+        failureReason: reason,
+        fileSnippets,
+      },
+    });
   }
 
   await restoreWorkspaceFiles(state.currentParsed.files, ctx.workspacePath);
@@ -379,13 +398,26 @@ function buildValidationEscalation(
   return snippets.join("\n");
 }
 
-function buildFailureResult(state: CorrectionLoopState, error: string): CorrectionResult {
+interface FailureResultOptions {
+  readonly shouldReplan?: boolean;
+  readonly replanContext?: ReplanContext;
+  readonly lintOutput?: string;
+}
+
+function buildFailureResult(
+  state: CorrectionLoopState,
+  error: string,
+  options: FailureResultOptions = {},
+): CorrectionResult {
   return {
     success: false,
     finalParsed: state.currentParsed,
     totalTokensUsed: state.totalTokensUsed,
     correctionRoundsUsed: state.roundsUsed,
     error,
+    shouldReplan: options.shouldReplan,
+    replanContext: options.replanContext,
+    lintOutput: options.lintOutput,
   };
 }
 

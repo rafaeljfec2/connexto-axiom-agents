@@ -20,4 +20,5 @@ export interface ForgeAgentConfig extends AgentConfig {
   readonly enableAutoFix: boolean;
   readonly enableAtomicEdits: boolean;
   readonly enableStructuredErrors: boolean;
+  readonly enableRepositoryIndex: boolean;
 }

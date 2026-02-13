@@ -2,6 +2,8 @@ import { logger } from "../../config/logger.js";
 import { getAllowedWritePaths } from "../../shared/policies/project-allowed-paths.js";
 import { discoverProjectStructure } from "../discovery/fileDiscovery.js";
 import type { FileContext, ProjectStructure } from "../discovery/fileDiscovery.js";
+import { extractKeywords } from "../discovery/keywordExtraction.js";
+import { buildRepositoryIndex, formatIndexForPrompt } from "../discovery/repositoryIndexer.js";
 import {
   buildPlanningPreview,
   loadContextFiles,
@@ -15,17 +17,20 @@ import { parseCodeOutput, parsePlanningOutput, buildFallbackPlan } from "./forge
 import {
   buildPlanningSystemPrompt,
   buildPlanningUserPrompt,
+  buildReplanningUserPrompt,
   buildExecutionSystemPrompt,
   buildExecutionUserPrompt,
 } from "./forgePrompts.js";
 import { readProjectConfig, formatAliasesForPrompt } from "../discovery/projectConfigReader.js";
 import type { ProjectConfig } from "../discovery/projectConfigReader.js";
+import { loadBudgetConfig } from "../../config/budget.js";
 import type {
   ForgeAgentContext,
   ForgeAgentResult,
   ForgePlan,
   PlanningResult,
   EditResult,
+  ReplanContext,
 } from "./forgeTypes.js";
 
 export type {
@@ -52,17 +57,27 @@ export async function runForgeAgentLoop(
   const structure = await discoverProjectStructure(workspacePath);
   const fileTree = structure.tree;
 
-  const projectConfig = await readProjectConfig(workspacePath);
+  const [projectConfig, repoIndex] = await Promise.all([
+    readProjectConfig(workspacePath),
+    ctx.enableRepositoryIndex
+      ? buildRepositoryIndex(workspacePath, structure)
+      : Promise.resolve(null),
+  ]);
 
   let previewFiles: readonly FileContext[] = [];
   if (ctx.enablePlanningPreview) {
-    previewFiles = await buildPlanningPreview(ctx, structure);
+    previewFiles = await buildPlanningPreview(ctx, structure, repoIndex);
   }
+
+  const indexPromptSection = repoIndex
+    ? formatIndexForPrompt(repoIndex)
+    : "";
 
   logger.info(
     {
       projectId,
       totalFiles: structure.totalFiles,
+      indexedFiles: repoIndex?.indexedFiles ?? 0,
       previewFiles: previewFiles.length,
       aliases: projectConfig.importAliases.size,
       task: delegation.task.slice(0, 80),
@@ -70,7 +85,7 @@ export async function runForgeAgentLoop(
     "FORGE agent loop starting - Phase 1: Planning",
   );
 
-  const planResult = await executePlanningPhase(ctx, fileTree, allowedDirs, previewFiles);
+  const planResult = await executePlanningPhase(ctx, fileTree, allowedDirs, previewFiles, indexPromptSection);
   totalTokensUsed += planResult.tokensUsed;
   phasesCompleted = 1;
 
@@ -109,18 +124,50 @@ export async function runForgeAgentLoop(
     };
   }
 
-  const contextFiles = await loadContextFiles(ctx, validatedPlan, structure);
+  const taskKeywords = extractKeywords(delegation.task);
+  const coherenceCheck = await validatePlanCoherence(validatedPlan, workspacePath, taskKeywords);
+
+  const replanFlowCtx: ReplanFlowContext = { ctx, structure, fileTree, allowedDirs, projectConfig, indexPromptSection };
+
+  if (!coherenceCheck.isCoherent) {
+    const earlyReplanResult = await handleIncoherentPlan(replanFlowCtx, validatedPlan, coherenceCheck, totalTokensUsed);
+    if (earlyReplanResult) return earlyReplanResult;
+
+    return {
+      success: false,
+      parsed: null,
+      totalTokensUsed,
+      phasesCompleted: 1,
+      error: "Planning failed: initial plan was incoherent and re-planning did not produce a viable alternative",
+    };
+  }
+
+  const executionResult = await executeAndVerifyPlan(
+    ctx, validatedPlan, structure, replanFlowCtx, totalTokensUsed,
+  );
+
+  return executionResult;
+}
+
+async function executeAndVerifyPlan(
+  ctx: ForgeAgentContext,
+  plan: ForgePlan,
+  structure: ProjectStructure,
+  replanFlowCtx: ReplanFlowContext,
+  baseTokensUsed: number,
+): Promise<ForgeAgentResult> {
+  const { projectId, workspacePath } = ctx;
+  const { fileTree, allowedDirs, projectConfig } = replanFlowCtx;
+
+  const contextFiles = await loadContextFiles(ctx, plan, structure);
 
   let preExistingErrors = "";
   if (ctx.enablePreLintCheck) {
-    preExistingErrors = await getPreExistingErrors(
-      validatedPlan.filesToModify,
-      workspacePath,
-    );
+    preExistingErrors = await getPreExistingErrors(plan.filesToModify, workspacePath);
   }
 
   const fileHashes = ctx.enableAtomicEdits
-    ? await computeFileHashes(validatedPlan.filesToModify, workspacePath)
+    ? await computeFileHashes(plan.filesToModify, workspacePath)
     : new Map<string, string>();
 
   logger.info(
@@ -129,17 +176,16 @@ export async function runForgeAgentLoop(
   );
 
   const editResult = await executeEditPhase(
-    ctx, validatedPlan, contextFiles, fileTree, allowedDirs, projectConfig, preExistingErrors,
+    ctx, plan, contextFiles, fileTree, allowedDirs, projectConfig, preExistingErrors,
   );
-  totalTokensUsed += editResult.tokensUsed;
-  phasesCompleted = 2;
+  let totalTokensUsed = baseTokensUsed + editResult.tokensUsed;
 
   if (!editResult.parsed) {
     return {
       success: false,
       parsed: null,
       totalTokensUsed,
-      phasesCompleted,
+      phasesCompleted: 2,
       error: "Execution phase failed: LLM returned invalid code output",
     };
   }
@@ -149,11 +195,11 @@ export async function runForgeAgentLoop(
       { projectId, description: editResult.parsed.description.slice(0, 80) },
       "FORGE agent loop - no files to modify (task already done or no changes needed)",
     );
-    return { success: true, parsed: editResult.parsed, totalTokensUsed, phasesCompleted };
+    return { success: true, parsed: editResult.parsed, totalTokensUsed, phasesCompleted: 2 };
   }
 
   if (fileHashes.size > 0) {
-    await checkFileHashDrift(validatedPlan.filesToModify, workspacePath, fileHashes);
+    await checkFileHashDrift(plan.filesToModify, workspacePath, fileHashes);
   }
 
   logger.info(
@@ -166,11 +212,26 @@ export async function runForgeAgentLoop(
   );
 
   const correctionResult = await verifyAndCorrectLoop(
-    ctx, editResult.parsed, validatedPlan, fileTree, allowedDirs, totalTokensUsed,
+    ctx, editResult.parsed, plan, fileTree, allowedDirs, totalTokensUsed,
   );
 
+  if (correctionResult.success) {
+    return {
+      success: true,
+      parsed: correctionResult.finalParsed,
+      totalTokensUsed: correctionResult.totalTokensUsed,
+      phasesCompleted: 2 + correctionResult.correctionRoundsUsed,
+      lintOutput: correctionResult.lintOutput,
+    };
+  }
+
+  if (correctionResult.shouldReplan && correctionResult.replanContext) {
+    const postReplanResult = await handlePostCorrectionReplan(replanFlowCtx, correctionResult);
+    if (postReplanResult) return postReplanResult;
+  }
+
   return {
-    success: correctionResult.success,
+    success: false,
     parsed: correctionResult.finalParsed,
     totalTokensUsed: correctionResult.totalTokensUsed,
     phasesCompleted: 2 + correctionResult.correctionRoundsUsed,
@@ -179,14 +240,134 @@ export async function runForgeAgentLoop(
   };
 }
 
+interface ReplanFlowContext {
+  readonly ctx: ForgeAgentContext;
+  readonly structure: ProjectStructure;
+  readonly fileTree: string;
+  readonly allowedDirs: readonly string[];
+  readonly projectConfig: ProjectConfig;
+  readonly indexPromptSection: string;
+}
+
+async function executeReplanFlow(
+  flowCtx: ReplanFlowContext,
+  replanContext: ReplanContext,
+  baseTokensUsed: number,
+): Promise<ForgeAgentResult | null> {
+  const { ctx, structure, fileTree, allowedDirs, projectConfig, indexPromptSection } = flowCtx;
+
+  const replanResult = await executeReplanningPhase(ctx, fileTree, allowedDirs, replanContext, indexPromptSection);
+  const tokensAfterReplan = baseTokensUsed + replanResult.tokensUsed;
+
+  if (!replanResult.plan) return null;
+
+  const revalidated = validatePlanAgainstWorkspace(replanResult.plan, structure);
+  const hasNewFiles = revalidated.filesToModify.length > 0 || revalidated.filesToCreate.length > 0;
+
+  if (!hasNewFiles) return null;
+
+  logger.info(
+    { projectId: ctx.projectId, newFilesToModify: revalidated.filesToModify },
+    "FORGE agent loop - Re-plan produced valid alternative, continuing with new plan",
+  );
+
+  const replanContextFiles = await loadContextFiles(ctx, revalidated, structure);
+
+  const replanEditResult = await executeEditPhase(
+    ctx, revalidated, replanContextFiles, fileTree, allowedDirs, projectConfig, "",
+  );
+  const tokensAfterEdit = tokensAfterReplan + replanEditResult.tokensUsed;
+
+  if (replanEditResult.parsed?.files.length === 0) {
+    return { success: true, parsed: replanEditResult.parsed, totalTokensUsed: tokensAfterEdit, phasesCompleted: 3 };
+  }
+
+  if (!replanEditResult.parsed || replanEditResult.parsed.files.length === 0) return null;
+
+  const replanCorrectionResult = await verifyAndCorrectLoop(
+    ctx, replanEditResult.parsed, revalidated, fileTree, allowedDirs, tokensAfterEdit,
+  );
+
+  return {
+    success: replanCorrectionResult.success,
+    parsed: replanCorrectionResult.finalParsed,
+    totalTokensUsed: replanCorrectionResult.totalTokensUsed,
+    phasesCompleted: 4 + replanCorrectionResult.correctionRoundsUsed,
+    error: replanCorrectionResult.error,
+    lintOutput: replanCorrectionResult.lintOutput,
+  };
+}
+
+async function handleIncoherentPlan(
+  flowCtx: ReplanFlowContext,
+  validatedPlan: ForgePlan,
+  coherenceCheck: CoherenceValidation,
+  baseTokensUsed: number,
+): Promise<ForgeAgentResult | null> {
+  logger.info(
+    { projectId: flowCtx.ctx.projectId, suspiciousFiles: coherenceCheck.suspiciousFiles },
+    "FORGE agent loop - Plan incoherent, attempting immediate re-plan",
+  );
+
+  const earlyReplanContext: ReplanContext = {
+    failedPlan: validatedPlan,
+    failedFiles: coherenceCheck.suspiciousFiles,
+    failureReason: "Plan coherence check failed: none of the planned files contain keywords related to the task",
+    fileSnippets: [],
+  };
+
+  return executeReplanFlow(flowCtx, earlyReplanContext, baseTokensUsed);
+}
+
+async function handlePostCorrectionReplan(
+  flowCtx: ReplanFlowContext,
+  correctionResult: import("./forgeTypes.js").CorrectionResult,
+): Promise<ForgeAgentResult | null> {
+  if (!correctionResult.replanContext) return null;
+
+  const budgetConfig = loadBudgetConfig();
+  const tokenBudgetRemaining = budgetConfig.perTaskTokenLimit - correctionResult.totalTokensUsed;
+  const minTokensForReplan = budgetConfig.perTaskTokenLimit * 0.3;
+
+  if (tokenBudgetRemaining < minTokensForReplan) {
+    logger.warn(
+      { projectId: flowCtx.ctx.projectId, tokensUsed: correctionResult.totalTokensUsed, tokensRemaining: tokenBudgetRemaining },
+      "FORGE agent loop - Insufficient token budget for re-planning",
+    );
+    return null;
+  }
+
+  logger.info(
+    {
+      projectId: flowCtx.ctx.projectId,
+      failedFiles: correctionResult.replanContext.failedFiles,
+      tokensUsed: correctionResult.totalTokensUsed,
+      tokensRemaining: tokenBudgetRemaining,
+    },
+    "FORGE agent loop - Initiating re-planning after correction failure",
+  );
+
+  const result = await executeReplanFlow(flowCtx, correctionResult.replanContext, correctionResult.totalTokensUsed);
+
+  if (!result) {
+    logger.warn(
+      { projectId: flowCtx.ctx.projectId },
+      "FORGE agent loop - Re-planning did not produce a viable alternative plan",
+    );
+  }
+
+  return result;
+}
+
 async function executePlanningPhase(
   ctx: ForgeAgentContext,
   fileTree: string,
   allowedDirs: readonly string[],
   previewFiles: readonly FileContext[] = [],
+  indexPromptSection: string = "",
 ): Promise<PlanningResult> {
   const systemPrompt = buildPlanningSystemPrompt(ctx.project.language, ctx.project.framework);
-  const userPrompt = buildPlanningUserPrompt(ctx.delegation, fileTree, allowedDirs, previewFiles);
+  const userPrompt = buildPlanningUserPrompt(ctx.delegation, fileTree, allowedDirs, previewFiles, indexPromptSection);
 
   const result = await callLlmWithAudit(ctx, systemPrompt, userPrompt, "planning");
   if (!result) return { plan: null, tokensUsed: 0 };
@@ -196,6 +377,49 @@ async function executePlanningPhase(
   if (!plan) {
     logger.warn({ projectId: ctx.projectId }, "Planning phase returned invalid JSON, using fallback plan");
     return { plan: buildFallbackPlan(ctx.delegation), tokensUsed: result.tokensUsed };
+  }
+
+  return { plan, tokensUsed: result.tokensUsed };
+}
+
+async function executeReplanningPhase(
+  ctx: ForgeAgentContext,
+  fileTree: string,
+  allowedDirs: readonly string[],
+  replanContext: ReplanContext,
+  indexPromptSection: string = "",
+): Promise<PlanningResult> {
+  const systemPrompt = buildPlanningSystemPrompt(ctx.project.language, ctx.project.framework);
+  const userPrompt = buildReplanningUserPrompt(
+    ctx.delegation,
+    fileTree,
+    allowedDirs,
+    replanContext.failedPlan,
+    replanContext.failureReason,
+    replanContext.fileSnippets,
+    indexPromptSection,
+  );
+
+  const result = await callLlmWithAudit(ctx, systemPrompt, userPrompt, "replanning");
+  if (!result) return { plan: null, tokensUsed: 0 };
+
+  const plan = parsePlanningOutput(result.text);
+
+  if (!plan) {
+    logger.warn({ projectId: ctx.projectId }, "Re-planning phase returned invalid JSON");
+    return { plan: null, tokensUsed: result.tokensUsed };
+  }
+
+  const hasSameFiles = plan.filesToModify.some((f) =>
+    replanContext.failedFiles.includes(f),
+  );
+
+  if (hasSameFiles) {
+    logger.warn(
+      { projectId: ctx.projectId, overlappingFiles: plan.filesToModify.filter((f) => replanContext.failedFiles.includes(f)) },
+      "Re-plan chose same files that already failed, rejecting",
+    );
+    return { plan: null, tokensUsed: result.tokensUsed };
   }
 
   return { plan, tokensUsed: result.tokensUsed };
@@ -264,4 +488,64 @@ function findSimilarPaths(target: string, knownPaths: ReadonlySet<string>): read
   }
 
   return matches;
+}
+
+const COHERENCE_MAX_LINES = 50;
+
+export interface CoherenceValidation {
+  readonly isCoherent: boolean;
+  readonly suspiciousFiles: readonly string[];
+}
+
+export async function validatePlanCoherence(
+  plan: ForgePlan,
+  workspacePath: string,
+  taskKeywords: readonly string[],
+): Promise<CoherenceValidation> {
+  if (plan.filesToModify.length === 0 || taskKeywords.length === 0) {
+    return { isCoherent: true, suspiciousFiles: [] };
+  }
+
+  const lowerKeywords = taskKeywords.map((k) => k.toLowerCase());
+  const suspiciousFiles: string[] = [];
+  let anyFileHasKeyword = false;
+
+  const readResults = await Promise.allSettled(
+    plan.filesToModify.map(async (filePath) => {
+      const { readFile } = await import("node:fs/promises");
+      const { join } = await import("node:path");
+      const content = await readFile(join(workspacePath, filePath), "utf-8");
+      return { filePath, content };
+    }),
+  );
+
+  for (const result of readResults) {
+    if (result.status !== "fulfilled") continue;
+
+    const { filePath, content } = result.value;
+    const firstLines = content.split("\n").slice(0, COHERENCE_MAX_LINES).join("\n").toLowerCase();
+
+    const hasRelevantKeyword = lowerKeywords.some((kw) => firstLines.includes(kw));
+
+    if (hasRelevantKeyword) {
+      anyFileHasKeyword = true;
+    } else {
+      const pathLower = filePath.toLowerCase();
+      const pathHasKeyword = lowerKeywords.some((kw) => pathLower.includes(kw));
+      if (!pathHasKeyword) {
+        suspiciousFiles.push(filePath);
+      }
+    }
+  }
+
+  const isCoherent = anyFileHasKeyword || suspiciousFiles.length < plan.filesToModify.length;
+
+  if (!isCoherent) {
+    logger.warn(
+      { suspiciousFiles, keywords: lowerKeywords },
+      "Plan coherence check failed: no planned file contains task keywords",
+    );
+  }
+
+  return { isCoherent, suspiciousFiles };
 }

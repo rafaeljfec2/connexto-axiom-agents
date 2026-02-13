@@ -179,6 +179,54 @@ export function useOutcomeCycles(params?: {
   });
 }
 
+export interface GoalTask {
+  readonly id: string;
+  readonly goal_id: string;
+  readonly agent_id: string;
+  readonly title: string;
+  readonly description: string | null;
+  readonly status: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface GoalCodeChange {
+  readonly id: string;
+  readonly task_id: string;
+  readonly description: string;
+  readonly files_changed: string;
+  readonly risk: number;
+  readonly status: string;
+  readonly branch_name: string | null;
+  readonly created_at: string;
+}
+
+export interface GoalOutcome {
+  readonly id: string;
+  readonly agent_id: string;
+  readonly task: string;
+  readonly status: string;
+  readonly error: string | null;
+  readonly execution_time_ms: number | null;
+  readonly tokens_used: number | null;
+  readonly created_at: string;
+}
+
+export interface GoalDetails {
+  readonly goal: Goal;
+  readonly tasks: ReadonlyArray<GoalTask>;
+  readonly codeChanges: ReadonlyArray<GoalCodeChange>;
+  readonly outcomes: ReadonlyArray<GoalOutcome>;
+}
+
+export function useGoalDetails(goalId: string | null) {
+  return useQuery({
+    queryKey: ["goals", goalId, "details"],
+    queryFn: () => api.get<GoalDetails>(`/goals/${goalId}/details`),
+    enabled: !!goalId,
+  });
+}
+
 interface CreateGoalPayload {
   readonly title: string;
   readonly description?: string;

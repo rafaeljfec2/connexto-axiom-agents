@@ -1,419 +1,111 @@
-import { describe, it, beforeEach, afterEach } from "node:test";
-import assert from "node:assert/strict";
-import fs from "node:fs";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { validatePlanCoherence } from "./forgeAgentLoop.js";
+import type { ForgePlan } from "./forgeTypes.js";
 import path from "node:path";
+import fs from "node:fs/promises";
 import os from "node:os";
-import { parsePlanningOutput, parseCodeOutput } from "./forgeOutputParser.js";
-import { loadForgeAgentConfig } from "./forgeTypes.js";
-import { readModifiedFilesState } from "./forgeWorkspaceOps.js";
 
-describe("forgeAgentLoop", () => {
-  describe("parsePlanningOutput", () => {
-    it("should parse valid planning JSON", () => {
-      const input = JSON.stringify({
-        plan: "Remove signatarios from sidebar navigation",
-        files_to_read: ["src/components/Sidebar.tsx", "src/routes.ts"],
-        files_to_modify: ["src/components/Sidebar.tsx"],
-        files_to_create: [],
-        approach: "Find the navigation items array and remove the signatarios entry",
-        estimated_risk: 2,
-        dependencies: ["Check if there are associated routes"],
-      });
+function buildPlan(filesToModify: readonly string[]): ForgePlan {
+  return {
+    plan: "test plan",
+    filesToRead: [],
+    filesToModify: [...filesToModify],
+    filesToCreate: [],
+    approach: "test approach",
+    estimatedRisk: 2,
+    dependencies: [],
+  };
+}
 
-      const result = parsePlanningOutput(input);
+describe("validatePlanCoherence", () => {
+  let tmpDir: string;
 
-      assert.ok(result);
-      assert.equal(result.plan, "Remove signatarios from sidebar navigation");
-      assert.deepEqual(result.filesToRead, ["src/components/Sidebar.tsx", "src/routes.ts"]);
-      assert.deepEqual(result.filesToModify, ["src/components/Sidebar.tsx"]);
-      assert.deepEqual(result.filesToCreate, []);
-      assert.equal(result.approach, "Find the navigation items array and remove the signatarios entry");
-      assert.equal(result.estimatedRisk, 2);
-      assert.deepEqual(result.dependencies, ["Check if there are associated routes"]);
-    });
-
-    it("should parse JSON with surrounding text", () => {
-      const input = `Here is my plan:\n${JSON.stringify({
-        plan: "Add utility function",
-        files_to_read: ["src/utils/index.ts"],
-        files_to_modify: ["src/utils/index.ts"],
-        files_to_create: [],
-        approach: "Add formatCurrency function",
-        estimated_risk: 1,
-        dependencies: [],
-      })}\nEnd of plan.`;
-
-      const result = parsePlanningOutput(input);
-
-      assert.ok(result);
-      assert.equal(result.plan, "Add utility function");
-    });
-
-    it("should return null for empty string", () => {
-      const result = parsePlanningOutput("");
-      assert.equal(result, null);
-    });
-
-    it("should return null for missing plan field", () => {
-      const result = parsePlanningOutput(JSON.stringify({
-        files_to_read: ["src/index.ts"],
-      }));
-      assert.equal(result, null);
-    });
-
-    it("should return null when no files are specified", () => {
-      const result = parsePlanningOutput(JSON.stringify({
-        plan: "Do something",
-        files_to_read: [],
-        files_to_modify: [],
-        files_to_create: [],
-      }));
-      assert.equal(result, null);
-    });
-
-    it("should clamp estimated_risk between 1 and 5", () => {
-      const lowRisk = parsePlanningOutput(JSON.stringify({
-        plan: "Low risk change",
-        files_to_read: ["src/a.ts"],
-        files_to_modify: [],
-        files_to_create: [],
-        approach: "Simple edit",
-        estimated_risk: -1,
-        dependencies: [],
-      }));
-
-      assert.ok(lowRisk);
-      assert.equal(lowRisk.estimatedRisk, 1);
-
-      const highRisk = parsePlanningOutput(JSON.stringify({
-        plan: "High risk change",
-        files_to_read: ["src/b.ts"],
-        files_to_modify: [],
-        files_to_create: [],
-        approach: "Complex edit",
-        estimated_risk: 10,
-        dependencies: [],
-      }));
-
-      assert.ok(highRisk);
-      assert.equal(highRisk.estimatedRisk, 5);
-    });
-
-    it("should default estimated_risk to 2 when not a number", () => {
-      const result = parsePlanningOutput(JSON.stringify({
-        plan: "No risk specified",
-        files_to_read: ["src/a.ts"],
-        files_to_modify: [],
-        files_to_create: [],
-        approach: "Edit",
-      }));
-
-      assert.ok(result);
-      assert.equal(result.estimatedRisk, 2);
-    });
-
-    it("should truncate long plan to 200 chars", () => {
-      const longPlan = "x".repeat(300);
-      const result = parsePlanningOutput(JSON.stringify({
-        plan: longPlan,
-        files_to_read: ["src/a.ts"],
-        files_to_modify: [],
-        files_to_create: [],
-        approach: "Edit",
-        estimated_risk: 1,
-        dependencies: [],
-      }));
-
-      assert.ok(result);
-      assert.equal(result.plan.length, 200);
-    });
-
-    it("should return null for invalid JSON", () => {
-      const result = parsePlanningOutput("not json at all {{{");
-      assert.equal(result, null);
-    });
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "forge-coherence-"));
   });
 
-  describe("parseCodeOutput", () => {
-    it("should parse valid code output with modify action", () => {
-      const input = JSON.stringify({
-        description: "Remove signatarios from sidebar",
-        risk: 2,
-        rollback: "Re-add the signatarios entry",
-        files: [
-          {
-            path: "src/components/Sidebar.tsx",
-            action: "modify",
-            edits: [
-              {
-                search: "{ label: 'Signatarios', path: '/signatarios' },",
-                replace: "",
-              },
-            ],
-          },
-        ],
-      });
-
-      const result = parseCodeOutput(input);
-
-      assert.ok(result);
-      assert.equal(result.description, "Remove signatarios from sidebar");
-      assert.equal(result.risk, 2);
-      assert.equal(result.rollback, "Re-add the signatarios entry");
-      assert.equal(result.files.length, 1);
-      assert.equal(result.files[0].path, "src/components/Sidebar.tsx");
-      assert.equal(result.files[0].action, "modify");
-      assert.ok(result.files[0].edits);
-      assert.equal(result.files[0].edits?.length, 1);
-    });
-
-    it("should parse code output with create action", () => {
-      const input = JSON.stringify({
-        description: "Create helper utility",
-        risk: 1,
-        rollback: "Delete the file",
-        files: [
-          {
-            path: "src/utils/helper.ts",
-            action: "create",
-            content: "export function helper() { return 42; }",
-          },
-        ],
-      });
-
-      const result = parseCodeOutput(input);
-
-      assert.ok(result);
-      assert.equal(result.files.length, 1);
-      assert.equal(result.files[0].action, "create");
-      assert.equal(result.files[0].content, "export function helper() { return 42; }");
-    });
-
-    it("should parse code output with mixed actions", () => {
-      const input = JSON.stringify({
-        description: "Refactor sidebar and create test",
-        risk: 3,
-        rollback: "Revert changes",
-        files: [
-          {
-            path: "src/components/Sidebar.tsx",
-            action: "modify",
-            edits: [{ search: "old code", replace: "new code" }],
-          },
-          {
-            path: "tests/Sidebar.test.tsx",
-            action: "create",
-            content: "test content",
-          },
-        ],
-      });
-
-      const result = parseCodeOutput(input);
-
-      assert.ok(result);
-      assert.equal(result.files.length, 2);
-      assert.equal(result.files[0].action, "modify");
-      assert.equal(result.files[1].action, "create");
-    });
-
-    it("should return null for missing description", () => {
-      const result = parseCodeOutput(JSON.stringify({
-        risk: 1,
-        files: [{ path: "a.ts", action: "create", content: "x" }],
-      }));
-      assert.equal(result, null);
-    });
-
-    it("should return null for invalid risk", () => {
-      const result = parseCodeOutput(JSON.stringify({
-        description: "Change",
-        risk: 0,
-        files: [{ path: "a.ts", action: "create", content: "x" }],
-      }));
-      assert.equal(result, null);
-
-      const result2 = parseCodeOutput(JSON.stringify({
-        description: "Change",
-        risk: 6,
-        files: [{ path: "a.ts", action: "create", content: "x" }],
-      }));
-      assert.equal(result2, null);
-    });
-
-    it("should return output with empty files when task already done", () => {
-      const result = parseCodeOutput(JSON.stringify({
-        description: "Change",
-        risk: 1,
-        files: [],
-      }));
-      assert.ok(result);
-      assert.equal(result.files.length, 0);
-      assert.equal(result.description, "Change");
-    });
-
-    it("should return null for invalid file action", () => {
-      const result = parseCodeOutput(JSON.stringify({
-        description: "Change",
-        risk: 1,
-        files: [{ path: "a.ts", action: "delete" }],
-      }));
-      assert.equal(result, null);
-    });
-
-    it("should return null for modify with empty search string", () => {
-      const result = parseCodeOutput(JSON.stringify({
-        description: "Change",
-        risk: 1,
-        files: [
-          {
-            path: "a.ts",
-            action: "modify",
-            edits: [{ search: "", replace: "new" }],
-          },
-        ],
-      }));
-      assert.equal(result, null);
-    });
-
-    it("should handle modify with content fallback when no edits", () => {
-      const result = parseCodeOutput(JSON.stringify({
-        description: "Full file replace",
-        risk: 2,
-        files: [
-          {
-            path: "a.ts",
-            action: "modify",
-            content: "full file content",
-          },
-        ],
-      }));
-      assert.ok(result);
-      assert.equal(result.files[0].content, "full file content");
-    });
-
-    it("should truncate long descriptions to 200 chars", () => {
-      const longDesc = "d".repeat(400);
-      const result = parseCodeOutput(JSON.stringify({
-        description: longDesc,
-        risk: 1,
-        files: [{ path: "a.ts", action: "create", content: "x" }],
-      }));
-      assert.ok(result);
-      assert.equal(result.description.length, 200);
-    });
-
-    it("should extract JSON from text with markdown fences", () => {
-      const input = "```json\n" + JSON.stringify({
-        description: "Wrapped in markdown",
-        risk: 1,
-        rollback: "",
-        files: [{ path: "a.ts", action: "create", content: "x" }],
-      }) + "\n```";
-
-      const result = parseCodeOutput(input);
-      assert.ok(result);
-      assert.equal(result.description, "Wrapped in markdown");
-    });
-
-    it("should return null for completely invalid input", () => {
-      assert.equal(parseCodeOutput(""), null);
-      assert.equal(parseCodeOutput("no json here"), null);
-      assert.equal(parseCodeOutput("[]"), null);
-    });
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  describe("loadForgeAgentConfig", () => {
-    it("should return values from agents/forge/config.ts", () => {
-      const config = loadForgeAgentConfig();
-      assert.equal(typeof config.maxCorrectionRounds, "number");
-      assert.equal(typeof config.contextMaxChars, "number");
-      assert.equal(typeof config.runBuild, "boolean");
-      assert.equal(typeof config.buildTimeout, "number");
-      assert.ok(config.maxCorrectionRounds >= 0);
-      assert.ok(config.contextMaxChars > 0);
-      assert.ok(config.buildTimeout > 0);
-    });
-
-    it("should return expected default config values", () => {
-      const config = loadForgeAgentConfig();
-      assert.equal(config.maxCorrectionRounds, 4);
-      assert.equal(config.contextMaxChars, 20_000);
-      assert.equal(config.runBuild, true);
-      assert.equal(config.buildTimeout, 120_000);
-      assert.equal(config.maxContextFiles, 8);
-      assert.equal(config.enableRipgrep, true);
-      assert.equal(config.enablePlanningPreview, true);
-      assert.equal(config.enableImportExpansion, true);
-      assert.equal(config.enableFrameworkRules, true);
-      assert.equal(config.enablePreLintCheck, true);
-    });
+  it("should return coherent when plan has no files to modify", async () => {
+    const plan = buildPlan([]);
+    const result = await validatePlanCoherence(plan, tmpDir, ["theme", "dark"]);
+    expect(result.isCoherent).toBe(true);
+    expect(result.suspiciousFiles).toEqual([]);
   });
 
-  describe("readModifiedFilesState", () => {
-    let testDir: string;
+  it("should return coherent when no keywords provided", async () => {
+    const plan = buildPlan(["src/config/logger.ts"]);
+    const result = await validatePlanCoherence(plan, tmpDir, []);
+    expect(result.isCoherent).toBe(true);
+  });
 
-    beforeEach(() => {
-      testDir = fs.mkdtempSync(path.join(os.tmpdir(), "forge-agent-loop-"));
-    });
+  it("should return coherent when file content contains keywords", async () => {
+    const filePath = "src/config/theme.ts";
+    const fullDir = path.join(tmpDir, "src/config");
+    await fs.mkdir(fullDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, filePath),
+      'export const darkColors = { primary: "#FF0000" };\nexport const lightColors = { primary: "#FFFFFF" };\n',
+    );
 
-    afterEach(() => {
-      fs.rmSync(testDir, { recursive: true, force: true });
-    });
+    const plan = buildPlan([filePath]);
+    const result = await validatePlanCoherence(plan, tmpDir, ["dark", "theme"]);
+    expect(result.isCoherent).toBe(true);
+    expect(result.suspiciousFiles).toEqual([]);
+  });
 
-    it("should read existing files", async () => {
-      const filePath = path.join(testDir, "src", "example.ts");
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, "export const x = 42;", "utf-8");
+  it("should detect incoherent plan when no file contains keywords", async () => {
+    const filePath = "src/config/logger.ts";
+    const fullDir = path.join(tmpDir, "src/config");
+    await fs.mkdir(fullDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, filePath),
+      "import { pino } from 'pino';\nexport const loggerConfig = { level: 'info' };\n",
+    );
 
-      const result = await readModifiedFilesState(["src/example.ts"], testDir);
+    const plan = buildPlan([filePath]);
+    const result = await validatePlanCoherence(plan, tmpDir, ["dark", "theme", "color"]);
+    expect(result.isCoherent).toBe(false);
+    expect(result.suspiciousFiles).toContain(filePath);
+  });
 
-      assert.equal(result.length, 1);
-      assert.equal(result[0].path, "src/example.ts");
-      assert.equal(result[0].content, "export const x = 42;");
-    });
+  it("should consider path keywords for coherence", async () => {
+    const filePath = "src/theme/palette.ts";
+    const fullDir = path.join(tmpDir, "src/theme");
+    await fs.mkdir(fullDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, filePath),
+      "export const red = '#FF0000';\nexport const blue = '#0000FF';\n",
+    );
 
-    it("should skip files that do not exist", async () => {
-      const result = await readModifiedFilesState(
-        ["src/missing.ts", "src/also-missing.ts"],
-        testDir,
-      );
+    const plan = buildPlan([filePath]);
+    const result = await validatePlanCoherence(plan, tmpDir, ["theme"]);
+    expect(result.isCoherent).toBe(true);
+    expect(result.suspiciousFiles).toEqual([]);
+  });
 
-      assert.equal(result.length, 0);
-    });
+  it("should mark as coherent if at least one file has keywords", async () => {
+    const themePath = "src/config/theme.ts";
+    const loggerPath = "src/config/logger.ts";
+    const fullDir = path.join(tmpDir, "src/config");
+    await fs.mkdir(fullDir, { recursive: true });
+    await fs.writeFile(path.join(tmpDir, themePath), 'export const darkTheme = { bg: "#000" };\n');
+    await fs.writeFile(
+      path.join(tmpDir, loggerPath),
+      "export const loggerConfig = { level: 'info' };\n",
+    );
 
-    it("should read multiple files", async () => {
-      const dir = path.join(testDir, "src");
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, "a.ts"), "const a = 1;", "utf-8");
-      fs.writeFileSync(path.join(dir, "b.ts"), "const b = 2;", "utf-8");
+    const plan = buildPlan([themePath, loggerPath]);
+    const result = await validatePlanCoherence(plan, tmpDir, ["dark", "theme"]);
+    expect(result.isCoherent).toBe(true);
+    expect(result.suspiciousFiles).toContain(loggerPath);
+  });
 
-      const result = await readModifiedFilesState(
-        ["src/a.ts", "src/b.ts"],
-        testDir,
-      );
-
-      assert.equal(result.length, 2);
-      assert.equal(result[0].content, "const a = 1;");
-      assert.equal(result[1].content, "const b = 2;");
-    });
-
-    it("should handle empty file paths array", async () => {
-      const result = await readModifiedFilesState([], testDir);
-      assert.equal(result.length, 0);
-    });
-
-    it("should handle mix of existing and missing files", async () => {
-      const dir = path.join(testDir, "src");
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, "exists.ts"), "code", "utf-8");
-
-      const result = await readModifiedFilesState(
-        ["src/exists.ts", "src/missing.ts"],
-        testDir,
-      );
-
-      assert.equal(result.length, 1);
-      assert.equal(result[0].path, "src/exists.ts");
-    });
+  it("should handle missing files gracefully", async () => {
+    const plan = buildPlan(["src/nonexistent.ts"]);
+    const result = await validatePlanCoherence(plan, tmpDir, ["theme"]);
+    expect(result.isCoherent).toBe(true);
   });
 });

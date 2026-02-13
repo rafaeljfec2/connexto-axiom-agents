@@ -124,6 +124,7 @@ async function executeWithAgentLoop(
     enableAutoFix: agentConfig.enableAutoFix,
     enableAtomicEdits: agentConfig.enableAtomicEdits,
     enableStructuredErrors: agentConfig.enableStructuredErrors,
+    enableRepositoryIndex: agentConfig.enableRepositoryIndex,
   });
 
   logger.info(

@@ -37,7 +37,23 @@ export function buildPlanningSystemPrompt(language: string, framework: string): 
     "- NAO invente paths que nao existem na arvore.",
     "- estimated_risk: 1 (trivial) a 5 (alto impacto).",
     "- Se a tarefa ja foi implementada no codigo, defina files_to_modify como VAZIO [].",
+    "",
+    "REGRAS ANTI-ALUCINACAO:",
+    "- Se a tarefa menciona 'theme', 'dark mode', 'cores', 'palette', 'tokens de cor':",
+    "  Busque arquivos com 'theme', 'color', 'palette', 'token', 'style' no NOME ou EXPORTS.",
+    "  NAO confunda com configs de infraestrutura (logger, database, cache, throttle).",
+    "- Se a tarefa menciona 'sidebar', 'menu', 'nav':",
+    "  Busque componentes de layout, nao configs de backend.",
+    "- SEMPRE verifique se o NOME do arquivo e seus EXPORTS tem relacao direta com o tema da tarefa.",
+    "- Configs de logger, throttle, rate-limit, database, cache NAO sao arquivos de UI/tema.",
+    "- Priorize arquivos cujo NOME contem palavras-chave da tarefa.",
   ].join("\n");
+}
+
+function computeTreeMaxChars(hasIndex: boolean, hasPreview: boolean): number {
+  if (hasIndex) return 2000;
+  if (hasPreview) return 3000;
+  return 4000;
 }
 
 export function buildPlanningUserPrompt(
@@ -45,7 +61,12 @@ export function buildPlanningUserPrompt(
   fileTree: string,
   allowedDirs: readonly string[],
   previewFiles: readonly FileContext[] = [],
+  indexPromptSection: string = "",
 ): string {
+  const hasIndex = indexPromptSection.length > 0;
+  const hasPreview = previewFiles.length > 0;
+  const treeMaxChars = computeTreeMaxChars(hasIndex, hasPreview);
+
   const lines = [
     `Tarefa: ${delegation.task}`,
     `Resultado esperado: ${delegation.expected_output}`,
@@ -53,7 +74,18 @@ export function buildPlanningUserPrompt(
     "",
   ];
 
-  if (previewFiles.length > 0) {
+  if (hasIndex) {
+    lines.push(
+      "INDICE DE ARQUIVOS (exports por arquivo):",
+      indexPromptSection,
+      "",
+      "Use este indice para identificar EXATAMENTE quais arquivos contem o codigo relevante.",
+      "NAO invente paths. Use APENAS paths que existem neste indice ou na estrutura abaixo.",
+      "",
+    );
+  }
+
+  if (hasPreview) {
     lines.push("PREVIEW DE ARQUIVOS MAIS RELEVANTES:");
     for (const file of previewFiles) {
       lines.push(
@@ -72,13 +104,16 @@ export function buildPlanningUserPrompt(
 
   lines.push(
     "ESTRUTURA DO PROJETO:",
-    fileTree.slice(0, previewFiles.length > 0 ? 3000 : 4000),
+    fileTree.slice(0, treeMaxChars),
     "",
     `Diretorios permitidos para escrita: ${allowedDirs.join(", ")}`,
     "",
     "Analise a tarefa e a estrutura do projeto.",
     "Identifique quais arquivos voce precisa LER para entender o contexto,",
     "e quais arquivos precisa MODIFICAR ou CRIAR.",
+    hasIndex
+      ? "IMPORTANTE: Consulte o INDICE DE ARQUIVOS acima para escolher paths REAIS com exports relevantes."
+      : "",
     "Responda APENAS com JSON puro.",
   );
 
@@ -217,6 +252,79 @@ export function buildExecutionUserPrompt(
       ? "13. IGNORE erros pre-existentes listados acima. Corrija apenas erros que VOCE introduzir."
       : "",
   ].join("\n");
+}
+
+export function buildReplanningUserPrompt(
+  delegation: KairosDelegation,
+  fileTree: string,
+  allowedDirs: readonly string[],
+  failedPlan: ForgePlan,
+  failureReason: string,
+  failedFileSnippets: readonly { readonly path: string; readonly snippet: string }[],
+  indexPromptSection: string = "",
+): string {
+  const hasIndex = indexPromptSection.length > 0;
+
+  const lines = [
+    `Tarefa: ${delegation.task}`,
+    `Resultado esperado: ${delegation.expected_output}`,
+    `Goal ID: ${delegation.goal_id}`,
+    "",
+    "=== REPLANNING: PLANO ANTERIOR FALHOU ===",
+    "",
+    "Seu plano ANTERIOR falhou completamente. Voce DEVE escolher arquivos DIFERENTES.",
+    "",
+    "PLANO QUE FALHOU:",
+    `- Abordagem: ${failedPlan.approach}`,
+    `- Arquivos que tentou modificar: ${failedPlan.filesToModify.join(", ")}`,
+    `- Motivo da falha: ${failureReason}`,
+    "",
+  ];
+
+  if (failedFileSnippets.length > 0) {
+    lines.push("CONTEUDO REAL DOS ARQUIVOS QUE FALHARAM (primeiras 40 linhas):");
+    for (const snippet of failedFileSnippets) {
+      lines.push(`--- ${snippet.path} ---`, snippet.snippet, "--- end ---", "");
+    }
+    lines.push(
+      "Como voce pode ver, estes arquivos NAO contem o codigo que voce esperava.",
+      "Voce DEVE escolher arquivos COMPLETAMENTE DIFERENTES para a tarefa.",
+      "",
+    );
+  }
+
+  lines.push(
+    "REGRAS DE REPLANNING:",
+    "1. NAO escolha os mesmos arquivos que falharam.",
+    "2. Analise CUIDADOSAMENTE a arvore de arquivos e o indice de exports.",
+    "3. Procure arquivos cujo NOME ou EXPORTS tenham relacao direta com a tarefa.",
+    "4. Se a tarefa e sobre 'theme/dark/cores', busque arquivos com 'theme', 'color', 'palette', 'token' no nome.",
+    "5. NAO confunda configs de infraestrutura (logger, database, cache) com configs de UI/tema.",
+    "",
+  );
+
+  if (hasIndex) {
+    lines.push(
+      "INDICE DE ARQUIVOS (exports por arquivo):",
+      indexPromptSection,
+      "",
+      "Use este indice para identificar EXATAMENTE quais arquivos contem o codigo relevante.",
+      "",
+    );
+  }
+
+  lines.push(
+    "ESTRUTURA DO PROJETO:",
+    fileTree.slice(0, hasIndex ? 2000 : 4000),
+    "",
+    `Diretorios permitidos para escrita: ${allowedDirs.join(", ")}`,
+    "",
+    "=== FIM DO CONTEXTO DE REPLANNING ===",
+    "",
+    "Responda APENAS com JSON puro no formato obrigatorio de planejamento.",
+  );
+
+  return lines.join("\n");
 }
 
 export interface CorrectionPromptContext {

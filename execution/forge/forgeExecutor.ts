@@ -40,10 +40,10 @@ export async function executeForge(
     }
   }
 
-  if (projectId && useOpenClaw && isCodingTask(delegation)) {
+  if (projectId && useOpenClaw) {
     logger.info(
       { task: delegation.task, projectId, traceId },
-      "Routing to project code executor (project-aware coding task)",
+      "Routing to project code executor (project-aware task)",
     );
     return executeProjectCode(db, delegation, projectId, traceId);
   }

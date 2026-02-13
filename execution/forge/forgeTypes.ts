@@ -30,6 +30,7 @@ export interface ForgeAgentContext {
   readonly enableAutoFix: boolean;
   readonly enableAtomicEdits: boolean;
   readonly enableStructuredErrors: boolean;
+  readonly enableRepositoryIndex: boolean;
 }
 
 export interface ForgePlan {
@@ -68,6 +69,13 @@ export interface EditResult {
   readonly tokensUsed: number;
 }
 
+export interface ReplanContext {
+  readonly failedPlan: ForgePlan;
+  readonly failedFiles: readonly string[];
+  readonly failureReason: string;
+  readonly fileSnippets: readonly { readonly path: string; readonly snippet: string }[];
+}
+
 export interface CorrectionResult {
   readonly success: boolean;
   readonly finalParsed: ForgeCodeOutput | null;
@@ -75,6 +83,8 @@ export interface CorrectionResult {
   readonly correctionRoundsUsed: number;
   readonly lintOutput?: string;
   readonly error?: string;
+  readonly shouldReplan?: boolean;
+  readonly replanContext?: ReplanContext;
 }
 
 export interface CorrectionRoundResult {
@@ -98,6 +108,7 @@ export interface ForgeExecutionConfig {
   readonly enableAutoFix: boolean;
   readonly enableAtomicEdits: boolean;
   readonly enableStructuredErrors: boolean;
+  readonly enableRepositoryIndex: boolean;
 }
 
 export { loadForgeAgentConfig } from "./forgeConfigLoader.js";

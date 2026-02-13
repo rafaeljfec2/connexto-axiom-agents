@@ -281,10 +281,14 @@ pnpm dev:web    # Vite na porta 5173 (com proxy para API)
 - **Node.js >= 24** (use [nvm](https://github.com/nvm-sh/nvm) — o projeto inclui `.nvmrc`)
 - **pnpm** (gerenciador de pacotes)
 - **Git** (para workspaces do FORGE)
+- **ripgrep** (obrigatorio para indexacao de repositorio e busca de conteudo do FORGE)
 - **OpenClaw** (runtime de execucao LLM para FORGE e VECTOR — opcional, mas necessario para execucao de codigo)
 - **Bot Telegram** (para receber briefings e aprovar drafts — opcional)
 
 ```bash
+# Instalar ripgrep (obrigatorio para FORGE)
+sudo apt install ripgrep
+
 # Instalar pnpm se necessario
 corepack enable && corepack prepare pnpm@latest --activate
 

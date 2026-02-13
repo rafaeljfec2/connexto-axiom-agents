@@ -15,6 +15,11 @@ export class GoalsController {
     return this.goalsService.findAll({ status, projectId, includeStats: include === "stats" });
   }
 
+  @Get(":id/details")
+  findOneWithDetails(@Param("id") id: string) {
+    return this.goalsService.findOneWithDetails(id);
+  }
+
   @Post()
   create(@Body() dto: CreateGoalDto) {
     return this.goalsService.create(dto);

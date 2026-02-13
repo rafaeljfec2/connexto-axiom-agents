@@ -19,4 +19,5 @@ export const config: ForgeAgentConfig = {
   enableAutoFix: true,
   enableAtomicEdits: true,
   enableStructuredErrors: true,
+  enableRepositoryIndex: true,
 };
