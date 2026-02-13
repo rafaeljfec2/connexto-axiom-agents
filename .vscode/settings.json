@@ -8,13 +8,20 @@
   "[typescript]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
   "[json]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
   "[markdown]": {
     "editor.formatOnSave": false
   },
-  "eslint.validate": ["typescript"],
+  "eslint.validate": ["typescript", "typescriptreact"],
+  "eslint.workingDirectories": [
+    { "directory": "apps/api", "changeProcessCWD": true },
+    { "directory": "apps/web", "changeProcessCWD": true }
+  ],
   "typescript.preferences.importModuleSpecifier": "relative",
   "cSpell.enabled": false
 }
