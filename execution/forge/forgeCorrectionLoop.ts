@@ -122,6 +122,8 @@ async function handleApplyFailure(
     return buildFailureResult(state, reason);
   }
 
+  await restoreWorkspaceFiles(state.currentParsed.files, ctx.workspacePath);
+
   const currentFileState = await readModifiedFilesState(
     state.currentParsed.files.map((f) => f.path),
     ctx.workspacePath,
@@ -141,6 +143,7 @@ async function handleApplyFailure(
     failedFile: applyResult.failedFile,
     failedEditIndex: applyResult.failedEditIndex,
     attempts: state.attempts,
+    isWorkspaceRestored: true,
   });
 
   state.totalTokensUsed += correctionOutput.tokensUsed;
@@ -149,7 +152,6 @@ async function handleApplyFailure(
     return buildFailureResult(state, "Correction round returned invalid output");
   }
 
-  await restoreWorkspaceFiles(state.currentParsed.files, ctx.workspacePath);
   state.currentParsed = correctionOutput.parsed;
   return null;
 }
@@ -266,9 +268,16 @@ async function handleValidationFailure(
     escalationSnippets = buildValidationEscalation(lintResult.errors, currentFileState);
   }
 
-  const formattedErrors = ctx.enableStructuredErrors
+  let formattedErrors = ctx.enableStructuredErrors
     ? formatErrorsForPrompt(lintResult.errors, touchedFiles, 2000)
     : lintResult.output;
+
+  if (formattedErrors.length === 0 && !lintResult.success) {
+    logger.debug("Structured errors empty but validation failed, falling back to raw output");
+    formattedErrors = lintResult.output.slice(0, 2000);
+  }
+
+  await restoreWorkspaceFiles(state.currentParsed.files, ctx.workspacePath);
 
   const correctionOutput = await executeCorrectionRound(ctx, {
     plan,
@@ -280,6 +289,7 @@ async function handleValidationFailure(
     attempts: state.attempts,
     typeDefinitions,
     escalationSnippets,
+    isWorkspaceRestored: true,
   });
 
   state.totalTokensUsed += correctionOutput.tokensUsed;
@@ -299,6 +309,15 @@ function summarizeValidationErrors(result: ValidationResult): string {
   if (result.errorCount === 0 && result.testResult && !result.testResult.success) {
     return `Tests failed: ${result.testResult.failedTests.slice(0, 3).join(", ")}`;
   }
+
+  if (result.errorCount === 0 && !result.success && result.output.includes("[build FAIL]")) {
+    const buildLine = result.output
+      .split("\n")
+      .find((l) => l.includes("[build FAIL]") || l.toLowerCase().includes("error"));
+    const preview = buildLine ? buildLine.slice(0, 120) : "unknown build error";
+    return `Build failed (0 lint errors): ${preview}`;
+  }
+
   return `${result.errorCount} errors, ${result.warningCount} warnings`;
 }
 
@@ -407,6 +426,7 @@ interface CorrectionRoundParams {
   readonly attempts?: readonly CorrectionAttempt[];
   readonly typeDefinitions?: string;
   readonly escalationSnippets?: string;
+  readonly isWorkspaceRestored?: boolean;
 }
 
 async function executeCorrectionRound(
@@ -427,6 +447,7 @@ async function executeCorrectionRound(
     attempts: params.attempts,
     typeDefinitions: params.typeDefinitions,
     escalationSnippets: params.escalationSnippets,
+    isWorkspaceRestored: params.isWorkspaceRestored,
   });
 
   const result = await callLlmWithAudit(ctx, systemPrompt, userPrompt, "correction");

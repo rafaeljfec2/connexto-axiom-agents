@@ -63,13 +63,49 @@ export function parseEslintErrors(raw: string): readonly StructuredError[] {
   return errors;
 }
 
+const BUILD_FILE_LINE_REGEX = /^(.+?\.[a-zA-Z]{1,5}):(\d+):(\d+)[:\s]+(.+)$/;
+
+export function parseBuildErrors(raw: string): readonly StructuredError[] {
+  const tscStyleErrors = parseTscErrors(raw);
+  if (tscStyleErrors.length > 0) {
+    return tscStyleErrors.map((e) => ({ ...e, source: "build" as const }));
+  }
+
+  const errors: StructuredError[] = [];
+
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+
+    const match = BUILD_FILE_LINE_REGEX.exec(trimmed);
+    if (!match) continue;
+
+    const file = match[1];
+    if (file.includes("node_modules")) continue;
+
+    errors.push({
+      file,
+      line: Number(match[2]),
+      column: Number(match[3]),
+      code: "BUILD",
+      message: match[4].trim(),
+      severity: "error",
+      source: "build",
+    });
+  }
+
+  return errors;
+}
+
 export function parseAllErrors(
   tscOutput: string,
   eslintOutput: string,
+  buildOutput?: string,
 ): readonly StructuredError[] {
   const tscErrors = parseTscErrors(tscOutput);
   const eslintErrors = parseEslintErrors(eslintOutput);
-  return [...tscErrors, ...eslintErrors];
+  const buildErrors = buildOutput ? parseBuildErrors(buildOutput) : [];
+  return [...tscErrors, ...eslintErrors, ...buildErrors];
 }
 
 export function separateErrorsAndWarnings(

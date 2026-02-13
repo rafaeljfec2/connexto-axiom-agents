@@ -127,6 +127,58 @@ export function useAgents() {
   });
 }
 
+export interface CycleOutcome {
+  readonly id: string;
+  readonly agent_id: string;
+  readonly task: string;
+  readonly status: string;
+  readonly error: string | null;
+  readonly execution_time_ms: number | null;
+  readonly tokens_used: number | null;
+  readonly created_at: string;
+}
+
+export interface OutcomeCycle {
+  readonly trace_id: string;
+  readonly started_at: string;
+  readonly ended_at: string;
+  readonly duration_ms: number;
+  readonly total_tokens: number;
+  readonly success_count: number;
+  readonly failed_count: number;
+  readonly outcome_count: number;
+  readonly outcomes: ReadonlyArray<CycleOutcome>;
+}
+
+interface CyclesResponse {
+  readonly data: ReadonlyArray<OutcomeCycle>;
+  readonly total: number;
+  readonly limit: number;
+  readonly offset: number;
+}
+
+export function useOutcomeCycles(params?: {
+  agent?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const searchParams = new URLSearchParams();
+  if (params?.agent) searchParams.set("agent", params.agent);
+  if (params?.status) searchParams.set("status", params.status);
+  if (params?.limit) searchParams.set("limit", String(params.limit));
+  if (params?.offset) searchParams.set("offset", String(params.offset));
+  const qs = searchParams.toString();
+
+  return useQuery({
+    queryKey: ["outcomes", "cycles", params],
+    queryFn: () => {
+      const endpoint = qs ? `/outcomes/cycles?${qs}` : "/outcomes/cycles";
+      return api.get<CyclesResponse>(endpoint);
+    },
+  });
+}
+
 interface CreateGoalPayload {
   readonly title: string;
   readonly description?: string;

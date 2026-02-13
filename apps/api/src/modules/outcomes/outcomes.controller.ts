@@ -5,6 +5,21 @@ import { OutcomesService } from "./outcomes.service";
 export class OutcomesController {
   constructor(private readonly outcomesService: OutcomesService) {}
 
+  @Get("cycles")
+  findCycles(
+    @Query("agent") agent?: string,
+    @Query("status") status?: string,
+    @Query("limit") limit?: string,
+    @Query("offset") offset?: string,
+  ) {
+    return this.outcomesService.findCycles({
+      agent,
+      status,
+      limit: limit ? Number.parseInt(limit, 10) : 20,
+      offset: offset ? Number.parseInt(offset, 10) : 0,
+    });
+  }
+
   @Get()
   findAll(
     @Query("agent") agent?: string,

@@ -4,6 +4,7 @@ import { logger } from "../../config/logger.js";
 import {
   parseTscErrors,
   parseEslintErrors,
+  parseBuildErrors,
   separateErrorsAndWarnings,
 } from "./forgeErrorParser.js";
 import type { StructuredError } from "./forgeErrorParser.js";
@@ -131,7 +132,12 @@ async function runCoreValidation(
   if (allSuccess && validationConfig?.runBuild) {
     const buildResult = await runBuildCheck(execFileAsync, workspacePath, validationConfig.buildTimeout);
     outputs.push(buildResult.output);
-    if (!buildResult.success) allSuccess = false;
+    if (!buildResult.success) {
+      allSuccess = false;
+      if (validationConfig.enableStructuredErrors) {
+        allErrors = [...allErrors, ...parseBuildErrors(buildResult.output)];
+      }
+    }
   }
 
   return { outputs, allSuccess, allErrors };

@@ -232,43 +232,34 @@ export interface CorrectionPromptContext {
   readonly attempts?: readonly CorrectionAttempt[];
   readonly typeDefinitions?: string;
   readonly escalationSnippets?: string;
+  readonly isWorkspaceRestored?: boolean;
 }
 
-export function buildCorrectionUserPrompt(promptCtx: CorrectionPromptContext): string {
-  const {
-    delegation, plan, errorOutput, currentFilesState, fileTree,
-    allowedDirs, appliedFiles, failedFile, failedEditIndex,
-    attempts, typeDefinitions, escalationSnippets,
-  } = promptCtx;
+function buildFailedEditLine(file: string, editIdx: number | undefined): string {
+  const suffix = editIdx === undefined ? "" : ` (edit index ${editIdx})`;
+  return `EDIT QUE FALHOU: arquivo "${file}"${suffix}`;
+}
 
-  function buildFailedEditLine(file: string, editIdx: number | undefined): string {
-    const suffix = editIdx === undefined ? "" : ` (edit index ${editIdx})`;
-    return `EDIT QUE FALHOU: arquivo "${file}"${suffix}`;
-  }
-
+function buildContextSection(
+  currentFilesState: readonly { readonly path: string; readonly content: string }[],
+  isWorkspaceRestored: boolean,
+): string {
+  const stateLabel = isWorkspaceRestored ? "ORIGINAL" : "ESTADO ATUAL";
   const contextBlocks = currentFilesState.map(
-    (f) => `--- ${f.path} (ESTADO ATUAL) ---\n${f.content}\n--- end ---`,
+    (f) => `--- ${f.path} (${stateLabel}) ---\n${f.content}\n--- end ---`,
   );
 
-  const contextSection = contextBlocks.length > 0
-    ? ["", "ESTADO ATUAL DOS ARQUIVOS (apos edits anteriores):", ...contextBlocks, ""].join("\n")
+  const contextHeader = isWorkspaceRestored
+    ? "ESTADO ORIGINAL DOS ARQUIVOS (workspace RESTAURADO - edits anteriores NAO foram aplicados):"
+    : "ESTADO ATUAL DOS ARQUIVOS (apos edits anteriores):";
+
+  return contextBlocks.length > 0
+    ? ["", contextHeader, ...contextBlocks, ""].join("\n")
     : "";
+}
 
-  const truncatedErrors = errorOutput.slice(0, MAX_LINT_ERROR_CHARS);
-
-  const lines = [
-    `Tarefa: ${delegation.task}`,
-    `Resultado esperado: ${delegation.expected_output}`,
-    `Goal ID: ${delegation.goal_id}`,
-    "",
-    `PLANO ORIGINAL:`,
-    `- Abordagem: ${plan.approach}`,
-    "",
-    "ESTRUTURA DO PROJETO:",
-    fileTree.slice(0, 2000),
-    "",
-    `Diretorios permitidos: ${allowedDirs.join(", ")}`,
-  ];
+function appendOptionalSections(lines: string[], promptCtx: CorrectionPromptContext): void {
+  const { appliedFiles, failedFile, failedEditIndex, attempts, typeDefinitions, escalationSnippets } = promptCtx;
 
   if (appliedFiles && appliedFiles.length > 0) {
     lines.push(
@@ -297,18 +288,69 @@ export function buildCorrectionUserPrompt(promptCtx: CorrectionPromptContext): s
   }
 
   if (typeDefinitions && typeDefinitions.length > 0) {
-    lines.push(
-      "",
-      "DEFINICOES DE TIPOS RELEVANTES AOS ERROS:",
-      typeDefinitions,
-    );
+    lines.push("", "DEFINICOES DE TIPOS RELEVANTES AOS ERROS:", typeDefinitions);
   }
 
   if (escalationSnippets && escalationSnippets.length > 0) {
+    lines.push("", "CONTEXTO ADICIONAL DE ESCALACAO (arquivos com erros):", escalationSnippets);
+  }
+}
+
+function buildCorrectionInstructions(isWorkspaceRestored: boolean): readonly string[] {
+  const stateRef = isWorkspaceRestored ? "ESTADO ORIGINAL" : "ESTADO ATUAL";
+
+  return [
+    "INSTRUCOES DE CORRECAO:",
+    `1. Os arquivos acima mostram o ${stateRef} REAL dos arquivos no disco.`,
+    `2. O campo 'search' DEVE ser uma copia EXATA de linhas que existem no ${stateRef} acima.`,
+    "3. Se o erro for 'Search string not found':",
+    "   - Sua string de busca NAO existe no arquivo.",
+    `   - Releia o ${stateRef} do arquivo e copie LETRA POR LETRA as linhas que quer substituir.`,
+    "   - Alternativa: use 'line' e 'endLine' para edits baseados em numero de linha.",
+    "   - Se o arquivo NAO precisa ser alterado, REMOVA-O da lista de files.",
+    "4. NAO invente ou suponha conteudo. Copie LITERALMENTE do conteudo mostrado acima.",
+    "5. Inclua 2-3 linhas de contexto antes e depois para garantir unicidade.",
+    "6. NAO repita edits que ja foram aplicados com sucesso.",
+    "7. Corrija APENAS os erros indicados, nao faca mudancas extras.",
+    "8. Se um arquivo NAO contribui para resolver a tarefa, REMOVA-O da resposta.",
+    "9. Se o erro for um import nao utilizado, remova-o.",
+    "10. Responda APENAS com JSON puro no formato obrigatorio.",
+  ];
+}
+
+export function buildCorrectionUserPrompt(promptCtx: CorrectionPromptContext): string {
+  const { delegation, plan, errorOutput, currentFilesState, fileTree, allowedDirs, isWorkspaceRestored } = promptCtx;
+  const restored = isWorkspaceRestored === true;
+
+  const contextSection = buildContextSection(currentFilesState, restored);
+  const truncatedErrors = errorOutput.slice(0, MAX_LINT_ERROR_CHARS);
+
+  const lines = [
+    `Tarefa: ${delegation.task}`,
+    `Resultado esperado: ${delegation.expected_output}`,
+    `Goal ID: ${delegation.goal_id}`,
+    "",
+    `PLANO ORIGINAL:`,
+    `- Abordagem: ${plan.approach}`,
+    "",
+    "ESTRUTURA DO PROJETO:",
+    fileTree.slice(0, 2000),
+    "",
+    `Diretorios permitidos: ${allowedDirs.join(", ")}`,
+  ];
+
+  appendOptionalSections(lines, promptCtx);
+
+  if (restored) {
     lines.push(
       "",
-      "CONTEXTO ADICIONAL DE ESCALACAO (arquivos com erros):",
-      escalationSnippets,
+      "=== AVISO IMPORTANTE: WORKSPACE RESTAURADO ===",
+      "O workspace foi RESTAURADO ao estado ORIGINAL.",
+      "Seus edits anteriores NAO foram aplicados ou foram revertidos.",
+      "O ESTADO mostrado acima reflete o arquivo ORIGINAL, NAO o resultado das suas tentativas anteriores.",
+      "Voce DEVE gerar TODOS os edits necessarios desde o estado original.",
+      "NAO assuma que qualquer mudanca sua foi preservada.",
+      "=== FIM DO AVISO ===",
     );
   }
 
@@ -317,21 +359,7 @@ export function buildCorrectionUserPrompt(promptCtx: CorrectionPromptContext): s
     "ERRO DA TENTATIVA ANTERIOR:",
     truncatedErrors,
     "",
-    "INSTRUCOES DE CORRECAO:",
-    "1. Os arquivos acima mostram o ESTADO ATUAL REAL dos arquivos no disco.",
-    "2. O campo 'search' DEVE ser uma copia EXATA de linhas que existem no ESTADO ATUAL acima.",
-    "3. Se o erro for 'Search string not found':",
-    "   - Sua string de busca NAO existe no arquivo.",
-    "   - Releia o ESTADO ATUAL do arquivo e copie LETRA POR LETRA as linhas que quer substituir.",
-    "   - Alternativa: use 'line' e 'endLine' para edits baseados em numero de linha.",
-    "   - Se o arquivo NAO precisa ser alterado, REMOVA-O da lista de files.",
-    "4. NAO invente ou suponha conteudo. Copie LITERALMENTE do ESTADO ATUAL mostrado.",
-    "5. Inclua 2-3 linhas de contexto antes e depois para garantir unicidade.",
-    "6. NAO repita edits que ja foram aplicados com sucesso.",
-    "7. Corrija APENAS os erros indicados, nao faca mudancas extras.",
-    "8. Se um arquivo NAO contribui para resolver a tarefa, REMOVA-O da resposta.",
-    "9. Se o erro for um import nao utilizado, remova-o.",
-    "10. Responda APENAS com JSON puro no formato obrigatorio.",
+    ...buildCorrectionInstructions(restored),
   );
 
   return lines.join("\n");
