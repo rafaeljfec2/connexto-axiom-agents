@@ -9,10 +9,25 @@ export interface AgentStats {
   readonly success_rate: number;
 }
 
-export interface PendingItem {
+export interface PendingCodeChange {
   readonly id: string;
   readonly description: string;
-  readonly type: string;
+  readonly type: "code_change";
+  readonly risk: number;
+  readonly files_changed: string;
+  readonly agent_id: string;
+  readonly goal_id: string | null;
+  readonly goal_title: string | null;
+  readonly task_title: string | null;
+  readonly created_at: string;
+}
+
+export interface PendingArtifact {
+  readonly id: string;
+  readonly description: string;
+  readonly type: "artifact";
+  readonly artifact_type: string;
+  readonly agent_id: string;
   readonly created_at: string;
 }
 
@@ -97,26 +112,44 @@ export class DashboardService {
     return row ?? null;
   }
 
-  private getPendingCodeChanges(): ReadonlyArray<PendingItem> {
+  private getPendingCodeChanges(): ReadonlyArray<PendingCodeChange> {
     return this.db
       .prepare(
-        `SELECT id, description, 'code_change' as type, created_at
-        FROM code_changes
-        WHERE status = 'pending_approval'
-        ORDER BY created_at DESC`,
+        `SELECT
+          cc.id,
+          cc.description,
+          'code_change' as type,
+          cc.risk,
+          cc.files_changed,
+          t.agent_id,
+          g.id as goal_id,
+          g.title as goal_title,
+          t.title as task_title,
+          cc.created_at
+        FROM code_changes cc
+        LEFT JOIN tasks t ON t.id = cc.task_id
+        LEFT JOIN goals g ON g.id = t.goal_id
+        WHERE cc.status = 'pending_approval'
+        ORDER BY cc.created_at DESC`,
       )
-      .all() as ReadonlyArray<PendingItem>;
+      .all() as ReadonlyArray<PendingCodeChange>;
   }
 
-  private getPendingArtifacts(): ReadonlyArray<PendingItem> {
+  private getPendingArtifacts(): ReadonlyArray<PendingArtifact> {
     return this.db
       .prepare(
-        `SELECT id, title as description, 'artifact' as type, created_at
+        `SELECT
+          id,
+          title as description,
+          'artifact' as type,
+          type as artifact_type,
+          agent_id,
+          created_at
         FROM artifacts
         WHERE status = 'draft'
         ORDER BY created_at DESC`,
       )
-      .all() as ReadonlyArray<PendingItem>;
+      .all() as ReadonlyArray<PendingArtifact>;
   }
 
   private getLatestCycleTimeline(): ReadonlyArray<TimelineEntry> {

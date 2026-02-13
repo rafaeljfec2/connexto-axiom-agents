@@ -4,7 +4,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, Play, Clock, AlertCircle } from "lucide-react";
+import { Loader2, Play, Clock, AlertCircle, ShieldAlert } from "lucide-react";
 
 type MetricVariant = "success" | "warning" | "destructive";
 
@@ -18,6 +18,25 @@ function resolveBudgetVariant(remaining: number): MetricVariant {
   if (remaining > 50) return "success";
   if (remaining > 20) return "warning";
   return "destructive";
+}
+
+function RiskBadge({ risk }: { readonly risk: number }) {
+  if (risk >= 4) {
+    return (
+      <Badge variant="destructive" className="shrink-0 gap-1 text-[10px]">
+        <ShieldAlert className="h-3 w-3" />
+        Risco {risk}
+      </Badge>
+    );
+  }
+  if (risk >= 2) {
+    return (
+      <Badge variant="outline" className="shrink-0 text-[10px] text-amber-600 border-amber-300">
+        Risco {risk}
+      </Badge>
+    );
+  }
+  return null;
 }
 
 export function DailyReport() {
@@ -84,34 +103,72 @@ export function DailyReport() {
             <CardContent className="p-0">
               <div className="divide-y">
                 {data.pending.codeChanges.map((item) => (
-                  <div key={item.id} className="flex items-center gap-3 px-4 py-2.5">
-                    <Badge variant="outline" className="shrink-0 text-[10px]">
-                      Código
-                    </Badge>
-                    <p className="min-w-0 flex-1 truncate text-sm">{item.description}</p>
-                    <div className="flex shrink-0 gap-1.5">
-                      <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs">
-                        Rejeitar
-                      </Button>
-                      <Button size="sm" className="h-7 px-2.5 text-xs">
-                        Aprovar
-                      </Button>
+                  <div key={item.id} className="space-y-1.5 px-4 py-3">
+                    <div className="flex items-start gap-3">
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge variant="outline" className="shrink-0 text-[10px]">
+                            Código
+                          </Badge>
+                          {item.agent_id ? (
+                            <Badge variant="secondary" className="shrink-0 text-[10px]">
+                              {item.agent_id.toUpperCase()}
+                            </Badge>
+                          ) : null}
+                          <RiskBadge risk={item.risk} />
+                        </div>
+                        <p className="text-sm leading-snug">{item.description}</p>
+                        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                          {item.goal_title ? (
+                            <span>
+                              <span className="font-medium text-foreground/70">Goal:</span> {item.goal_title}
+                            </span>
+                          ) : null}
+                          {item.task_title ? (
+                            <span>
+                              <span className="font-medium text-foreground/70">Task:</span> {item.task_title}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 gap-1.5 pt-0.5">
+                        <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs">
+                          Rejeitar
+                        </Button>
+                        <Button size="sm" className="h-7 px-2.5 text-xs">
+                          Aprovar
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 ))}
                 {data.pending.artifacts.map((item) => (
-                  <div key={item.id} className="flex items-center gap-3 px-4 py-2.5">
-                    <Badge variant="secondary" className="shrink-0 text-[10px]">
-                      Artefato
-                    </Badge>
-                    <p className="min-w-0 flex-1 truncate text-sm">{item.description}</p>
-                    <div className="flex shrink-0 gap-1.5">
-                      <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs">
-                        Rejeitar
-                      </Button>
-                      <Button size="sm" className="h-7 px-2.5 text-xs">
-                        Aprovar
-                      </Button>
+                  <div key={item.id} className="space-y-1.5 px-4 py-3">
+                    <div className="flex items-start gap-3">
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge variant="secondary" className="shrink-0 text-[10px]">
+                            Artefato
+                          </Badge>
+                          {item.agent_id ? (
+                            <Badge variant="secondary" className="shrink-0 text-[10px]">
+                              {item.agent_id.toUpperCase()}
+                            </Badge>
+                          ) : null}
+                          <Badge variant="outline" className="shrink-0 text-[10px]">
+                            {item.artifact_type}
+                          </Badge>
+                        </div>
+                        <p className="text-sm leading-snug">{item.description}</p>
+                      </div>
+                      <div className="flex shrink-0 gap-1.5 pt-0.5">
+                        <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs">
+                          Rejeitar
+                        </Button>
+                        <Button size="sm" className="h-7 px-2.5 text-xs">
+                          Aprovar
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 ))}

@@ -16,10 +16,25 @@ interface BudgetInfo {
   readonly remaining_pct: number;
 }
 
-interface PendingItem {
+interface PendingCodeChange {
   readonly id: string;
   readonly description: string;
-  readonly type: string;
+  readonly type: "code_change";
+  readonly risk: number;
+  readonly files_changed: string;
+  readonly agent_id: string;
+  readonly goal_id: string | null;
+  readonly goal_title: string | null;
+  readonly task_title: string | null;
+  readonly created_at: string;
+}
+
+interface PendingArtifact {
+  readonly id: string;
+  readonly description: string;
+  readonly type: "artifact";
+  readonly artifact_type: string;
+  readonly agent_id: string;
   readonly created_at: string;
 }
 
@@ -44,8 +59,8 @@ interface DashboardSummary {
   readonly agents: ReadonlyArray<AgentStats>;
   readonly budget: BudgetInfo | null;
   readonly pending: {
-    readonly codeChanges: ReadonlyArray<PendingItem>;
-    readonly artifacts: ReadonlyArray<PendingItem>;
+    readonly codeChanges: ReadonlyArray<PendingCodeChange>;
+    readonly artifacts: ReadonlyArray<PendingArtifact>;
   };
   readonly timeline: ReadonlyArray<TimelineEntry>;
   readonly weekHistory: ReadonlyArray<DailyHistory>;
