@@ -5,11 +5,14 @@ import type { KairosDelegation } from "../../orchestration/types.js";
 import { logAudit, hashContent } from "../../state/auditLog.js";
 import { saveCodeChange, updateCodeChangeStatus } from "../../state/codeChanges.js";
 import { getProjectById } from "../../state/projects.js";
+import { getResearchByGoalId } from "../../state/nexusResearch.js";
+import { getGoalById } from "../../state/goals.js";
 import {
   runForgeAgentLoop,
   loadForgeAgentConfig,
 } from "../forge/forgeAgentLoop.js";
 import type { ForgeCodeOutput } from "../forge/forgeAgentLoop.js";
+import type { NexusResearchContext, GoalContext } from "../forge/forgeTypes.js";
 import {
   commitVerifiedChanges,
   validateAndCalculateRisk,
@@ -87,6 +90,43 @@ export async function executeProjectCode(
   }
 }
 
+function loadNexusResearchForGoal(
+  db: BetterSqlite3.Database,
+  goalId: string,
+): readonly NexusResearchContext[] {
+  const research = getResearchByGoalId(db, goalId);
+  if (research.length === 0) return [];
+
+  return research.map((r) => ({
+    question: r.question,
+    recommendation: r.recommendation,
+    rawOutput: r.raw_output,
+  }));
+}
+
+function loadGoalContext(
+  db: BetterSqlite3.Database,
+  goalId: string,
+): GoalContext | undefined {
+  const goal = getGoalById(db, goalId);
+  if (!goal) return undefined;
+
+  return { title: goal.title, description: goal.description };
+}
+
+const IMPLEMENTATION_TASK_PATTERNS: ReadonlySet<string> = new Set([
+  "implementar", "implement", "criar", "create", "adicionar", "add",
+  "alterar", "change", "modificar", "modify",
+]);
+
+function isImplementationTask(task: string): boolean {
+  const normalized = task.toLowerCase();
+  for (const pattern of IMPLEMENTATION_TASK_PATTERNS) {
+    if (normalized.includes(pattern)) return true;
+  }
+  return false;
+}
+
 async function executeWithAgentLoop(
   db: BetterSqlite3.Database,
   delegation: KairosDelegation,
@@ -103,6 +143,23 @@ async function executeWithAgentLoop(
   const { task } = delegation;
   const agentConfig = loadForgeAgentConfig();
 
+  const nexusResearch = loadNexusResearchForGoal(db, delegation.goal_id);
+  const goalContext = loadGoalContext(db, delegation.goal_id);
+
+  if (nexusResearch.length > 0) {
+    logger.info(
+      { goalId: delegation.goal_id, researchCount: nexusResearch.length },
+      "NEXUS research context loaded for FORGE",
+    );
+  }
+
+  if (goalContext) {
+    logger.info(
+      { goalId: delegation.goal_id, goalTitle: goalContext.title.slice(0, 80) },
+      "Goal context loaded for FORGE",
+    );
+  }
+
   const agentResult = await runForgeAgentLoop({
     db,
     delegation,
@@ -110,6 +167,8 @@ async function executeWithAgentLoop(
     workspacePath,
     project,
     traceId,
+    nexusResearch: nexusResearch.length > 0 ? nexusResearch : undefined,
+    goalContext,
     maxCorrectionRounds: agentConfig.maxCorrectionRounds,
     runBuild: agentConfig.runBuild,
     buildTimeout: agentConfig.buildTimeout,
@@ -182,6 +241,22 @@ async function handleSuccessfulAgentOutput(
 
   if (parsed.files.length === 0) {
     const executionTimeMs = Math.round(performance.now() - startTime);
+
+    if (isImplementationTask(task)) {
+      logger.warn(
+        { projectId, task: task.slice(0, 100), description: parsed.description.slice(0, 80) },
+        "FORGE returned no file changes for an implementation task — marking as failed",
+      );
+      return buildResult(
+        task,
+        "failed",
+        "",
+        `Implementation task produced no changes: ${parsed.description.slice(0, 120)}`,
+        executionTimeMs,
+        totalTokensUsed,
+      );
+    }
+
     logger.info(
       { projectId, description: parsed.description.slice(0, 80) },
       "FORGE returned no file changes, completing without commit",

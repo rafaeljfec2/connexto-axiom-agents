@@ -8,7 +8,7 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
   "the", "is", "are", "and", "or", "to", "from", "in", "of", "for", "with",
   "quero", "ser", "nao", "faz", "sentido", "opcao",
   "implementar", "criar", "remover", "adicionar", "modificar", "alterar",
-  "preparar", "apenas", "rodar", "minimo", "antes", "subir", "depois",
+  "preparar", "apenas", "rodar", "minimo", "minima", "antes", "subir", "depois",
   "sobre", "como", "cada", "todo", "todos", "toda", "todas",
   "precisa", "deve", "fazer", "ainda", "tambem", "quando", "onde",
   "esta", "esse", "essa", "este", "estes", "essas", "esses",
@@ -18,7 +18,11 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
   "ajustar", "configurar", "definir", "revisar", "validar",
   "novo", "nova", "novos", "novas", "atual", "antigo",
   "primeiro", "segundo", "ultimo", "proximo",
-  "teste", "testes", "lint", "build", "push", "pull", "merge", "commit",
+  "teste", "testes", "tests", "lint", "build", "push", "pull", "merge", "commit",
+  "registrar", "conforme", "mudanca", "mudancas", "mapeamento",
+  "evidencias", "evidencia", "necessario", "necessaria",
+  "according", "change", "changes", "minimum", "mapping",
+  "ensure", "check", "update", "run", "make", "that", "this",
 ]);
 
 const STOP_VERB_STEMS: ReadonlySet<string> = new Set([
@@ -26,7 +30,7 @@ const STOP_VERB_STEMS: ReadonlySet<string> = new Set([
   "prepar", "rod", "sub", "faz", "us", "utiliz", "inclu",
   "exclu", "mant", "atualiz", "garant", "verific", "test",
   "aplic", "execut", "corrig", "ajust", "configur", "defin",
-  "revis", "valid",
+  "revis", "valid", "registr", "mape",
 ]);
 
 function isStopWordByStem(word: string): boolean {
@@ -46,12 +50,20 @@ function isStopWordByStem(word: string): boolean {
 const MIN_KEYWORD_LENGTH = 4;
 
 export function extractKeywords(task: string): readonly string[] {
-  return normalizeAccents(task)
+  const words = normalizeAccents(task)
     .toLowerCase()
     .replaceAll(/[^a-z0-9\s-]/g, " ")
     .split(/\s+/)
-    .filter((w) => w.length >= MIN_KEYWORD_LENGTH && !STOP_WORDS.has(w) && !isStopWordByStem(w))
-    .slice(0, 10);
+    .filter((w) => w.length >= MIN_KEYWORD_LENGTH && !STOP_WORDS.has(w) && !isStopWordByStem(w));
+
+  return [...new Set(words)].slice(0, 10);
+}
+
+export function extractKeywordsFromMultipleSources(
+  sources: readonly string[],
+): readonly string[] {
+  const combined = sources.filter((s) => s.length > 0).join(" ");
+  return extractKeywords(combined);
 }
 
 export function extractGlobPatterns(keywords: readonly string[]): readonly string[] {

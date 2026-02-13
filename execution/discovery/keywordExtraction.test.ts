@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractKeywords, extractGlobPatterns } from "./keywordExtraction.js";
+import { extractKeywords, extractGlobPatterns, extractKeywordsFromMultipleSources } from "./keywordExtraction.js";
 
 describe("extractKeywords", () => {
   it("should extract meaningful keywords from a Portuguese task", () => {
@@ -97,6 +97,70 @@ describe("extractKeywords", () => {
     expect(keywords).toContain("tokens");
     expect(keywords).toContain("vermelho");
     expect(keywords).toContain("sidebar");
+  });
+
+  it("should filter newly added stop words: tests, registrar, conforme, mudanca, minima, mapeamento", () => {
+    const task = "Implementar mudanca minima conforme mapeamento; rodar lint/tests e registrar evidencias visuais";
+    const keywords = extractKeywords(task);
+
+    expect(keywords).not.toContain("mudanca");
+    expect(keywords).not.toContain("minima");
+    expect(keywords).not.toContain("conforme");
+    expect(keywords).not.toContain("mapeamento");
+    expect(keywords).not.toContain("tests");
+    expect(keywords).not.toContain("registrar");
+    expect(keywords).not.toContain("evidencias");
+    expect(keywords).toContain("visuais");
+  });
+
+  it("should filter verb stems registr- and mape-", () => {
+    const task = "Registrando mapeando evidencias no sistema";
+    const keywords = extractKeywords(task);
+
+    expect(keywords).not.toContain("registrando");
+    expect(keywords).not.toContain("mapeando");
+    expect(keywords).toContain("sistema");
+  });
+});
+
+describe("extractKeywordsFromMultipleSources", () => {
+  it("should combine keywords from multiple sources", () => {
+    const sources = [
+      "Implementar mudanca minima conforme mapeamento",
+      "Dark theme com paleta vermelha",
+      "Mapear ThemeProvider tokens CSS vars",
+    ];
+    const keywords = extractKeywordsFromMultipleSources(sources);
+
+    expect(keywords).toContain("dark");
+    expect(keywords).toContain("theme");
+    expect(keywords).toContain("paleta");
+    expect(keywords).toContain("vermelha");
+    expect(keywords).toContain("themeprovider");
+    expect(keywords).toContain("tokens");
+    expect(keywords).toContain("vars");
+  });
+
+  it("should deduplicate keywords across sources", () => {
+    const sources = [
+      "dark theme tokens",
+      "dark theme palette",
+    ];
+    const keywords = extractKeywordsFromMultipleSources(sources);
+    const darkCount = keywords.filter((k) => k === "dark").length;
+    expect(darkCount).toBe(1);
+  });
+
+  it("should filter empty sources", () => {
+    const sources = ["", "dark theme", ""];
+    const keywords = extractKeywordsFromMultipleSources(sources);
+    expect(keywords).toContain("dark");
+    expect(keywords).toContain("theme");
+  });
+
+  it("should return empty array for all empty sources", () => {
+    const keywords = extractKeywordsFromMultipleSources(["", ""]);
+    expect(keywords).toEqual([]);
   });
 });
 

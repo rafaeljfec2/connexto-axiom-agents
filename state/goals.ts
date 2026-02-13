@@ -27,3 +27,13 @@ export function loadGoalsByProject(
     )
     .all(projectId) as Goal[];
 }
+
+export function getGoalById(
+  db: BetterSqlite3.Database,
+  goalId: string,
+): Goal | null {
+  const result = db
+    .prepare("SELECT * FROM goals WHERE id = ?")
+    .get(goalId) as Goal | undefined;
+  return result ?? null;
+}

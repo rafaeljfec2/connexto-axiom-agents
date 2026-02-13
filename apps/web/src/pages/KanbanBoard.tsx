@@ -213,6 +213,8 @@ export function KanbanBoard() {
           </div>
         ))}
       </div>
+
+      <GoalDetailSheet goalId={selectedGoalId} onClose={handleCloseDetail} />
     </div>
   );
 }

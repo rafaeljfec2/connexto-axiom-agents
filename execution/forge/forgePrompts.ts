@@ -62,6 +62,8 @@ export function buildPlanningUserPrompt(
   allowedDirs: readonly string[],
   previewFiles: readonly FileContext[] = [],
   indexPromptSection: string = "",
+  nexusContextSection: string = "",
+  goalSection: string = "",
 ): string {
   const hasIndex = indexPromptSection.length > 0;
   const hasPreview = previewFiles.length > 0;
@@ -71,8 +73,17 @@ export function buildPlanningUserPrompt(
     `Tarefa: ${delegation.task}`,
     `Resultado esperado: ${delegation.expected_output}`,
     `Goal ID: ${delegation.goal_id}`,
-    "",
   ];
+
+  if (goalSection.length > 0) {
+    lines.push(goalSection);
+  }
+
+  lines.push("");
+
+  if (nexusContextSection.length > 0) {
+    lines.push(nexusContextSection);
+  }
 
   if (hasIndex) {
     lines.push(
@@ -180,15 +191,24 @@ export function buildExecutionSystemPrompt(
   ].join("\n");
 }
 
-export function buildExecutionUserPrompt(
-  delegation: KairosDelegation,
-  plan: ForgePlan,
-  contextFiles: readonly FileContext[],
-  fileTree: string,
-  allowedDirs: readonly string[],
-  aliasInfo: string = "",
-  preExistingErrors: string = "",
-): string {
+export interface ExecutionPromptContext {
+  readonly delegation: KairosDelegation;
+  readonly plan: ForgePlan;
+  readonly contextFiles: readonly FileContext[];
+  readonly fileTree: string;
+  readonly allowedDirs: readonly string[];
+  readonly aliasInfo?: string;
+  readonly preExistingErrors?: string;
+  readonly nexusContextSection?: string;
+  readonly goalSection?: string;
+}
+
+export function buildExecutionUserPrompt(promptCtx: ExecutionPromptContext): string {
+  const {
+    delegation, plan, contextFiles, fileTree, allowedDirs,
+    aliasInfo = "", preExistingErrors = "",
+    nexusContextSection = "", goalSection = "",
+  } = promptCtx;
   const contextBlocks = contextFiles.map(
     (f) => `--- ${f.path} ---\n${f.content}\n--- end ---`,
   );
@@ -210,12 +230,17 @@ export function buildExecutionUserPrompt(
       ].join("\n")
     : "";
 
+  const goalLine = goalSection.length > 0 ? goalSection : "";
+  const nexusLine = nexusContextSection.length > 0 ? nexusContextSection : "";
+
   return [
     `Tarefa: ${delegation.task}`,
     `Resultado esperado: ${delegation.expected_output}`,
     `Goal ID: ${delegation.goal_id}`,
+    goalLine,
     `Data: ${new Date().toISOString()}`,
     "",
+    nexusLine,
     `PLANO DE EXECUCAO:`,
     `- Abordagem: ${plan.approach}`,
     `- Arquivos a modificar: ${plan.filesToModify.join(", ")}`,

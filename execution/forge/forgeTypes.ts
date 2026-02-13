@@ -5,6 +5,17 @@ import type { FileChange } from "../project/projectSecurity.js";
 export const CHARS_PER_TOKEN_ESTIMATE = 4;
 export const MAX_LINT_ERROR_CHARS = 2000;
 
+export interface NexusResearchContext {
+  readonly question: string;
+  readonly recommendation: string;
+  readonly rawOutput: string;
+}
+
+export interface GoalContext {
+  readonly title: string;
+  readonly description: string | null;
+}
+
 export interface ForgeAgentContext {
   readonly db: BetterSqlite3.Database;
   readonly delegation: KairosDelegation;
@@ -16,6 +27,8 @@ export interface ForgeAgentContext {
     readonly repo_source: string;
   };
   readonly traceId?: string;
+  readonly nexusResearch?: readonly NexusResearchContext[];
+  readonly goalContext?: GoalContext;
   readonly maxCorrectionRounds: number;
   readonly runBuild: boolean;
   readonly buildTimeout: number;

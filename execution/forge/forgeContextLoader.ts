@@ -7,8 +7,8 @@ import {
   readFileContents,
   expandContextWithImports,
   globSearch,
-  extractKeywords,
 } from "../discovery/fileDiscovery.js";
+import { extractKeywordsFromMultipleSources } from "../discovery/keywordExtraction.js";
 import type { FileContext, ProjectStructure } from "../discovery/fileDiscovery.js";
 import { findRelevantFilesFromIndex } from "../discovery/repositoryIndexer.js";
 import type { RepositoryIndex } from "../discovery/repositoryIndexer.js";
@@ -23,12 +23,33 @@ const PREVIEW_MAX_CHARS = 6000;
 const PREVIEW_MIN_AVAILABLE = 200;
 const PRE_EXISTING_ERRORS_MAX_CHARS = 1500;
 
+function buildKeywordSources(ctx: ForgeAgentContext): readonly string[] {
+  const sources: string[] = [ctx.delegation.task];
+
+  if (ctx.delegation.expected_output) {
+    sources.push(ctx.delegation.expected_output);
+  }
+  if (ctx.goalContext?.title) {
+    sources.push(ctx.goalContext.title);
+  }
+  if (ctx.goalContext?.description) {
+    sources.push(ctx.goalContext.description);
+  }
+  if (ctx.nexusResearch) {
+    for (const r of ctx.nexusResearch) {
+      sources.push(r.question);
+    }
+  }
+
+  return sources;
+}
+
 export async function buildPlanningPreview(
   ctx: ForgeAgentContext,
   _structure: ProjectStructure,
   repoIndex: RepositoryIndex | null = null,
 ): Promise<readonly FileContext[]> {
-  const keywords = extractKeywords(ctx.delegation.task);
+  const keywords = extractKeywordsFromMultipleSources(buildKeywordSources(ctx));
   const indexRanked = repoIndex
     ? findRelevantFilesFromIndex(repoIndex, keywords, PREVIEW_MAX_FILES)
     : [];
@@ -141,7 +162,7 @@ async function buildRequestedFileList(
 
   if (!ctx.enableFrameworkRules) return files;
 
-  const keywords = extractKeywords(ctx.delegation.task);
+  const keywords = extractKeywordsFromMultipleSources(buildKeywordSources(ctx));
   const rules = getFrameworkDiscoveryRules(ctx.project.framework);
   const contextualPatterns = getContextualPatternsForTask(rules, keywords);
 

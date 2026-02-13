@@ -2,7 +2,7 @@ import { logger } from "../../config/logger.js";
 import { getAllowedWritePaths } from "../../shared/policies/project-allowed-paths.js";
 import { discoverProjectStructure } from "../discovery/fileDiscovery.js";
 import type { FileContext, ProjectStructure } from "../discovery/fileDiscovery.js";
-import { extractKeywords } from "../discovery/keywordExtraction.js";
+import { extractKeywordsFromMultipleSources } from "../discovery/keywordExtraction.js";
 import { buildRepositoryIndex, formatIndexForPrompt } from "../discovery/repositoryIndexer.js";
 import {
   buildPlanningPreview,
@@ -31,6 +31,7 @@ import type {
   PlanningResult,
   EditResult,
   ReplanContext,
+  NexusResearchContext,
 } from "./forgeTypes.js";
 
 export type {
@@ -124,7 +125,7 @@ export async function runForgeAgentLoop(
     };
   }
 
-  const taskKeywords = extractKeywords(delegation.task);
+  const taskKeywords = buildEnrichedKeywords(ctx);
   const coherenceCheck = await validatePlanCoherence(validatedPlan, workspacePath, taskKeywords);
 
   const replanFlowCtx: ReplanFlowContext = { ctx, structure, fileTree, allowedDirs, projectConfig, indexPromptSection };
@@ -359,6 +360,69 @@ async function handlePostCorrectionReplan(
   return result;
 }
 
+function buildEnrichedKeywords(ctx: ForgeAgentContext): readonly string[] {
+  const sources: string[] = [ctx.delegation.task];
+
+  if (ctx.delegation.expected_output) {
+    sources.push(ctx.delegation.expected_output);
+  }
+
+  if (ctx.goalContext?.title) {
+    sources.push(ctx.goalContext.title);
+  }
+  if (ctx.goalContext?.description) {
+    sources.push(ctx.goalContext.description);
+  }
+
+  if (ctx.nexusResearch) {
+    for (const research of ctx.nexusResearch) {
+      sources.push(research.question);
+      if (research.recommendation) {
+        sources.push(research.recommendation);
+      }
+    }
+  }
+
+  return extractKeywordsFromMultipleSources(sources);
+}
+
+function formatGoalSection(ctx: ForgeAgentContext): string {
+  if (!ctx.goalContext) return "";
+  const desc = ctx.goalContext.description ? ` — ${ctx.goalContext.description}` : "";
+  return `Goal: ${ctx.goalContext.title}${desc}\n`;
+}
+
+const NEXUS_CONTEXT_MAX_CHARS = 800;
+
+function buildNexusContextSection(
+  nexusResearch: readonly NexusResearchContext[] | undefined,
+): string {
+  if (!nexusResearch || nexusResearch.length === 0) return "";
+
+  const lines = [
+    "CONTEXTO DE PESQUISA NEXUS (resultados de pesquisa previa sobre o goal):",
+  ];
+
+  for (const research of nexusResearch) {
+    lines.push(`- Pergunta: ${research.question}`);
+    if (research.recommendation) {
+      lines.push(`- Recomendacao: ${research.recommendation}`);
+    }
+  }
+
+  lines.push(
+    "",
+    "Use as informacoes do NEXUS acima para entender EXATAMENTE o que a tarefa pede.",
+    "Os caminhos e arquivos mencionados pelo NEXUS sao pistas importantes.",
+    "",
+  );
+
+  const section = lines.join("\n");
+  return section.length > NEXUS_CONTEXT_MAX_CHARS
+    ? `${section.slice(0, NEXUS_CONTEXT_MAX_CHARS)}...\n`
+    : section;
+}
+
 async function executePlanningPhase(
   ctx: ForgeAgentContext,
   fileTree: string,
@@ -367,7 +431,9 @@ async function executePlanningPhase(
   indexPromptSection: string = "",
 ): Promise<PlanningResult> {
   const systemPrompt = buildPlanningSystemPrompt(ctx.project.language, ctx.project.framework);
-  const userPrompt = buildPlanningUserPrompt(ctx.delegation, fileTree, allowedDirs, previewFiles, indexPromptSection);
+  const nexusSection = buildNexusContextSection(ctx.nexusResearch);
+  const goalSection = formatGoalSection(ctx);
+  const userPrompt = buildPlanningUserPrompt(ctx.delegation, fileTree, allowedDirs, previewFiles, indexPromptSection, nexusSection, goalSection);
 
   const result = await callLlmWithAudit(ctx, systemPrompt, userPrompt, "planning");
   if (!result) return { plan: null, tokensUsed: 0 };
@@ -435,11 +501,14 @@ async function executeEditPhase(
   preExistingErrors: string = "",
 ): Promise<EditResult> {
   const aliasInfo = formatAliasesForPrompt(projectConfig);
+  const nexusSection = buildNexusContextSection(ctx.nexusResearch);
+  const goalSection = formatGoalSection(ctx);
 
   const systemPrompt = buildExecutionSystemPrompt(ctx.project.language, ctx.project.framework, allowedDirs);
-  const userPrompt = buildExecutionUserPrompt(
-    ctx.delegation, plan, contextFiles, fileTree, allowedDirs, aliasInfo, preExistingErrors,
-  );
+  const userPrompt = buildExecutionUserPrompt({
+    delegation: ctx.delegation, plan, contextFiles, fileTree, allowedDirs,
+    aliasInfo, preExistingErrors, nexusContextSection: nexusSection, goalSection,
+  });
 
   const result = await callLlmWithAudit(ctx, systemPrompt, userPrompt, "execution");
   if (!result) return { parsed: null, tokensUsed: 0 };
