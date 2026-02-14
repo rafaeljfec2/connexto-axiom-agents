@@ -142,13 +142,45 @@ function MetadataField({
   );
 }
 
-function ProgressBar({
-  completed,
-  total,
-}: Readonly<{ completed: number; total: number }>) {
-  if (total === 0) return null;
+interface ProgressCounts {
+  readonly total: number;
+  readonly applied: number;
+  readonly rejected: number;
+  readonly failed: number;
+  readonly pending: number;
+}
 
-  const pct = Math.round((completed / total) * 100);
+function computeProgress(
+  codeChanges: ReadonlyArray<GoalCodeChange>,
+): ProgressCounts {
+  let applied = 0;
+  let rejected = 0;
+  let failed = 0;
+  let pending = 0;
+
+  for (const cc of codeChanges) {
+    if (cc.status === "applied" || cc.status === "approved") {
+      applied++;
+    } else if (cc.status === "rejected") {
+      rejected++;
+    } else if (cc.status === "failed" || cc.status === "rolled_back") {
+      failed++;
+    } else {
+      pending++;
+    }
+  }
+
+  return { total: codeChanges.length, applied, rejected, failed, pending };
+}
+
+function ProgressBar({ counts }: Readonly<{ counts: ProgressCounts }>) {
+  if (counts.total === 0) return null;
+
+  const resolved = counts.applied + counts.rejected + counts.failed;
+  const resolvedPct = Math.round((resolved / counts.total) * 100);
+  const appliedPct = Math.round((counts.applied / counts.total) * 100);
+  const rejectedPct = Math.round((counts.rejected / counts.total) * 100);
+  const failedPct = Math.round((counts.failed / counts.total) * 100);
 
   return (
     <Card>
@@ -156,14 +188,54 @@ function ProgressBar({
         <div className="mb-2 flex items-center justify-between">
           <span className="text-sm font-semibold">Progresso</span>
           <span className="text-sm text-muted-foreground">
-            {completed}/{total} ({pct}%)
+            {resolved}/{counts.total} resolvidas ({resolvedPct}%)
           </span>
         </div>
-        <div className="h-2.5 overflow-hidden rounded-full bg-muted">
-          <div
-            className="h-full rounded-full bg-emerald-500 transition-all"
-            style={{ width: `${pct}%` }}
-          />
+        <div className="flex h-2.5 overflow-hidden rounded-full bg-muted">
+          {appliedPct > 0 ? (
+            <div
+              className="h-full bg-emerald-500 transition-all"
+              style={{ width: `${appliedPct}%` }}
+            />
+          ) : null}
+          {rejectedPct > 0 ? (
+            <div
+              className="h-full bg-red-500 transition-all"
+              style={{ width: `${rejectedPct}%` }}
+            />
+          ) : null}
+          {failedPct > 0 ? (
+            <div
+              className="h-full bg-amber-500 transition-all"
+              style={{ width: `${failedPct}%` }}
+            />
+          ) : null}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+          {counts.applied > 0 ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              {counts.applied} aplicada{counts.applied === 1 ? "" : "s"}
+            </span>
+          ) : null}
+          {counts.rejected > 0 ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-red-500" />
+              {counts.rejected} rejeitada{counts.rejected === 1 ? "" : "s"}
+            </span>
+          ) : null}
+          {counts.failed > 0 ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-amber-500" />
+              {counts.failed} falha{counts.failed === 1 ? "" : "s"}
+            </span>
+          ) : null}
+          {counts.pending > 0 ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-zinc-300" />
+              {counts.pending} pendente{counts.pending === 1 ? "" : "s"}
+            </span>
+          ) : null}
         </div>
       </CardContent>
     </Card>
@@ -430,9 +502,7 @@ export function GoalDetail() {
   const statusColor = STATUS_COLOR[goal.status] ?? "bg-zinc-400";
   const priorityColor = PRIORITY_COLOR[goal.priority] ?? "border-zinc-400 text-zinc-500";
 
-  const appliedChanges = codeChanges.filter(
-    (cc) => cc.status === "applied" || cc.status === "approved",
-  ).length;
+  const progress = computeProgress(codeChanges);
 
   return (
     <div className="space-y-4">
@@ -450,7 +520,7 @@ export function GoalDetail() {
 
       <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
         <div className="space-y-4">
-          <ProgressBar completed={appliedChanges} total={codeChanges.length} />
+          <ProgressBar counts={progress} />
           <CodeChangesPanel codeChanges={codeChanges} />
           <TokenUsagePanel tokenUsage={tokenUsage} />
         </div>
@@ -496,11 +566,11 @@ export function GoalDetail() {
               </p>
               <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-md bg-muted/50 px-3 py-2 text-center">
-                  <p className="text-lg font-bold">{codeChanges.length}</p>
+                  <p className="text-lg font-bold">{progress.total}</p>
                   <p className="text-[10px] text-muted-foreground">Changes</p>
                 </div>
-                <div className="rounded-md bg-muted/50 px-3 py-2 text-center">
-                  <p className="text-lg font-bold">{appliedChanges}</p>
+                <div className="rounded-md bg-emerald-50 px-3 py-2 text-center">
+                  <p className="text-lg font-bold text-emerald-600">{progress.applied}</p>
                   <p className="text-[10px] text-muted-foreground">Aplicadas</p>
                 </div>
                 <div className="rounded-md bg-muted/50 px-3 py-2 text-center">

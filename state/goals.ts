@@ -34,6 +34,42 @@ export function markGoalInProgress(db: BetterSqlite3.Database, goalId: string): 
   ).run(goalId);
 }
 
+export function markGoalCompleted(db: BetterSqlite3.Database, goalId: string): void {
+  db.prepare(
+    "UPDATE goals SET status = 'completed', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'in_progress'",
+  ).run(goalId);
+}
+
+export function tryAutoCompleteGoal(
+  db: BetterSqlite3.Database,
+  shortGoalId: string,
+): boolean {
+  const goal = db
+    .prepare("SELECT id, status FROM goals WHERE id LIKE ? || '%' AND status = 'in_progress' LIMIT 1")
+    .get(shortGoalId) as { id: string; status: string } | undefined;
+
+  if (!goal) return false;
+
+  const pendingCount = db
+    .prepare(
+      `SELECT COUNT(*) as count FROM code_changes
+       WHERE task_id = ?
+         AND status NOT IN ('applied', 'approved', 'rejected', 'failed', 'rolled_back')`,
+    )
+    .get(shortGoalId) as { count: number };
+
+  const totalCount = db
+    .prepare("SELECT COUNT(*) as count FROM code_changes WHERE task_id = ?")
+    .get(shortGoalId) as { count: number };
+
+  if (totalCount.count > 0 && pendingCount.count === 0) {
+    markGoalCompleted(db, goal.id);
+    return true;
+  }
+
+  return false;
+}
+
 export function getGoalById(
   db: BetterSqlite3.Database,
   goalId: string,

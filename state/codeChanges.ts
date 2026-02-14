@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type BetterSqlite3 from "better-sqlite3";
-import { markGoalInProgress } from "./goals.js";
+import { markGoalInProgress, tryAutoCompleteGoal } from "./goals.js";
 
 export type CodeChangeStatus =
   | "pending"
@@ -151,6 +151,20 @@ export function updateCodeChangeStatus(
   values.push(id);
 
   db.prepare(`UPDATE code_changes SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+
+  const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
+    "applied", "rejected", "failed", "rolled_back",
+  ]);
+
+  if (TERMINAL_STATUSES.has(update.status)) {
+    const codeChange = db
+      .prepare("SELECT task_id FROM code_changes WHERE id = ?")
+      .get(id) as { task_id: string } | undefined;
+
+    if (codeChange) {
+      tryAutoCompleteGoal(db, codeChange.task_id);
+    }
+  }
 }
 
 export function getCodeChangeStats7d(db: BetterSqlite3.Database): {
