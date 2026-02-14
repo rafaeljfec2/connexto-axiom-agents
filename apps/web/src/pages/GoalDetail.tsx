@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -11,6 +12,7 @@ import {
   AlertCircle,
   ArrowLeft,
   ChevronRight,
+  ChevronDown,
   FileCode,
   Activity,
   Cpu,
@@ -18,6 +20,8 @@ import {
   Target,
   FolderGit2,
   GitBranch,
+  ShieldAlert,
+  FileText,
 } from "lucide-react";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -166,41 +170,157 @@ function ProgressBar({
   );
 }
 
+interface DescriptionSections {
+  readonly summary: string;
+  readonly details: ReadonlyArray<{ readonly label: string; readonly items: ReadonlyArray<string> }>;
+}
+
+function parseDescription(text: string): DescriptionSections {
+  const sectionPattern = /\b(Summary|Verification|Tests|Notes|Details|Notas|Verificação|Testes|Detalhes)\s*:\s*-?\s*/gi;
+  const parts = text.split(sectionPattern);
+
+  if (parts.length <= 1) {
+    return { summary: text.trim(), details: [] };
+  }
+
+  let summary = parts[0]?.trim() ?? "";
+  const details: Array<{ label: string; items: Array<string> }> = [];
+
+  for (let i = 1; i < parts.length; i += 2) {
+    const label = parts[i] ?? "";
+    const rawContent = parts[i + 1] ?? "";
+
+    const bullets = rawContent
+      .split(/\s*-\s+/)
+      .map((b) => b.trim())
+      .filter(Boolean);
+
+    if (label.toLowerCase() === "summary") {
+      summary = bullets.join(" ").trim();
+    } else if (bullets.length > 0) {
+      details.push({ label, items: bullets });
+    }
+  }
+
+  return { summary, details };
+}
+
+function parseFilesChanged(raw: string): ReadonlyArray<string> {
+  if (!raw || raw === "[]") return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed as ReadonlyArray<string>;
+  } catch {
+    /* not json */
+  }
+  return raw.split(",").map((f) => f.trim()).filter(Boolean);
+}
+
+function getRiskConfig(risk: number): { readonly color: string; readonly bg: string; readonly label: string } {
+  if (risk >= 3) return { color: "text-red-600", bg: "bg-red-50", label: "Critico" };
+  if (risk >= 2) return { color: "text-amber-600", bg: "bg-amber-50", label: "Alto" };
+  return { color: "text-emerald-600", bg: "bg-emerald-50", label: "Baixo" };
+}
+
 function CodeChangeRow({ codeChange }: Readonly<{ codeChange: GoalCodeChange }>) {
+  const [expanded, setExpanded] = useState(false);
   const variant = CODE_CHANGE_VARIANT_MAP[codeChange.status] ?? "secondary";
   const dotColor = CODE_CHANGE_DOT_COLOR[codeChange.status] ?? "bg-zinc-400";
+  const { summary, details } = parseDescription(codeChange.description);
+  const files = parseFilesChanged(codeChange.files_changed);
+  const riskCfg = getRiskConfig(codeChange.risk);
+  const hasExpandableContent = details.length > 0 || files.length > 0;
+  const filesLabel = files.length === 1 ? "arquivo" : "arquivos";
 
   return (
-    <div className="group flex items-start gap-3 border-b px-4 py-3 last:border-b-0">
-      <div className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dotColor}`} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-3">
-          <p className="text-sm font-medium leading-snug">{codeChange.description}</p>
-          <Badge variant={variant} className="shrink-0 text-[10px]">
-            {STATUS_LABEL[codeChange.status] ?? codeChange.status}
-          </Badge>
-        </div>
-        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <span className="inline-flex items-center gap-1">
-            <span
-              className={`inline-block h-1.5 w-1.5 rounded-full ${codeChange.risk >= 3 ? "bg-red-500" : codeChange.risk >= 2 ? "bg-amber-500" : "bg-emerald-500"}`}
-            />
-            Risco {codeChange.risk}
-          </span>
-          {codeChange.branch_name ? (
-            <span className="inline-flex items-center gap-1">
-              <GitBranch className="h-3 w-3" />
-              {codeChange.branch_name}
+    <div className="border-b last:border-b-0">
+      <div className="flex items-start gap-3 px-4 py-3.5">
+        <div className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dotColor}`} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-[13px] font-medium leading-relaxed text-foreground">
+              {summary}
+            </p>
+            <Badge variant={variant} className="mt-0.5 shrink-0 text-[10px]">
+              {STATUS_LABEL[codeChange.status] ?? codeChange.status}
+            </Badge>
+          </div>
+
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <span className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium ${riskCfg.bg} ${riskCfg.color}`}>
+              <ShieldAlert className="h-3 w-3" />
+              Risco {codeChange.risk} - {riskCfg.label}
             </span>
+            {codeChange.branch_name ? (
+              <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                <GitBranch className="h-3 w-3" />
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">
+                  {codeChange.branch_name}
+                </code>
+              </span>
+            ) : null}
+            <span className="text-[11px] text-muted-foreground">
+              {formatDate(codeChange.created_at)}
+            </span>
+          </div>
+
+          {hasExpandableContent ? (
+            <button
+              type="button"
+              onClick={() => setExpanded((prev) => !prev)}
+              className="mt-2 inline-flex cursor-pointer items-center gap-1 text-[11px] font-medium text-primary/70 transition-colors hover:text-primary"
+            >
+              <ChevronDown className={`h-3 w-3 transition-transform ${expanded ? "rotate-180" : ""}`} />
+              {expanded ? "Menos detalhes" : "Mais detalhes"}
+              {files.length > 0 ? ` · ${files.length} ${filesLabel}` : ""}
+            </button>
           ) : null}
-          <span>{formatDate(codeChange.created_at)}</span>
         </div>
-        {codeChange.files_changed === "[]" ? null : (
-          <p className="mt-1 truncate text-xs text-muted-foreground/70">
-            {codeChange.files_changed}
-          </p>
-        )}
       </div>
+
+      {expanded ? (
+        <div className="border-t border-dashed bg-muted/20 px-4 pb-3.5 pt-3">
+          <div className="ml-[22px] space-y-3">
+            {details.map((section) => (
+              <div key={section.label}>
+                <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                  {section.label}
+                </p>
+                <ul className="space-y-1">
+                  {section.items.map((item) => (
+                    <li
+                      key={item}
+                      className="flex items-start gap-2 text-[12px] leading-relaxed text-foreground/80"
+                    >
+                      <span className="mt-[7px] block h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40" />
+                      <span className="min-w-0 wrap-break-word font-mono text-[11px]">{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+
+            {files.length > 0 ? (
+              <div>
+                <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Arquivos alterados
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {files.map((file) => (
+                    <span
+                      key={file}
+                      className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground"
+                    >
+                      <FileText className="h-2.5 w-2.5" />
+                      {file}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
