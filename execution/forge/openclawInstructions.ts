@@ -10,18 +10,16 @@ export interface InstructionsContext {
   readonly goalContext?: GoalContext;
   readonly repositoryIndexSummary?: string;
   readonly baselineBuildFailed: boolean;
-  readonly workspaceSubdir?: string;
 }
 
 export function buildOpenClawInstructions(ctx: InstructionsContext): string {
   const sections: string[] = [
     buildIdentitySection(),
-    buildWorkspacePathSection(ctx.workspaceSubdir),
     buildTaskSection(ctx),
     buildGoalSection(ctx.goalContext),
     buildNexusSection(ctx.nexusResearch),
     buildRepositorySection(ctx.repositoryIndexSummary),
-    buildToolUsageRules(ctx.baselineBuildFailed, ctx.workspaceSubdir),
+    buildToolUsageRules(ctx.baselineBuildFailed),
     buildQualityRules(),
     buildSecurityRules(),
   ];
@@ -39,24 +37,6 @@ function buildIdentitySection(): string {
   ].join("\n");
 }
 
-function buildWorkspacePathSection(workspaceSubdir?: string): string {
-  if (!workspaceSubdir) return "";
-
-  return [
-    "# CRITICAL — Workspace Path",
-    "",
-    `ALL project source files are located inside the \`${workspaceSubdir}/\` directory.`,
-    `You MUST prefix EVERY file path with \`${workspaceSubdir}/\` when using ANY tool.`,
-    "",
-    "Examples:",
-    `- To read \`src/index.ts\`, use path: \`${workspaceSubdir}/src/index.ts\``,
-    `- To list the root, use path: \`${workspaceSubdir}/\``,
-    `- To search code, use paths relative to: \`${workspaceSubdir}/\``,
-    "",
-    `NEVER use paths without the \`${workspaceSubdir}/\` prefix. Files outside this directory are NOT part of the project.`,
-    `Start EVERY task by running \`list_directory\` on \`${workspaceSubdir}/\` to see the project structure.`,
-  ].join("\n");
-}
 
 function buildTaskSection(ctx: InstructionsContext): string {
   const lines = [
@@ -126,19 +106,20 @@ function buildRepositorySection(summary?: string): string {
   ].join("\n");
 }
 
-function buildToolUsageRules(baselineBuildFailed: boolean, workspaceSubdir?: string): string {
-  const pathPrefix = workspaceSubdir ? `${workspaceSubdir}/` : "";
-
+function buildToolUsageRules(baselineBuildFailed: boolean): string {
   const lines = [
     "# Tool Usage Rules",
     "",
     "## Workflow",
-    `1. Start by understanding the codebase: use \`list_directory\` on \`${pathPrefix}\` then \`search_code\` and \`read_file\` to find relevant files`,
-    `2. Use \`read_file\` before editing ANY file to understand its current state`,
-    `3. Make changes using \`edit_file\` (preferred for partial changes) or \`write_file\` (for new files or complete rewrites)`,
-    "4. After making changes, verify them:",
-    `   - Run \`run_command\` with 'cd ${pathPrefix.replace(/\/$/, "")} && npx tsc --noEmit' to check TypeScript errors`,
-    `   - Run \`run_command\` with 'cd ${pathPrefix.replace(/\/$/, "")} && npx eslint <changed-files>' to check lint`,
+    "1. **FIRST**: Read the file `_PROJECT_TREE.txt` — it contains the full directory structure of the project.",
+    "   Use the paths listed there to navigate the codebase. Do NOT try to read directories — only read files.",
+    "2. Use `read_file` before editing ANY file to understand its current state.",
+    "   IMPORTANT: Only pass **file paths** to `read_file`, never directory paths. Reading a directory will fail with EISDIR.",
+    "3. To find specific content, use `search_code` instead of trying to read directories.",
+    "4. Make changes using `edit_file` (preferred for partial changes) or `write_file` (for new files or complete rewrites).",
+    "5. After making changes, verify them:",
+    "   - Run `npx tsc --noEmit` to check TypeScript errors",
+    "   - Run `npx eslint <changed-files>` to check lint",
   ];
 
   if (baselineBuildFailed) {
@@ -150,13 +131,15 @@ function buildToolUsageRules(baselineBuildFailed: boolean, workspaceSubdir?: str
   }
 
   lines.push(
-    "5. If verification finds errors, fix them and re-verify",
-    "6. When done, provide a clear summary of what you changed and why",
+    "6. If verification finds errors, fix them and re-verify",
+    "7. When done, provide a clear summary of what you changed and why",
     "",
     "## Important",
+    "- **NEVER pass a directory path to `read_file`** — it will fail with EISDIR. Always use exact file paths from `_PROJECT_TREE.txt`.",
     "- The `search` parameter in `edit_file` must match the file content EXACTLY (copy from `read_file` output)",
     "- Never guess file contents — always `read_file` first",
-    `- ALL paths MUST start with \`${pathPrefix}\` — this is where the project files live`,
+    "- All paths are relative to the project root (e.g. `apps/web/src/styles/globals.css`)",
+    "- Ignore markdown files at the root (AGENTS.md, TOOLS.md, etc.) — those are NOT part of the project",
     "- Edit the minimum number of files necessary to complete the task",
     "- Do not add unnecessary comments to the code",
     "- When the task is complete, stop calling tools and provide your summary",

@@ -150,6 +150,15 @@ async function handleReadFile(config: ToolExecutorConfig, args: ToolArguments): 
 
   try {
     const stat = await fs.stat(resolved);
+
+    if (stat.isDirectory()) {
+      return formatError(
+        `"${filePath}" is a directory, not a file. You cannot read directories. ` +
+        "Read `_PROJECT_TREE.txt` first to see the full project structure, " +
+        "then use exact file paths. Use `search_code` to find specific content.",
+      );
+    }
+
     if (stat.size > MAX_READ_FILE_SIZE) {
       return formatError(`File too large: ${String(stat.size)} bytes (max ${String(MAX_READ_FILE_SIZE)})`);
     }

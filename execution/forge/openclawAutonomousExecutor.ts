@@ -1,8 +1,6 @@
 import type BetterSqlite3 from "better-sqlite3";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { logger } from "../../config/logger.js";
 import type { KairosDelegation } from "../../orchestration/types.js";
 import type { Project } from "../../state/projects.js";
@@ -19,89 +17,278 @@ import type { ToolExecutorConfig } from "./openclawToolExecutor.js";
 import { buildOpenClawInstructions } from "./openclawInstructions.js";
 import type { NexusResearchContext, GoalContext, ForgeCodeOutput } from "./forgeTypes.js";
 
-const execFileAsync = promisify(execFile);
-
 const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 const DEFAULT_MAX_ITERATIONS = 20;
 const DEFAULT_MAX_TASK_TIMEOUT_MS = 300_000;
 const DEFAULT_PER_TASK_TOKEN_LIMIT = 50_000;
 const REPO_INDEX_MAX_CHARS = 3000;
 
-const OPENCLAW_SANDBOX_PATH = path.resolve(process.cwd(), "sandbox", "forge");
-const SANDBOX_WORKSPACE_LINK = "workspace";
+const OPENCLAW_AGENT_WORKSPACE = path.resolve(process.cwd(), "sandbox", "forge");
 
-async function linkWorkspaceToSandbox(workspacePath: string): Promise<string> {
-  const linkPath = path.join(OPENCLAW_SANDBOX_PATH, SANDBOX_WORKSPACE_LINK);
+const SKIP_DIRS = new Set([
+  "node_modules", ".git", "dist", "build", ".next", ".turbo",
+  ".cache", ".pnpm-store", "coverage", ".nyc_output", "sandbox",
+]);
+
+const PROJECT_TREE_FILENAME = "_PROJECT_TREE.txt";
+
+const OPENCLAW_AGENT_FILES = new Set([
+  "AGENTS.md", "BOOTSTRAP.md", "HEARTBEAT.md", "IDENTITY.md",
+  "SOUL.md", "TOOLS.md", "USER.md", "MEMORY.md", "memory",
+  PROJECT_TREE_FILENAME,
+]);
+
+let copiedProjectEntries: string[] = [];
+let preExistingSandboxEntries: Set<string> = new Set();
+
+async function copyWorkspaceToSandbox(workspacePath: string): Promise<void> {
+  await fsPromises.mkdir(OPENCLAW_AGENT_WORKSPACE, { recursive: true });
+
+  const existingEntries = await fsPromises.readdir(OPENCLAW_AGENT_WORKSPACE).catch(() => []);
+  preExistingSandboxEntries = new Set(existingEntries);
+
+  copiedProjectEntries = [];
+
+  const entries = await fsPromises.readdir(workspacePath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (SKIP_DIRS.has(entry.name)) continue;
+    if (entry.isSymbolicLink()) continue;
+    if (OPENCLAW_AGENT_FILES.has(entry.name)) continue;
+
+    const srcPath = path.join(workspacePath, entry.name);
+    const destPath = path.join(OPENCLAW_AGENT_WORKSPACE, entry.name);
+
+    if (entry.isDirectory()) {
+      await fsPromises.mkdir(destPath, { recursive: true });
+      await copyDirectoryRecursive(srcPath, destPath);
+      copiedProjectEntries.push(entry.name);
+    } else if (entry.isFile()) {
+      await fsPromises.copyFile(srcPath, destPath);
+      copiedProjectEntries.push(entry.name);
+    }
+  }
+
+  await generateProjectTree(workspacePath);
+
+  const verifyEntries = await fsPromises.readdir(OPENCLAW_AGENT_WORKSPACE).catch(() => []);
+  logger.info(
+    {
+      sandboxPath: OPENCLAW_AGENT_WORKSPACE,
+      source: workspacePath,
+      copiedEntries: copiedProjectEntries.length,
+      copiedNames: copiedProjectEntries,
+      sandboxContents: verifyEntries,
+    },
+    "Copied project workspace to OpenClaw sandbox root",
+  );
+}
+
+const PROJECT_TREE_MAX_DEPTH = 5;
+const PROJECT_TREE_MAX_ENTRIES = 500;
+
+async function generateProjectTree(workspacePath: string): Promise<void> {
+  const lines: string[] = [
+    "# Project Directory Structure",
+    "# Read this file FIRST to understand the project layout.",
+    "# Use exact file paths from this listing when reading files.",
+    "",
+  ];
+
+  let entryCount = 0;
+
+  async function walk(dir: string, prefix: string, depth: number): Promise<void> {
+    if (depth > PROJECT_TREE_MAX_DEPTH || entryCount >= PROJECT_TREE_MAX_ENTRIES) return;
+
+    const entries = await fsPromises.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const filtered = entries
+      .filter((e) => !SKIP_DIRS.has(e.name) && !e.isSymbolicLink() && !OPENCLAW_AGENT_FILES.has(e.name))
+      .sort((a, b) => {
+        if (a.isDirectory() && !b.isDirectory()) return -1;
+        if (!a.isDirectory() && b.isDirectory()) return 1;
+        return a.name.localeCompare(b.name);
+      });
+
+    for (const entry of filtered) {
+      if (entryCount >= PROJECT_TREE_MAX_ENTRIES) {
+        lines.push(`${prefix}... (truncated)`);
+        return;
+      }
+
+      const isDir = entry.isDirectory();
+      lines.push(`${prefix}${isDir ? "📁 " : ""}${entry.name}${isDir ? "/" : ""}`);
+      entryCount++;
+
+      if (isDir) {
+        await walk(path.join(dir, entry.name), `${prefix}  `, depth + 1);
+      }
+    }
+  }
+
+  await walk(workspacePath, "", 0);
+
+  const treePath = path.join(OPENCLAW_AGENT_WORKSPACE, PROJECT_TREE_FILENAME);
+  await fsPromises.writeFile(treePath, lines.join("\n"), "utf-8");
+
+  logger.debug({ entries: entryCount }, "Generated project tree file for sandbox");
+}
+
+async function copyDirectoryRecursive(src: string, dest: string): Promise<void> {
+  const entries = await fsPromises.readdir(src, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (SKIP_DIRS.has(entry.name)) continue;
+    if (entry.isSymbolicLink()) continue;
+
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+
+    if (entry.isDirectory()) {
+      await fsPromises.mkdir(destPath, { recursive: true });
+      await copyDirectoryRecursive(srcPath, destPath);
+    } else if (entry.isFile()) {
+      await fsPromises.copyFile(srcPath, destPath);
+    }
+  }
+}
+
+async function syncChangesBack(workspacePath: string): Promise<readonly string[]> {
+  const changedFiles: string[] = [];
 
   try {
-    const existing = await fsPromises.lstat(linkPath).catch(() => null);
-    if (existing) {
-      if (existing.isSymbolicLink()) {
-        await fsPromises.unlink(linkPath);
-      } else if (existing.isDirectory()) {
-        await fsPromises.rm(linkPath, { recursive: true, force: true });
+    for (const entryName of copiedProjectEntries) {
+      const sandboxPath = path.join(OPENCLAW_AGENT_WORKSPACE, entryName);
+      const workspaceEntryPath = path.join(workspacePath, entryName);
+
+      const stat = await fsPromises.lstat(sandboxPath).catch(() => null);
+      if (!stat) continue;
+
+      if (stat.isDirectory()) {
+        await diffAndCopyBack(sandboxPath, workspaceEntryPath, entryName, changedFiles);
+      } else if (stat.isFile()) {
+        const changed = await isFileChanged(sandboxPath, workspaceEntryPath);
+        if (changed) {
+          await fsPromises.copyFile(sandboxPath, workspaceEntryPath);
+          changedFiles.push(entryName);
+        }
       }
     }
 
-    await fsPromises.mkdir(OPENCLAW_SANDBOX_PATH, { recursive: true });
-    await fsPromises.symlink(workspacePath, linkPath, "dir");
-
-    logger.info(
-      { linkPath, target: workspacePath },
-      "Linked project workspace to OpenClaw sandbox",
-    );
+    await syncNewFiles(workspacePath, changedFiles);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    logger.warn({ error: msg }, "Failed to create sandbox symlink, copying key dirs instead");
-    await copyWorkspaceStructure(workspacePath, linkPath);
+    logger.error({ error: msg }, "Failed to sync changes back from sandbox");
   }
 
-  return SANDBOX_WORKSPACE_LINK;
+  if (changedFiles.length > 0) {
+    logger.info(
+      { count: changedFiles.length, files: changedFiles.slice(0, 20) },
+      "Synced changed files back from OpenClaw sandbox",
+    );
+  }
+
+  return changedFiles;
 }
 
-async function copyWorkspaceStructure(
-  workspacePath: string,
-  linkPath: string,
-): Promise<void> {
-  await fsPromises.mkdir(linkPath, { recursive: true });
-  const entries = await fsPromises.readdir(workspacePath, { withFileTypes: true });
+const EXCLUDED_ROOT_EXTENSIONS = new Set([".md", ".sh", ".txt", ".log"]);
 
-  const skipDirs = new Set(["node_modules", ".git", "dist", "build", ".next", ".turbo"]);
+function isExcludedRootFile(name: string): boolean {
+  const ext = path.extname(name).toLowerCase();
+  return EXCLUDED_ROOT_EXTENSIONS.has(ext);
+}
 
-  for (const entry of entries) {
-    if (skipDirs.has(entry.name)) continue;
-    const src = path.join(workspacePath, entry.name);
-    const dest = path.join(linkPath, entry.name);
+async function syncNewFiles(workspacePath: string, changedFiles: string[]): Promise<void> {
+  const sandboxEntries = await fsPromises.readdir(OPENCLAW_AGENT_WORKSPACE, { withFileTypes: true });
+  const known = new Set([...copiedProjectEntries, ...OPENCLAW_AGENT_FILES]);
+
+  for (const entry of sandboxEntries) {
+    if (known.has(entry.name)) continue;
+    if (SKIP_DIRS.has(entry.name)) continue;
+    if (entry.isSymbolicLink()) continue;
+    if (isExcludedRootFile(entry.name)) continue;
+    if (preExistingSandboxEntries.has(entry.name)) continue;
+
+    const sandboxPath = path.join(OPENCLAW_AGENT_WORKSPACE, entry.name);
+    const workspaceEntryPath = path.join(workspacePath, entry.name);
 
     if (entry.isDirectory()) {
-      await fsPromises.symlink(src, dest, "dir").catch(() => {
-        logger.debug({ src, dest }, "Symlink failed for subdirectory");
-      });
+      await fsPromises.mkdir(workspaceEntryPath, { recursive: true });
+      await copyDirectoryRecursive(sandboxPath, workspaceEntryPath);
+      changedFiles.push(entry.name);
     } else if (entry.isFile()) {
-      await fsPromises.symlink(src, dest, "file").catch(() => {
-        logger.debug({ src, dest }, "Symlink failed for file");
-      });
+      await fsPromises.copyFile(sandboxPath, workspaceEntryPath);
+      changedFiles.push(entry.name);
     }
   }
 }
 
-async function unlinkWorkspaceFromSandbox(): Promise<void> {
-  const linkPath = path.join(OPENCLAW_SANDBOX_PATH, SANDBOX_WORKSPACE_LINK);
+async function diffAndCopyBack(
+  sandboxDir: string,
+  workspaceDir: string,
+  relativePath: string,
+  changedFiles: string[],
+): Promise<void> {
+  const entries = await fsPromises.readdir(sandboxDir, { withFileTypes: true });
 
-  try {
-    const stat = await fsPromises.lstat(linkPath).catch(() => null);
-    if (!stat) return;
+  for (const entry of entries) {
+    if (SKIP_DIRS.has(entry.name)) continue;
+    if (entry.isSymbolicLink()) continue;
 
-    if (stat.isSymbolicLink()) {
-      await fsPromises.unlink(linkPath);
-    } else if (stat.isDirectory()) {
-      await fsPromises.rm(linkPath, { recursive: true, force: true });
+    const sandboxPath = path.join(sandboxDir, entry.name);
+    const workspacePath = path.join(workspaceDir, entry.name);
+    const relPath = `${relativePath}/${entry.name}`;
+
+    if (entry.isDirectory()) {
+      await fsPromises.mkdir(workspacePath, { recursive: true });
+      await diffAndCopyBack(sandboxPath, workspacePath, relPath, changedFiles);
+      continue;
     }
 
-    logger.debug("Removed workspace link from OpenClaw sandbox");
+    if (!entry.isFile()) continue;
+
+    const changed = await isFileChanged(sandboxPath, workspacePath);
+    if (changed) {
+      await fsPromises.mkdir(path.dirname(workspacePath), { recursive: true });
+      await fsPromises.copyFile(sandboxPath, workspacePath);
+      changedFiles.push(relPath);
+    }
+  }
+}
+
+async function isFileChanged(sandboxFile: string, workspaceFile: string): Promise<boolean> {
+  try {
+    const [sandboxContent, workspaceContent] = await Promise.all([
+      fsPromises.readFile(sandboxFile),
+      fsPromises.readFile(workspaceFile).catch(() => null),
+    ]);
+
+    if (!workspaceContent) return true;
+
+    return !sandboxContent.equals(workspaceContent);
+  } catch {
+    return true;
+  }
+}
+
+async function cleanupSandboxProjectFiles(): Promise<void> {
+  try {
+    for (const entryName of copiedProjectEntries) {
+      const entryPath = path.join(OPENCLAW_AGENT_WORKSPACE, entryName);
+      const stat = await fsPromises.lstat(entryPath).catch(() => null);
+      if (!stat) continue;
+
+      await fsPromises.rm(entryPath, { recursive: true, force: true });
+    }
+
+    const treeFilePath = path.join(OPENCLAW_AGENT_WORKSPACE, PROJECT_TREE_FILENAME);
+    await fsPromises.rm(treeFilePath, { force: true }).catch(() => {});
+
+    copiedProjectEntries = [];
+    preExistingSandboxEntries = new Set();
+    logger.debug("Removed project files from OpenClaw sandbox");
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    logger.warn({ error: msg }, "Failed to clean up sandbox workspace link");
+    logger.warn({ error: msg }, "Failed to clean up sandbox project files");
   }
 }
 
@@ -166,36 +353,8 @@ async function buildRepositoryIndexSummary(workspacePath: string): Promise<strin
   }
 }
 
-async function detectChangedFiles(workspacePath: string): Promise<readonly string[]> {
-  try {
-    const { stdout } = await execFileAsync(
-      "git",
-      ["diff", "--name-only", "HEAD"],
-      { cwd: workspacePath, timeout: 10_000 },
-    );
 
-    const untrackedResult = await execFileAsync(
-      "git",
-      ["ls-files", "--others", "--exclude-standard"],
-      { cwd: workspacePath, timeout: 10_000 },
-    );
-
-    const tracked = stdout.trim().split("\n").filter(Boolean);
-    const untracked = untrackedResult.stdout.trim().split("\n").filter(Boolean);
-
-    const IGNORED_PREFIXES = ["node_modules", ".git", "dist", "build", ".next", ".turbo"];
-
-    return [...new Set([...tracked, ...untracked])].filter(
-      (f) => !IGNORED_PREFIXES.some((prefix) => f.startsWith(prefix)),
-    );
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    logger.warn({ error: msg }, "Failed to detect changed files via git");
-    return [];
-  }
-}
-
-function buildInitialInput(task: string, expectedOutput: string, workspaceSubdir: string): readonly ResponseItem[] {
+function buildInitialInput(task: string, expectedOutput: string): readonly ResponseItem[] {
   return [
     {
       role: "user",
@@ -206,10 +365,10 @@ function buildInitialInput(task: string, expectedOutput: string, workspaceSubdir
         "",
         expectedOutput ? `Expected output: ${expectedOutput}` : "",
         "",
-        `CRITICAL: All project source files are located under the "${workspaceSubdir}/" directory.`,
-        `You MUST prefix ALL file paths with "${workspaceSubdir}/" when reading, writing, listing, or searching.`,
-        `Example: to read "src/index.ts", use the path "${workspaceSubdir}/src/index.ts".`,
-        `Start by listing the "${workspaceSubdir}/" directory to understand the project structure, then implement the changes.`,
+        "The project source files are in the current directory.",
+        `IMPORTANT: Start by reading the file \`${PROJECT_TREE_FILENAME}\` to see the full project directory structure.`,
+        "Use the exact file paths from that listing. Do NOT pass directory paths to read_file — it will fail.",
+        "Use `search_code` to find specific content across files.",
       ].filter(Boolean).join("\n"),
     },
   ];
@@ -307,54 +466,26 @@ async function handleCompletedResponse(
   state: ToolLoopState,
   ctx: LoopContext,
 ): Promise<IterationOutcome> {
-  const filesChanged = await detectChangedFiles(ctx.workspacePath);
   const description = extractFinalDescription(response);
-
   const elapsed = Math.round(performance.now() - ctx.startTime);
-
-  if (filesChanged.length === 0 && elapsed < 5_000) {
-    logger.warn(
-      { iterations: state.iterationsUsed, elapsed, textPreview: description.slice(0, 200) },
-      "OpenClaw completed very quickly with no file changes — agent may not have found the workspace",
-    );
-
-    return {
-      done: true,
-      result: {
-        success: false,
-        description,
-        filesChanged: [],
-        totalTokensUsed: state.totalTokensUsed,
-        iterationsUsed: state.iterationsUsed,
-        error: "Agent completed without making file changes. Verify workspace symlink and instructions.",
-      },
-    };
-  }
-
-  const hasChanges = filesChanged.length > 0;
 
   logger.info(
     {
       iterations: state.iterationsUsed,
       tokens: state.totalTokensUsed,
-      filesChanged: filesChanged.length,
       elapsed,
-      success: hasChanges,
     },
-    hasChanges
-      ? "OpenClaw autonomous execution completed with changes"
-      : "OpenClaw autonomous execution completed but no files were changed",
+    "OpenClaw autonomous execution completed — file sync will determine final result",
   );
 
   return {
     done: true,
     result: {
-      success: hasChanges,
+      success: true,
       description,
-      filesChanged,
+      filesChanged: [],
       totalTokensUsed: state.totalTokensUsed,
       iterationsUsed: state.iterationsUsed,
-      error: hasChanges ? undefined : "Agent completed but no file changes were detected",
     },
   };
 }
@@ -412,10 +543,9 @@ async function processIteration(
   }
 
   logger.warn({ status: response.status, iteration: state.iterationsUsed }, "Unexpected status, treating as completed");
-  const filesChanged = await detectChangedFiles(ctx.workspacePath);
   return {
     done: true,
-    result: { success: filesChanged.length > 0, description: response.text ?? "Unexpected completion", filesChanged, totalTokensUsed: state.totalTokensUsed, iterationsUsed: state.iterationsUsed },
+    result: { success: true, description: response.text ?? "Unexpected completion", filesChanged: [], totalTokensUsed: state.totalTokensUsed, iterationsUsed: state.iterationsUsed },
   };
 }
 
@@ -424,7 +554,6 @@ interface OpenClawLoopParams {
   readonly delegation: KairosDelegation;
   readonly project: Project;
   readonly workspacePath: string;
-  readonly workspaceSubdir: string;
   readonly config: OpenClawExecutorConfig;
   readonly startTime: number;
   readonly traceId?: string;
@@ -446,21 +575,38 @@ export async function executeWithOpenClaw(
 
   const startTime = performance.now();
 
-  const workspaceSubdir = await linkWorkspaceToSandbox(workspacePath);
+  await copyWorkspaceToSandbox(workspacePath);
   logger.info(
-    { sandboxLink: workspaceSubdir, workspacePath },
-    "OpenClaw sandbox workspace linked",
+    { sandboxPath: OPENCLAW_AGENT_WORKSPACE, workspacePath },
+    "OpenClaw sandbox workspace prepared",
   );
 
   try {
-    return await executeOpenClawLoop({ db, delegation, project, workspacePath, workspaceSubdir, config, startTime, traceId });
+    const result = await executeOpenClawLoop({ db, delegation, project, workspacePath, config, startTime, traceId });
+
+    const syncedFiles = await syncChangesBack(workspacePath);
+
+    if (syncedFiles.length > 0 && !result.success) {
+      return {
+        ...result,
+        success: true,
+        filesChanged: syncedFiles,
+        error: undefined,
+      };
+    }
+
+    if (syncedFiles.length > 0) {
+      return { ...result, filesChanged: syncedFiles };
+    }
+
+    return result;
   } finally {
-    await unlinkWorkspaceFromSandbox();
+    await cleanupSandboxProjectFiles();
   }
 }
 
 async function executeOpenClawLoop(params: OpenClawLoopParams): Promise<OpenClawExecutionResult> {
-  const { db, delegation, project, workspacePath, workspaceSubdir, config, startTime, traceId } = params;
+  const { db, delegation, project, workspacePath, config, startTime, traceId } = params;
   const { task, expected_output, goal_id } = delegation;
 
   const [nexusResearch, goalContext, repoIndexSummary, baselineBuildFailed] = await Promise.all([
@@ -480,7 +626,6 @@ async function executeOpenClawLoop(params: OpenClawLoopParams): Promise<OpenClaw
     goalContext,
     repositoryIndexSummary: repoIndexSummary || undefined,
     baselineBuildFailed,
-    workspaceSubdir,
   });
 
   const ctx: LoopContext = {
@@ -494,7 +639,7 @@ async function executeOpenClawLoop(params: OpenClawLoopParams): Promise<OpenClaw
   };
 
   const state: ToolLoopState = {
-    conversationHistory: [...buildInitialInput(task, expected_output, workspaceSubdir)],
+    conversationHistory: [...buildInitialInput(task, expected_output)],
     totalTokensUsed: 0,
     iterationsUsed: 0,
     lastResponse: null,
@@ -504,13 +649,13 @@ async function executeOpenClawLoop(params: OpenClawLoopParams): Promise<OpenClaw
     const elapsed = performance.now() - startTime;
     if (elapsed >= config.taskTimeoutMs) {
       logger.warn({ elapsed, timeout: config.taskTimeoutMs, iterations: state.iterationsUsed }, "OpenClaw task timeout reached");
-      return buildTimeoutResult(state, workspacePath);
+      return buildTimeoutResult(state);
     }
 
     const budgetError = checkBudgetExceeded(state, config);
     if (budgetError) {
       logger.warn({ reason: budgetError, iterations: state.iterationsUsed, tokens: state.totalTokensUsed }, "OpenClaw budget limit reached");
-      return buildBudgetExceededResult(state, budgetError, workspacePath);
+      return buildBudgetExceededResult(state, budgetError);
     }
 
     const outcome = await processIteration(state, ctx);
@@ -518,31 +663,22 @@ async function executeOpenClawLoop(params: OpenClawLoopParams): Promise<OpenClaw
   }
 }
 
-async function buildTimeoutResult(
-  state: ToolLoopState,
-  workspacePath: string,
-): Promise<OpenClawExecutionResult> {
-  const filesChanged = await detectChangedFiles(workspacePath);
+function buildTimeoutResult(state: ToolLoopState): OpenClawExecutionResult {
   return {
-    success: filesChanged.length > 0,
-    description: "Task timed out but partial changes may have been applied",
-    filesChanged,
+    success: false,
+    description: "Task timed out — partial changes will be synced back if any",
+    filesChanged: [],
     totalTokensUsed: state.totalTokensUsed,
     iterationsUsed: state.iterationsUsed,
     error: "Task execution timed out",
   };
 }
 
-async function buildBudgetExceededResult(
-  state: ToolLoopState,
-  reason: string,
-  workspacePath: string,
-): Promise<OpenClawExecutionResult> {
-  const filesChanged = await detectChangedFiles(workspacePath);
+function buildBudgetExceededResult(state: ToolLoopState, reason: string): OpenClawExecutionResult {
   return {
-    success: filesChanged.length > 0,
-    description: `Budget limit: ${reason}. Partial changes may have been applied.`,
-    filesChanged,
+    success: false,
+    description: `Budget limit: ${reason}. Partial changes will be synced back if any.`,
+    filesChanged: [],
     totalTokensUsed: state.totalTokensUsed,
     iterationsUsed: state.iterationsUsed,
     error: reason,

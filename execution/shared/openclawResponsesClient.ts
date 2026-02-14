@@ -85,7 +85,7 @@ function loadConfig(): ClientConfig {
   return {
     endpoint,
     apiKey: process.env.OPENCLAW_API_KEY ?? "",
-    timeoutMs: 180_000,
+    timeoutMs: 600_000,
   };
 }
 

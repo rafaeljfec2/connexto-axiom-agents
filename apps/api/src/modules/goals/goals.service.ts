@@ -14,17 +14,6 @@ export interface GoalRow {
   readonly updated_at: string;
 }
 
-export interface GoalTaskRow {
-  readonly id: string;
-  readonly goal_id: string;
-  readonly agent_id: string;
-  readonly title: string;
-  readonly description: string | null;
-  readonly status: string;
-  readonly created_at: string;
-  readonly updated_at: string;
-}
-
 export interface GoalCodeChangeRow {
   readonly id: string;
   readonly task_id: string;
@@ -36,22 +25,19 @@ export interface GoalCodeChangeRow {
   readonly created_at: string;
 }
 
-export interface GoalOutcomeRow {
-  readonly id: string;
+export interface GoalTokenUsageRow {
   readonly agent_id: string;
-  readonly task: string;
-  readonly status: string;
-  readonly error: string | null;
-  readonly execution_time_ms: number | null;
-  readonly tokens_used: number | null;
-  readonly created_at: string;
+  readonly executions: number;
+  readonly input_tokens: number;
+  readonly output_tokens: number;
+  readonly total_tokens: number;
+  readonly last_execution: string;
 }
 
 export interface GoalDetails {
   readonly goal: GoalRow;
-  readonly tasks: ReadonlyArray<GoalTaskRow>;
   readonly codeChanges: ReadonlyArray<GoalCodeChangeRow>;
-  readonly outcomes: ReadonlyArray<GoalOutcomeRow>;
+  readonly tokenUsage: ReadonlyArray<GoalTokenUsageRow>;
 }
 
 interface GoalFilters {
@@ -167,36 +153,34 @@ export class GoalsService {
       throw new NotFoundException(`Goal ${id} not found`);
     }
 
-    const tasks = this.db
-      .prepare(
-        `SELECT id, goal_id, agent_id, title, description, status, created_at, updated_at
-        FROM tasks
-        WHERE goal_id = @goalId
-        ORDER BY created_at ASC`,
-      )
-      .all({ goalId: id }) as ReadonlyArray<GoalTaskRow>;
+    const shortGoalId = id.split("-")[0];
 
     const codeChanges = this.db
       .prepare(
-        `SELECT cc.id, cc.task_id, cc.description, cc.files_changed, cc.risk, cc.status, cc.branch_name, cc.created_at
-        FROM code_changes cc
-        JOIN tasks t ON t.id = cc.task_id
-        WHERE t.goal_id = @goalId
-        ORDER BY cc.created_at DESC`,
+        `SELECT id, task_id, description, files_changed, risk, status, branch_name, created_at
+        FROM code_changes
+        WHERE task_id = @shortGoalId
+        ORDER BY created_at DESC`,
       )
-      .all({ goalId: id }) as ReadonlyArray<GoalCodeChangeRow>;
+      .all({ shortGoalId }) as ReadonlyArray<GoalCodeChangeRow>;
 
-    const outcomes = this.db
+    const tokenUsage = this.db
       .prepare(
-        `SELECT id, agent_id, task, status, error, execution_time_ms, tokens_used, created_at
-        FROM outcomes
-        WHERE task LIKE '%' || @goalId || '%'
-        ORDER BY created_at DESC
-        LIMIT 10`,
+        `SELECT
+          agent_id,
+          COUNT(*) as executions,
+          SUM(input_tokens) as input_tokens,
+          SUM(output_tokens) as output_tokens,
+          SUM(total_tokens) as total_tokens,
+          MAX(created_at) as last_execution
+        FROM token_usage
+        WHERE task_id = @shortGoalId
+        GROUP BY agent_id
+        ORDER BY total_tokens DESC`,
       )
-      .all({ goalId: id }) as ReadonlyArray<GoalOutcomeRow>;
+      .all({ shortGoalId }) as ReadonlyArray<GoalTokenUsageRow>;
 
-    return { goal, tasks, codeChanges, outcomes };
+    return { goal, codeChanges, tokenUsage };
   }
 
   remove(id: string) {

@@ -179,17 +179,6 @@ export function useOutcomeCycles(params?: {
   });
 }
 
-export interface GoalTask {
-  readonly id: string;
-  readonly goal_id: string;
-  readonly agent_id: string;
-  readonly title: string;
-  readonly description: string | null;
-  readonly status: string;
-  readonly created_at: string;
-  readonly updated_at: string;
-}
-
 export interface GoalCodeChange {
   readonly id: string;
   readonly task_id: string;
@@ -201,22 +190,19 @@ export interface GoalCodeChange {
   readonly created_at: string;
 }
 
-export interface GoalOutcome {
-  readonly id: string;
+export interface GoalTokenUsage {
   readonly agent_id: string;
-  readonly task: string;
-  readonly status: string;
-  readonly error: string | null;
-  readonly execution_time_ms: number | null;
-  readonly tokens_used: number | null;
-  readonly created_at: string;
+  readonly executions: number;
+  readonly input_tokens: number;
+  readonly output_tokens: number;
+  readonly total_tokens: number;
+  readonly last_execution: string;
 }
 
 export interface GoalDetails {
   readonly goal: Goal;
-  readonly tasks: ReadonlyArray<GoalTask>;
   readonly codeChanges: ReadonlyArray<GoalCodeChange>;
-  readonly outcomes: ReadonlyArray<GoalOutcome>;
+  readonly tokenUsage: ReadonlyArray<GoalTokenUsage>;
 }
 
 export function useGoalDetails(goalId: string | null) {
