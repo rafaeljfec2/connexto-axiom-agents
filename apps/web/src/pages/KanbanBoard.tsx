@@ -1,7 +1,6 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGoals, useCreateGoal } from "@/api/hooks";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -15,14 +14,29 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, AlertCircle, Plus } from "lucide-react";
+import {
+  Loader2,
+  AlertCircle,
+  Plus,
+  CircleDot,
+  Timer,
+  CheckCircle2,
+  XCircle,
+  FolderGit2,
+  ChevronRight,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const COLUMNS = [
-  { id: "active", label: "Ativas", color: "bg-blue-500" },
-  { id: "in_progress", label: "Em Progresso", color: "bg-amber-500" },
-  { id: "completed", label: "Concluídas", color: "bg-emerald-500" },
-  { id: "cancelled", label: "Canceladas", color: "bg-zinc-400" },
+  { id: "active", label: "Ativas", color: "bg-blue-500", icon: CircleDot },
+  { id: "in_progress", label: "Em Progresso", color: "bg-amber-500", icon: Timer },
+  { id: "completed", label: "Concluídas", color: "bg-emerald-500", icon: CheckCircle2 },
+  { id: "cancelled", label: "Canceladas", color: "bg-zinc-400", icon: XCircle },
+] as const;
+
+const COLUMN_BG = [
+  "kanban-col-even",
+  "kanban-col-odd",
 ] as const;
 
 const PRIORITY_OPTIONS = [
@@ -31,6 +45,77 @@ const PRIORITY_OPTIONS = [
   { value: 2, label: "Alta" },
   { value: 3, label: "Crítica" },
 ] as const;
+
+const PRIORITY_COLORS: Record<number, string> = {
+  0: "kanban-prio-low",
+  1: "kanban-prio-medium",
+  2: "kanban-prio-high",
+  3: "kanban-prio-critical",
+};
+
+const PRIORITY_LABEL: Record<number, string> = {
+  0: "Baixa",
+  1: "Média",
+  2: "Alta",
+  3: "Crítica",
+};
+
+interface GoalCardProps {
+  readonly goal: {
+    readonly id: string;
+    readonly title: string;
+    readonly priority: number;
+    readonly project_id: string | null;
+    readonly stats?: {
+      readonly total_outcomes: number;
+      readonly success_count: number;
+      readonly failed_count: number;
+    };
+  };
+  readonly columnColor: string;
+  readonly onNavigate: (id: string) => void;
+}
+
+function GoalCard({ goal, columnColor, onNavigate }: GoalCardProps) {
+  const prioClass = PRIORITY_COLORS[goal.priority] ?? PRIORITY_COLORS[0];
+
+  return (
+    <button
+      type="button"
+      onClick={() => onNavigate(goal.id)}
+      className="kanban-card group w-full cursor-pointer text-left"
+    >
+      <div className={`h-[3px] w-full rounded-t-md ${columnColor}`} />
+      <div className="px-3 pb-3 pt-2.5">
+        <p className="kanban-card-title text-[13px] font-semibold leading-snug">
+          {goal.title}
+        </p>
+
+        {goal.project_id ? (
+          <div className="mt-1.5 flex items-center gap-1 text-[11px] text-[#6b7280]">
+            <FolderGit2 className="h-3 w-3" />
+            <span>{goal.project_id}</span>
+          </div>
+        ) : null}
+
+        <div className="mt-2.5 flex items-center justify-between">
+          <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none ${prioClass}`}>
+            P{goal.priority} {PRIORITY_LABEL[goal.priority] ?? ""}
+          </span>
+
+          <div className="flex items-center gap-1.5">
+            {goal.stats ? (
+              <span className="text-[10px] tabular-nums text-[#9ca3af]">
+                {goal.stats.total_outcomes} exec
+              </span>
+            ) : null}
+            <ChevronRight className="h-3.5 w-3.5 text-[#d1d5db] transition-all group-hover:translate-x-0.5 group-hover:text-[#9ca3af]" />
+          </div>
+        </div>
+      </div>
+    </button>
+  );
+}
 
 export function KanbanBoard() {
   const { data: goals, isLoading, error } = useGoals({ includeStats: true });
@@ -63,17 +148,21 @@ export function KanbanBoard() {
     );
   }
 
+  function handleNavigateToGoal(goalId: string) {
+    navigate(`/kanban/${goalId}`);
+  }
+
   if (isLoading) {
     return (
       <div className="flex h-64 items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <Loader2 className="h-8 w-8 animate-spin text-[#9ca3af]" />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex h-64 flex-col items-center justify-center gap-2 text-muted-foreground">
+      <div className="flex h-64 flex-col items-center justify-center gap-2 text-[#9ca3af]">
         <AlertCircle className="h-8 w-8" />
         <p className="text-sm">Erro ao carregar objetivos</p>
       </div>
@@ -85,13 +174,20 @@ export function KanbanBoard() {
     goals: (goals ?? []).filter((g) => g.status === col.id),
   }));
 
+  const totalGoals = goals?.length ?? 0;
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold md:text-2xl">Quadro Kanban</h2>
+        <div>
+          <h2 className="text-xl font-bold text-[#1f2937] md:text-2xl">Quadro Kanban</h2>
+          <p className="mt-0.5 text-sm text-[#6b7280]">
+            {totalGoals} {totalGoals === 1 ? "objetivo" : "objetivos"}
+          </p>
+        </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button size="sm" className="gap-2">
+            <Button size="sm" className="cursor-pointer gap-2">
               <Plus className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Novo Objetivo</span>
             </Button>
@@ -130,7 +226,7 @@ export function KanbanBoard() {
                     id="goal-priority"
                     name="priority"
                     defaultValue="1"
-                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    className="flex h-9 w-full cursor-pointer rounded-md border border-[#e5e7eb] bg-white px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#93c5fd]"
                   >
                     {PRIORITY_OPTIONS.map((opt) => (
                       <option key={opt.value} value={opt.value}>
@@ -140,7 +236,7 @@ export function KanbanBoard() {
                   </select>
                 </div>
                 {createGoal.isError ? (
-                  <p className="text-sm text-destructive">
+                  <p className="text-sm text-red-600">
                     {createGoal.error.message}
                   </p>
                 ) : null}
@@ -149,12 +245,13 @@ export function KanbanBoard() {
                 <Button
                   type="button"
                   variant="outline"
+                  className="cursor-pointer"
                   onClick={() => setDialogOpen(false)}
                   disabled={createGoal.isPending}
                 >
                   Cancelar
                 </Button>
-                <Button type="submit" disabled={createGoal.isPending}>
+                <Button type="submit" className="cursor-pointer" disabled={createGoal.isPending}>
                   {createGoal.isPending ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   ) : null}
@@ -166,53 +263,48 @@ export function KanbanBoard() {
         </Dialog>
       </div>
 
-      <div className="flex gap-4 overflow-x-auto pb-4 md:grid md:grid-cols-4 md:overflow-x-visible">
-        {goalsByStatus.map((column) => (
-          <div key={column.id} className="w-64 shrink-0 md:w-auto">
-            <div className="mb-3 flex items-center gap-2">
-              <div className={`h-2 w-2 rounded-full ${column.color}`} />
-              <h3 className="text-sm font-semibold">{column.label}</h3>
-              <Badge variant="secondary" className="ml-auto text-xs">
-                {column.goals.length}
-              </Badge>
-            </div>
+      <div className="kanban-board flex min-h-[calc(100vh-220px)] overflow-x-auto md:overflow-x-visible">
+        {goalsByStatus.map((column, idx) => {
+          const Icon = column.icon;
+          const isLast = idx === goalsByStatus.length - 1;
+          const bgClass = COLUMN_BG[idx % 2];
 
-            <div className="space-y-2">
-              {column.goals.map((goal) => (
-                <Card
-                  key={goal.id}
-                  className="cursor-pointer transition-shadow hover:shadow-md"
-                  onClick={() => navigate(`/kanban/${goal.id}`)}
-                >
-                  <CardContent className="p-3">
-                    <p className="text-sm font-medium leading-snug">{goal.title}</p>
-                    {goal.project_id ? (
-                      <p className="mt-1 text-xs text-muted-foreground">{goal.project_id}</p>
-                    ) : null}
-                    <div className="mt-2 flex items-center gap-2">
-                      <Badge variant="outline" className="text-xs">
-                        P{goal.priority}
-                      </Badge>
-                      {goal.stats ? (
-                        <span className="text-xs text-muted-foreground">
-                          {goal.stats.total_outcomes} exec
-                        </span>
-                      ) : null}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+          return (
+            <div
+              key={column.id}
+              className={`flex w-72 shrink-0 flex-col md:w-auto md:flex-1 ${bgClass} ${isLast ? "" : "kanban-col-divider"}`}
+            >
+              <div className="kanban-col-header sticky top-0 z-10 flex items-center gap-2 px-3 py-2.5">
+                <div className={`h-2.5 w-2.5 rounded-full ${column.color}`} />
+                <h3 className="text-xs font-bold uppercase tracking-wide text-[#6b7280]">
+                  {column.label}
+                </h3>
+                <Badge variant="secondary" className="ml-auto text-[10px] tabular-nums">
+                  {column.goals.length}
+                </Badge>
+              </div>
 
-              {column.goals.length === 0 && (
-                <div className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">
-                  Nenhum objetivo
-                </div>
-              )}
+              <div className="flex-1 space-y-2 p-2.5">
+                {column.goals.map((goal) => (
+                  <GoalCard
+                    key={goal.id}
+                    goal={goal}
+                    columnColor={column.color}
+                    onNavigate={handleNavigateToGoal}
+                  />
+                ))}
+
+                {column.goals.length === 0 ? (
+                  <div className="flex flex-col items-center gap-2 rounded-md border border-dashed border-[#e5e7eb] px-4 py-10 text-center">
+                    <Icon className="h-7 w-7 text-[#d1d5db]" />
+                    <p className="text-[11px] text-[#9ca3af]">Nenhum objetivo</p>
+                  </div>
+                ) : null}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
-
     </div>
   );
 }
