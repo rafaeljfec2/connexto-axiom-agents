@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type BetterSqlite3 from "better-sqlite3";
+import { markGoalInProgress } from "./goals.js";
 
 export type CodeChangeStatus =
   | "pending"
@@ -67,6 +68,14 @@ export function saveCodeChange(db: BetterSqlite3.Database, entry: CodeChangeEntr
     entry.pendingFiles ?? null,
     entry.projectId ?? null,
   );
+
+  const goal = db
+    .prepare("SELECT id FROM goals WHERE id LIKE ? || '%' AND status = 'active' LIMIT 1")
+    .get(entry.taskId) as { id: string } | undefined;
+
+  if (goal) {
+    markGoalInProgress(db, goal.id);
+  }
 
   return id;
 }

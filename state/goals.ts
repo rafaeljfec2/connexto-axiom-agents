@@ -13,7 +13,7 @@ export interface Goal {
 
 export function loadGoals(db: BetterSqlite3.Database): readonly Goal[] {
   return db
-    .prepare("SELECT * FROM goals WHERE status = 'active' ORDER BY priority DESC")
+    .prepare("SELECT * FROM goals WHERE status IN ('active', 'in_progress') ORDER BY priority DESC")
     .all() as Goal[];
 }
 
@@ -23,9 +23,15 @@ export function loadGoalsByProject(
 ): readonly Goal[] {
   return db
     .prepare(
-      "SELECT * FROM goals WHERE status = 'active' AND project_id = ? ORDER BY priority DESC",
+      "SELECT * FROM goals WHERE status IN ('active', 'in_progress') AND project_id = ? ORDER BY priority DESC",
     )
     .all(projectId) as Goal[];
+}
+
+export function markGoalInProgress(db: BetterSqlite3.Database, goalId: string): void {
+  db.prepare(
+    "UPDATE goals SET status = 'in_progress', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'active'",
+  ).run(goalId);
 }
 
 export function getGoalById(
