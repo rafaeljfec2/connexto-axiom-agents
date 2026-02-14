@@ -33,7 +33,7 @@
         "id": "forge",
         "workspace": "./sandbox/forge",
         "model": {
-          "primary": "openai/gpt-5.3-codex"
+          "primary": "openai/gpt-5.2-codex"
         },
         "sandbox": {
           "mode": "all",
@@ -41,8 +41,8 @@
           "workspaceAccess": "rw"
         },
         "tools": {
-          "allow": ["read", "write"],
-          "deny": ["exec", "edit", "apply_patch", "browser", "gateway", "process"]
+          "allow": ["read", "write", "edit", "exec"],
+          "deny": ["apply_patch", "browser", "gateway", "process"]
         }
       },
       {
