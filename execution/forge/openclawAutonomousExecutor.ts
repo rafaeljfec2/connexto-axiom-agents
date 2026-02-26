@@ -14,6 +14,7 @@ import type {
   ResponseItem,
   OpenClawToolResponse,
   ToolCall,
+  ToolDefinition,
 } from "../shared/openclawResponsesClient.js";
 import { getAllToolDefinitions } from "./openclawTools.js";
 import { createDefaultConfig, executeTool } from "./openclawToolExecutor.js";
@@ -526,7 +527,7 @@ function extractFinalDescription(response: OpenClawToolResponse): string {
 interface LoopContext {
   readonly config: OpenClawExecutorConfig;
   readonly instructions: string;
-  readonly tools: readonly import("../shared/openclawResponsesClient.js").ToolDefinition[];
+  readonly tools: readonly ToolDefinition[];
   readonly toolExecutorConfig: ToolExecutorConfig;
   readonly workspacePath: string;
   readonly traceId?: string;
@@ -594,7 +595,8 @@ async function handleToolCallResponse(
   state: ToolLoopState,
   ctx: LoopContext,
 ): Promise<void> {
-  const toolResults = await executeToolCalls(ctx.toolExecutorConfig, response.toolCalls!);
+  const toolCalls = response.toolCalls ?? [];
+  const toolResults = await executeToolCalls(ctx.toolExecutorConfig, toolCalls);
 
   if (response.rawAssistantMessage) {
     state.conversationHistory.push({
@@ -604,7 +606,7 @@ async function handleToolCallResponse(
     });
   }
 
-  const resultItems = buildToolResultItems(response.toolCalls!, toolResults);
+  const resultItems = buildToolResultItems(toolCalls, toolResults);
   state.conversationHistory.push(...resultItems);
 }
 
