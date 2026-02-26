@@ -14,15 +14,20 @@ export interface Project {
   readonly token_budget_monthly: number;
   readonly status: string;
   readonly forge_executor: ForgeExecutorMode;
+  readonly push_enabled: number | null;
   readonly tokens_used_month: number;
   readonly created_at: string;
   readonly updated_at: string;
 }
 
-const COLUMNS = `id, project_id, repo_source, language, framework, risk_profile, autonomy_level, token_budget_monthly, status, forge_executor, tokens_used_month, created_at, updated_at`;
+const COLUMNS = `id, project_id, repo_source, language, framework, risk_profile, autonomy_level, token_budget_monthly, status, forge_executor, push_enabled, tokens_used_month, created_at, updated_at`;
 
 export function saveProject(db: BetterSqlite3.Database, manifest: ProjectManifest): void {
   const existing = getProjectById(db, manifest.projectId);
+
+  let pushEnabledValue: number | null = null;
+  if (manifest.pushEnabled === true) pushEnabledValue = 1;
+  else if (manifest.pushEnabled === false) pushEnabledValue = 0;
 
   if (existing) {
     db.prepare(
@@ -35,6 +40,7 @@ export function saveProject(db: BetterSqlite3.Database, manifest: ProjectManifes
         token_budget_monthly = ?,
         status = ?,
         forge_executor = ?,
+        push_enabled = ?,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
        WHERE project_id = ?`,
     ).run(
@@ -46,12 +52,13 @@ export function saveProject(db: BetterSqlite3.Database, manifest: ProjectManifes
       manifest.tokenBudgetMonthly,
       manifest.status,
       manifest.forgeExecutor,
+      pushEnabledValue,
       manifest.projectId,
     );
   } else {
     db.prepare(
-      `INSERT INTO projects (id, project_id, repo_source, language, framework, risk_profile, autonomy_level, token_budget_monthly, status, forge_executor)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO projects (id, project_id, repo_source, language, framework, risk_profile, autonomy_level, token_budget_monthly, status, forge_executor, push_enabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       crypto.randomUUID(),
       manifest.projectId,
@@ -63,6 +70,7 @@ export function saveProject(db: BetterSqlite3.Database, manifest: ProjectManifes
       manifest.tokenBudgetMonthly,
       manifest.status,
       manifest.forgeExecutor,
+      pushEnabledValue,
     );
   }
 }

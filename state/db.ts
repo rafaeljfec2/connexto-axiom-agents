@@ -30,6 +30,7 @@ function applyMigrations(db: BetterSqlite3.Database): void {
   migrateGovernanceDecisions(db);
   migrateOutcomesTraceId(db);
   migrateProjectsForgeExecutor(db);
+  migrateProjectsPushEnabled(db);
   migrateGoalsInProgressStatus(db);
 }
 
@@ -154,6 +155,15 @@ function migrateProjectsForgeExecutor(db: BetterSqlite3.Database): void {
 
   if (!columnNames.has("forge_executor")) {
     db.exec("ALTER TABLE projects ADD COLUMN forge_executor TEXT NOT NULL DEFAULT 'legacy'");
+  }
+}
+
+function migrateProjectsPushEnabled(db: BetterSqlite3.Database): void {
+  const columns = db.pragma("table_info(projects)") as ReadonlyArray<{ name: string }>;
+  const columnNames = new Set(columns.map((c) => c.name));
+
+  if (!columnNames.has("push_enabled")) {
+    db.exec("ALTER TABLE projects ADD COLUMN push_enabled INTEGER");
   }
 }
 

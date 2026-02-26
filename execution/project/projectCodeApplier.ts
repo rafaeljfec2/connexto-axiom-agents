@@ -7,6 +7,7 @@ import { logger } from "../../config/logger.js";
 import { updateCodeChangeStatus, getCodeChangeById } from "../../state/codeChanges.js";
 import {
   buildBranchName,
+  buildAutoBranchName,
   createBranch,
   switchToMain,
   stageFiles,
@@ -62,16 +63,27 @@ export function validateAndCalculateRisk(
   return { valid: true, errors: [], risk: Math.min(risk, 5) };
 }
 
-export async function commitVerifiedChanges(
-  db: BetterSqlite3.Database,
-  changeId: string,
-  description: string,
-  filePaths: readonly string[],
-  workspacePath: string,
-  lintOutput: string,
-  repoSource?: string,
-): Promise<ProjectApplyResult> {
-  const branchName = buildBranchName(changeId);
+export interface CommitOptions {
+  readonly pushEnabled?: boolean;
+  readonly branchPrefix?: "auto" | "task";
+}
+
+export interface CommitVerifiedParams {
+  readonly db: BetterSqlite3.Database;
+  readonly changeId: string;
+  readonly description: string;
+  readonly filePaths: readonly string[];
+  readonly workspacePath: string;
+  readonly lintOutput: string;
+  readonly repoSource?: string;
+  readonly options?: CommitOptions;
+}
+
+export async function commitVerifiedChanges(params: CommitVerifiedParams): Promise<ProjectApplyResult> {
+  const { db, changeId, description, filePaths, workspacePath, lintOutput, repoSource, options } = params;
+  const branchName = options?.branchPrefix === "auto"
+    ? buildAutoBranchName()
+    : buildBranchName(changeId);
 
   try {
     await createBranch(branchName, workspacePath);
@@ -90,7 +102,8 @@ export async function commitVerifiedChanges(
     const commits = await getBranchCommits(branchName, workspacePath);
     const commitsJson = JSON.stringify(commits);
 
-    if (repoSource) {
+    const shouldPush = repoSource && options?.pushEnabled !== false;
+    if (shouldPush) {
       await pushBranchToSource(branchName, repoSource, workspacePath);
     }
 
@@ -106,7 +119,7 @@ export async function commitVerifiedChanges(
     });
 
     logger.info(
-      { changeId, branchName, commitHash: hash, pushedToSource: !!repoSource },
+      { changeId, branchName, commitHash: hash, pushedToSource: Boolean(shouldPush) },
       "Verified project code change committed",
     );
 

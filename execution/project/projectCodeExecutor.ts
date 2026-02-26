@@ -17,6 +17,7 @@ import {
   commitVerifiedChanges,
   validateAndCalculateRisk,
 } from "./projectCodeApplier.js";
+import type { CommitOptions } from "./projectCodeApplier.js";
 import {
   ensureBaseClone,
   ensureBaseDependencies,
@@ -140,6 +141,7 @@ async function executeWithOpenClawMode(
     readonly framework: string;
     readonly repo_source: string;
     readonly forge_executor: string;
+    readonly push_enabled: number | null;
     readonly project_id: string;
   },
   startTime: number,
@@ -164,9 +166,12 @@ async function executeWithOpenClawMode(
     {
       projectId,
       success: openclawResult.success,
+      status: openclawResult.status,
       filesChanged: openclawResult.filesChanged.length,
       tokens: openclawResult.totalTokensUsed,
       iterations: openclawResult.iterationsUsed,
+      validations: openclawResult.validations,
+      correctionCycles: openclawResult.correctionCycles,
     },
     "OpenClaw autonomous execution finished",
   );
@@ -211,6 +216,7 @@ async function executeWithOpenClawMode(
     );
   }
 
+  const pushEnabled = project.push_enabled === 1;
   const parsed = buildForgeCodeOutput(openclawResult);
 
   return handleSuccessfulAgentOutput({
@@ -223,6 +229,7 @@ async function executeWithOpenClawMode(
     totalTokensUsed: openclawResult.totalTokensUsed,
     lintOutput: "",
     startTime,
+    commitOptions: { pushEnabled, branchPrefix: "auto" },
   });
 }
 
@@ -330,6 +337,7 @@ interface SuccessfulAgentOutputContext {
   readonly totalTokensUsed: number;
   readonly lintOutput: string;
   readonly startTime: number;
+  readonly commitOptions?: CommitOptions;
 }
 
 async function handleSuccessfulAgentOutput(
@@ -446,9 +454,10 @@ async function handleSuccessfulAgentOutput(
     );
   }
 
-  const commitResult = await commitVerifiedChanges(
-    db, changeId, parsed.description, filePaths, workspacePath, lintOutput, repoSource,
-  );
+  const commitResult = await commitVerifiedChanges({
+    db, changeId, description: parsed.description, filePaths, workspacePath, lintOutput, repoSource,
+    options: ctx.commitOptions,
+  });
 
   if (commitResult.success) {
     const executionTimeMs = Math.round(performance.now() - startTime);

@@ -17,6 +17,7 @@ export interface ProjectManifest {
   readonly tokenBudgetMonthly: number;
   readonly status: ProjectStatus;
   readonly forgeExecutor: ForgeExecutorMode;
+  readonly pushEnabled?: boolean;
 }
 
 const PROJECT_ID_REGEX = /^[a-z][a-z0-9-]*[a-z0-9]$/;
@@ -43,6 +44,7 @@ export function validateManifest(raw: unknown): ProjectManifest {
   const tokenBudgetMonthly = validateTokenBudget(record["token_budget_monthly"] ?? record["tokenBudgetMonthly"]);
   const status = validateStatus(record["status"]);
   const forgeExecutor = validateForgeExecutor(record["forge_executor"] ?? record["forgeExecutor"]);
+  const pushEnabled = validatePushEnabled(record["push_enabled"] ?? record["pushEnabled"]);
 
   return {
     projectId,
@@ -53,6 +55,7 @@ export function validateManifest(raw: unknown): ProjectManifest {
     tokenBudgetMonthly,
     status,
     forgeExecutor,
+    pushEnabled,
   };
 }
 
@@ -148,6 +151,16 @@ function validateForgeExecutor(value: unknown): ForgeExecutorMode {
     );
   }
   return value as ForgeExecutorMode;
+}
+
+function validatePushEnabled(value: unknown): boolean | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "boolean") {
+    throw new ManifestValidationError(
+      `push_enabled must be a boolean. Got: "${String(value)}"`,
+    );
+  }
+  return value;
 }
 
 export class ManifestValidationError extends Error {

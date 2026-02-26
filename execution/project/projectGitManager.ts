@@ -32,7 +32,8 @@ const FORBIDDEN_ARGS: ReadonlySet<string> = new Set([
   "fetch",
 ]);
 
-const BRANCH_NAME_REGEX = /^forge\/task-[a-f0-9]{8}$/;
+const TASK_BRANCH_REGEX = /^forge\/task-[a-f0-9]{8}$/;
+const AUTO_BRANCH_REGEX = /^forge\/auto-\d{8}-\d{6}$/;
 
 export interface BranchCommit {
   readonly hash: string;
@@ -52,10 +53,14 @@ function validateGitArgs(subcommand: string, args: readonly string[]): void {
   }
 }
 
+function isValidBranchName(branchName: string): boolean {
+  return TASK_BRANCH_REGEX.test(branchName) || AUTO_BRANCH_REGEX.test(branchName);
+}
+
 function validateBranchName(branchName: string): void {
-  if (!BRANCH_NAME_REGEX.test(branchName)) {
+  if (!isValidBranchName(branchName)) {
     throw new Error(
-      `Invalid branch name: "${branchName}". Must match pattern forge/task-<8 hex chars>`,
+      `Invalid branch name: "${branchName}". Must match forge/task-<8hex> or forge/auto-<YYYYMMDD>-<HHmmss>`,
     );
   }
 }
@@ -107,6 +112,14 @@ async function execGit(subcommand: string, args: readonly string[], cwd: string)
 export function buildBranchName(taskId: string): string {
   const shortId = taskId.slice(0, 8).toLowerCase();
   return `forge/task-${shortId}`;
+}
+
+export function buildAutoBranchName(): string {
+  const now = new Date();
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  const datePart = `${String(now.getFullYear())}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+  const timePart = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `forge/auto-${datePart}-${timePart}`;
 }
 
 export async function cloneLocal(source: string, target: string): Promise<void> {

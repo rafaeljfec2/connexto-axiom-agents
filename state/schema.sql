@@ -255,6 +255,7 @@ CREATE TABLE IF NOT EXISTS projects (
   token_budget_monthly  INTEGER NOT NULL,
   status                TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'maintenance', 'paused')),
   forge_executor        TEXT NOT NULL DEFAULT 'legacy' CHECK (forge_executor IN ('openclaw', 'legacy')),
+  push_enabled          INTEGER,
   tokens_used_month     INTEGER NOT NULL DEFAULT 0,
   created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   updated_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))

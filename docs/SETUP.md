@@ -193,6 +193,32 @@ state/               Schema SQL, migrations, CRUD modules, execution history
 workspaces/          Workspaces isolados do FORGE por projeto (gitignored)
 ```
 
+## Recomendacao: Husky + lint-staged nos Projetos-Alvo
+
+Projetos gerenciados pelo FORGE se beneficiam de hooks Git pre-commit para lint e formatacao.
+Isso adiciona uma camada extra de protecao no commit, independente da validacao que o FORGE ja executa.
+
+Para configurar no projeto-alvo:
+
+```bash
+pnpm add -D husky lint-staged
+npx husky init
+```
+
+Configurar `lint-staged` no `package.json` do projeto-alvo:
+
+```json
+{
+  "lint-staged": {
+    "*.{ts,tsx}": ["eslint --fix", "prettier --write"],
+    "*.{json,md}": ["prettier --write"]
+  }
+}
+```
+
+O FORGE continuara rodando sua propria validacao (lint/build/tests) durante o desenvolvimento.
+Os hooks Husky funcionam como safety net adicional no momento do commit via `projectGitManager.ts`.
+
 ## Banco de Dados
 
 O banco SQLite e criado automaticamente em `state/local.db` na primeira execucao.
