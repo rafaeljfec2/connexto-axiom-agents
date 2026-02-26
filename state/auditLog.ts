@@ -7,7 +7,7 @@ export interface AuditEntry {
   readonly inputHash: string;
   readonly outputHash: string | null;
   readonly sanitizerWarnings: readonly string[];
-  readonly runtime: "local" | "openclaw";
+  readonly runtime: "local" | "openclaw" | "claude-cli";
 }
 
 export function logAudit(db: BetterSqlite3.Database, entry: AuditEntry): void {

@@ -30,6 +30,10 @@ import {
   executeWithOpenClaw,
   buildForgeCodeOutput,
 } from "../forge/openclawAutonomousExecutor.js";
+import {
+  executeWithClaudeCli,
+  buildForgeCodeOutputFromCli,
+} from "../forge/claudeCliExecutor.js";
 
 const MAX_FILES_PER_CHANGE = 5;
 
@@ -58,11 +62,18 @@ export async function executeProjectCode(
     const workspacePath = await createTaskWorkspace(projectId, goal_id);
 
     try {
-      const executorMode = (project.forge_executor ?? "legacy") as ForgeExecutorMode;
+      const executorMode = project.forge_executor ?? "legacy";
 
-      const result = executorMode === "openclaw"
-        ? await executeWithOpenClawMode(db, delegation, projectId, workspacePath, project, startTime, traceId)
-        : await executeWithAgentLoop(db, delegation, projectId, workspacePath, project, startTime, traceId);
+      const result = await routeToExecutor({
+        executorMode,
+        db,
+        delegation,
+        projectId,
+        workspacePath,
+        project,
+        startTime,
+        traceId,
+      });
 
       return result;
     } finally {
@@ -129,6 +140,139 @@ function isImplementationTask(task: string): boolean {
     if (normalized.includes(pattern)) return true;
   }
   return false;
+}
+
+interface ExecutorRouteContext {
+  readonly executorMode: ForgeExecutorMode;
+  readonly db: BetterSqlite3.Database;
+  readonly delegation: KairosDelegation;
+  readonly projectId: string;
+  readonly workspacePath: string;
+  readonly project: {
+    readonly language: string;
+    readonly framework: string;
+    readonly repo_source: string;
+    readonly forge_executor: string;
+    readonly push_enabled: number | null;
+    readonly project_id: string;
+  };
+  readonly startTime: number;
+  readonly traceId?: string;
+}
+
+async function routeToExecutor(ctx: ExecutorRouteContext): Promise<ExecutionResult> {
+  const { executorMode, db, delegation, projectId, workspacePath, project, startTime, traceId } = ctx;
+
+  switch (executorMode) {
+    case "openclaw":
+      return executeWithOpenClawMode(db, delegation, projectId, workspacePath, project, startTime, traceId);
+    case "claude-cli":
+      return executeWithClaudeCliMode(db, delegation, projectId, workspacePath, project, startTime, traceId);
+    default:
+      return executeWithAgentLoop(db, delegation, projectId, workspacePath, project, startTime, traceId);
+  }
+}
+
+async function executeWithClaudeCliMode(
+  db: BetterSqlite3.Database,
+  delegation: KairosDelegation,
+  projectId: string,
+  workspacePath: string,
+  project: {
+    readonly language: string;
+    readonly framework: string;
+    readonly repo_source: string;
+    readonly forge_executor: string;
+    readonly push_enabled: number | null;
+    readonly project_id: string;
+  },
+  startTime: number,
+  traceId?: string,
+): Promise<ExecutionResult> {
+  const { task } = delegation;
+
+  logger.info(
+    { projectId, mode: "claude-cli", task: task.slice(0, 80) },
+    "Routing to Claude CLI autonomous executor",
+  );
+
+  const cliResult = await executeWithClaudeCli(
+    db,
+    delegation,
+    project as Parameters<typeof executeWithClaudeCli>[2],
+    workspacePath,
+    traceId,
+  );
+
+  logger.info(
+    {
+      projectId,
+      success: cliResult.success,
+      status: cliResult.status,
+      filesChanged: cliResult.filesChanged.length,
+      tokens: cliResult.totalTokensUsed,
+      iterations: cliResult.iterationsUsed,
+      validations: cliResult.validations,
+      correctionCycles: cliResult.correctionCycles,
+    },
+    "Claude CLI autonomous execution finished",
+  );
+
+  if (!cliResult.success) {
+    const executionTimeMs = Math.round(performance.now() - startTime);
+    return buildResult(
+      task,
+      "failed",
+      "",
+      cliResult.error ?? "Claude CLI autonomous execution failed",
+      executionTimeMs,
+      cliResult.totalTokensUsed,
+    );
+  }
+
+  if (cliResult.filesChanged.length === 0) {
+    const executionTimeMs = Math.round(performance.now() - startTime);
+
+    if (isImplementationTask(task)) {
+      logger.warn(
+        { projectId, task: task.slice(0, 100) },
+        "Claude CLI returned no file changes for implementation task",
+      );
+      return buildResult(
+        task,
+        "failed",
+        "",
+        `Implementation task produced no changes: ${cliResult.description.slice(0, 120)}`,
+        executionTimeMs,
+        cliResult.totalTokensUsed,
+      );
+    }
+
+    return buildResult(
+      task,
+      "success",
+      `[${projectId}] Nenhuma alteracao necessaria: ${cliResult.description}`,
+      undefined,
+      executionTimeMs,
+      cliResult.totalTokensUsed,
+    );
+  }
+
+  const pushEnabled = project.push_enabled === 1;
+  const parsed = buildForgeCodeOutputFromCli(cliResult);
+
+  return handleSuccessfulAgentOutput({
+    db,
+    delegation,
+    projectId,
+    workspacePath,
+    repoSource: project.repo_source,
+    parsed,
+    totalTokensUsed: cliResult.totalTokensUsed,
+    lintOutput: "",
+    startTime,
+    commitOptions: { pushEnabled, branchPrefix: "auto" },
+  });
 }
 
 async function executeWithOpenClawMode(

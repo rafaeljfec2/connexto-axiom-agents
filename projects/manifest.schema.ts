@@ -1,7 +1,7 @@
 export type RiskProfile = "low" | "medium" | "high";
 export type AutonomyLevel = 1 | 2 | 3;
 export type ProjectStatus = "active" | "maintenance" | "paused";
-export type ForgeExecutorMode = "openclaw" | "legacy";
+export type ForgeExecutorMode = "openclaw" | "legacy" | "claude-cli";
 
 export interface ProjectStack {
   readonly language: string;
@@ -27,7 +27,7 @@ const MAX_PROJECT_ID_LENGTH = 64;
 const VALID_RISK_PROFILES: readonly RiskProfile[] = ["low", "medium", "high"];
 const VALID_AUTONOMY_LEVELS: readonly AutonomyLevel[] = [1, 2, 3];
 const VALID_STATUSES: readonly ProjectStatus[] = ["active", "maintenance", "paused"];
-const VALID_FORGE_EXECUTORS: readonly ForgeExecutorMode[] = ["openclaw", "legacy"];
+const VALID_FORGE_EXECUTORS: readonly ForgeExecutorMode[] = ["openclaw", "legacy", "claude-cli"];
 
 export function validateManifest(raw: unknown): ProjectManifest {
   if (raw === null || typeof raw !== "object") {
