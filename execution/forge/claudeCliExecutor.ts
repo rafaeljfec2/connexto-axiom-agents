@@ -25,6 +25,7 @@ import {
   writeReviewReport,
   writeChangesManifest,
 } from "./openclawArtifacts.js";
+import type { ExecutionEventEmitter } from "../shared/executionEventEmitter.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -336,6 +337,7 @@ interface ClaudeCliLoopParams {
   readonly config: ClaudeCliExecutorConfig;
   readonly startTime: number;
   readonly traceId?: string;
+  readonly emitter?: ExecutionEventEmitter;
 }
 
 async function executeClaudeCliTask(
@@ -346,6 +348,17 @@ async function executeClaudeCliTask(
   const { task, expected_output } = delegation;
 
   const prompt = buildPrompt(task, expected_output);
+
+  params.emitter?.info("forge", "forge:cli_spawned", `Spawning Claude CLI (${spawnOpts?.model ?? config.model})`, {
+    phase: "cli_execution",
+    metadata: {
+      model: spawnOpts?.model ?? config.model,
+      maxTurns: config.maxTurns,
+      maxBudgetUsd: config.maxBudgetUsd,
+      resume: Boolean(spawnOpts?.resumeSessionId),
+    },
+  });
+
   const cliResult = await spawnClaudeCli(config, workspacePath, prompt, spawnOpts);
   const parsed = parseClaudeCliOutput(cliResult.stdout);
   const tokensUsed = extractTokensUsed(parsed);
@@ -388,6 +401,24 @@ async function executeClaudeCliTask(
   }
 
   const filesChanged = await detectChangedFiles(workspacePath);
+
+  params.emitter?.info("forge", "forge:cli_completed", "Claude CLI execution completed", {
+    phase: "cli_execution",
+    metadata: {
+      tokensUsed,
+      costUsd,
+      elapsedMs: elapsed,
+      filesChanged: filesChanged.length,
+      sessionId: parsed.session_id,
+    },
+  });
+
+  if (filesChanged.length > 0) {
+    params.emitter?.info("forge", "forge:files_changed", `${filesChanged.length} files modified`, {
+      phase: "cli_execution",
+      metadata: { files: filesChanged },
+    });
+  }
 
   return {
     success: true,
@@ -454,17 +485,35 @@ async function runCorrectionLoop(
   const sessionId = initialResult.sessionId;
 
   for (let cycle = 0; cycle < MAX_CORRECTION_CYCLES; cycle++) {
+    params.emitter?.info("forge", "forge:validation_started", `Validation cycle ${cycle + 1}`, {
+      phase: "validation",
+      metadata: { cycle: cycle + 1, accumulatedCostUsd },
+    });
+
     const validation = await runValidationCycle(params.workspacePath, currentResult.filesChanged);
     validations = validation.results;
 
     if (validation.passed) {
+      params.emitter?.info("forge", "forge:validation_passed", "All validations passed", {
+        phase: "validation",
+        metadata: { cycle: cycle + 1, lint: validations.lint, build: validations.build, tests: validations.tests },
+      });
       logger.info({ cycle, validations }, "All validations passed (Claude CLI)");
       return { ...currentResult, status: "SUCCESS", validations, correctionCycles };
     }
 
     correctionCycles++;
 
+    params.emitter?.warn("forge", "forge:validation_failed", "Validation failed, triggering correction", {
+      phase: "validation",
+      metadata: { cycle: correctionCycles, lint: validations.lint, build: validations.build, tests: validations.tests, accumulatedCostUsd },
+    });
+
     if (accumulatedCostUsd >= params.config.maxTotalCostUsd) {
+      params.emitter?.warn("forge", "forge:cost_ceiling_reached", "Cost ceiling reached during corrections", {
+        phase: "validation",
+        metadata: { accumulatedCostUsd, maxTotalCostUsd: params.config.maxTotalCostUsd },
+      });
       logger.warn(
         { accumulatedCostUsd, maxTotalCostUsd: params.config.maxTotalCostUsd },
         "Total cost ceiling reached — stopping correction cycles",
@@ -522,9 +571,17 @@ async function runPostCorrectionReview(
     return result;
   }
 
+  params.emitter?.info("forge", "forge:review_started", "Heuristic review started", {
+    phase: "review",
+    metadata: { filesCount: result.filesChanged.length },
+  });
+
   const review = await runHeuristicReview(params.workspacePath, result.filesChanged);
 
   if (review.passed) {
+    params.emitter?.info("forge", "forge:review_passed", "Heuristic review passed", {
+      phase: "review",
+    });
     return { ...result, review };
   }
 
@@ -532,6 +589,11 @@ async function runPostCorrectionReview(
   if (!correctionContext) {
     return { ...result, review };
   }
+
+  params.emitter?.warn("forge", "forge:review_failed", "Review found CRITICAL issues", {
+    phase: "review",
+    metadata: { criticalCount: review.criticalCount, warningCount: review.warningCount },
+  });
 
   logger.warn(
     { criticalCount: review.criticalCount, warningCount: review.warningCount },
@@ -599,6 +661,7 @@ export async function executeWithClaudeCli(
   project: Project,
   workspacePath: string,
   traceId?: string,
+  emitter?: ExecutionEventEmitter,
 ): Promise<ClaudeCliExecutionResult> {
   const config = loadClaudeCliConfig();
   const startTime = performance.now();
@@ -637,6 +700,11 @@ export async function executeWithClaudeCli(
     "Model selected based on task type",
   );
 
+  emitter?.info("forge", "forge:model_selected", `Model ${effectiveModel} selected for ${taskType} task`, {
+    phase: "setup",
+    metadata: { taskType, model: effectiveModel, fixModel: config.fixModel },
+  });
+
   await writeExecutionPlan(workspacePath, {
     task: delegation.task,
     taskType,
@@ -664,6 +732,16 @@ export async function executeWithClaudeCli(
 
   await writeClaudeMd(workspacePath, instructionsCtx);
 
+  emitter?.info("forge", "forge:context_loaded", "Context loaded and CLAUDE.md generated", {
+    phase: "setup",
+    metadata: {
+      hasNexusResearch: nexusResearch.length > 0,
+      hasGoalContext: Boolean(goalContext),
+      repoIndexChars: repoIndexSummary?.length ?? 0,
+      baselineBuildFailed,
+    },
+  });
+
   const params: ClaudeCliLoopParams = {
     db,
     delegation,
@@ -672,6 +750,7 @@ export async function executeWithClaudeCli(
     config,
     startTime,
     traceId,
+    emitter,
   };
 
   try {

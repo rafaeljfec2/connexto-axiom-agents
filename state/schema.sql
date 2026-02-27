@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   input_hash         TEXT NOT NULL,
   output_hash        TEXT,
   sanitizer_warnings TEXT,
-  runtime            TEXT NOT NULL CHECK (runtime IN ('local', 'openclaw')),
+  runtime            TEXT NOT NULL CHECK (runtime IN ('local', 'openclaw', 'claude-cli')),
   created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
@@ -254,7 +254,7 @@ CREATE TABLE IF NOT EXISTS projects (
   autonomy_level        INTEGER NOT NULL CHECK (autonomy_level BETWEEN 1 AND 3),
   token_budget_monthly  INTEGER NOT NULL,
   status                TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'maintenance', 'paused')),
-  forge_executor        TEXT NOT NULL DEFAULT 'legacy' CHECK (forge_executor IN ('openclaw', 'legacy')),
+  forge_executor        TEXT NOT NULL DEFAULT 'legacy' CHECK (forge_executor IN ('openclaw', 'legacy', 'claude-cli')),
   push_enabled          INTEGER,
   tokens_used_month     INTEGER NOT NULL DEFAULT 0,
   created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -285,3 +285,20 @@ CREATE TABLE IF NOT EXISTS governance_decisions (
 
 CREATE INDEX IF NOT EXISTS idx_governance_decisions_created_at ON governance_decisions(created_at);
 CREATE INDEX IF NOT EXISTS idx_governance_decisions_model_tier ON governance_decisions(model_tier);
+
+CREATE TABLE IF NOT EXISTS execution_events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  trace_id    TEXT NOT NULL,
+  agent       TEXT NOT NULL,
+  event_type  TEXT NOT NULL,
+  phase       TEXT,
+  message     TEXT NOT NULL,
+  metadata    TEXT,
+  level       TEXT NOT NULL DEFAULT 'info'
+    CHECK (level IN ('info', 'warn', 'error', 'debug')),
+  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_exec_events_trace ON execution_events(trace_id);
+CREATE INDEX IF NOT EXISTS idx_exec_events_created ON execution_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_exec_events_id_trace ON execution_events(id, trace_id);

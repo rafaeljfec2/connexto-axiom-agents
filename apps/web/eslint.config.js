@@ -10,6 +10,11 @@ export default tseslint.config(
   ...tseslint.configs.strict,
   prettier,
   {
+    languageOptions: {
+      parserOptions: {
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
     plugins: {
       "unused-imports": unusedImports,
       "react-hooks": reactHooks,

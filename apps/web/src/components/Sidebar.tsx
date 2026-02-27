@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Columns3, Bot, History } from "lucide-react";
+import { LayoutDashboard, Columns3, Bot, History, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface SidebarProps {
@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { to: "/", label: "Resumo Diário", icon: LayoutDashboard },
   { to: "/kanban", label: "Quadro Kanban", icon: Columns3 },
   { to: "/agents", label: "Agentes", icon: Bot },
+  { to: "/execucoes", label: "Execuções", icon: Activity },
   { to: "/historico", label: "Histórico", icon: History },
 ] as const;
 

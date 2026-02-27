@@ -10,12 +10,14 @@ import { hasPermission } from "../shared/permissions.js";
 import { executeProjectCode } from "../project/projectCodeExecutor.js";
 import { checkOpenClawHealth } from "../shared/openclawClient.js";
 import { ensureSandbox, resolveSandboxPath, validateSandboxLimits } from "../shared/sandbox.js";
+import type { ExecutionEventEmitter } from "../shared/executionEventEmitter.js";
 
 export async function executeForge(
   db: BetterSqlite3.Database,
   delegation: KairosDelegation,
   projectId?: string,
   traceId?: string,
+  emitter?: ExecutionEventEmitter,
 ): Promise<ExecutionResult> {
   if (delegation.agent !== "forge") {
     return buildFailedResult(delegation.task, `Agent "${delegation.agent}" is not forge`);
@@ -45,7 +47,7 @@ export async function executeForge(
       { task: delegation.task, projectId, traceId },
       "Routing to project code executor (project-aware task)",
     );
-    return executeProjectCode(db, delegation, projectId, traceId);
+    return executeProjectCode(db, delegation, projectId, traceId, emitter);
   }
 
   if (useOpenClaw && isCodingTask(delegation)) {

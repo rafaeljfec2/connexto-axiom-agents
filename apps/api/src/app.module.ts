@@ -7,6 +7,7 @@ import { CodeChangesModule } from "./modules/code-changes/code-changes.module";
 import { ArtifactsModule } from "./modules/artifacts/artifacts.module";
 import { CycleModule } from "./modules/cycle/cycle.module";
 import { AgentsModule } from "./modules/agents/agents.module";
+import { ExecutionEventsModule } from "./modules/execution-events/execution-events.module";
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { AgentsModule } from "./modules/agents/agents.module";
     ArtifactsModule,
     CycleModule,
     AgentsModule,
+    ExecutionEventsModule,
   ],
 })
 export class AppModule {}

@@ -279,3 +279,42 @@ export function useRunCycle() {
     },
   });
 }
+
+export interface ExecutionEvent {
+  readonly id: number;
+  readonly trace_id: string;
+  readonly agent: string;
+  readonly event_type: string;
+  readonly phase: string | null;
+  readonly message: string;
+  readonly metadata: string | null;
+  readonly level: string;
+  readonly created_at: string;
+}
+
+export interface TraceSummary {
+  readonly trace_id: string;
+  readonly agent_count: number;
+  readonly event_count: number;
+  readonly first_event_at: string;
+  readonly last_event_at: string;
+  readonly has_errors: number;
+  readonly agents: string;
+}
+
+export function useRecentTraces(limit: number = 20) {
+  return useQuery<readonly TraceSummary[]>({
+    queryKey: ["execution-traces", limit],
+    queryFn: () => api.get(`/execution-events/traces?limit=${limit}`),
+    refetchInterval: 5000,
+  });
+}
+
+export function useTraceEvents(traceId: string | null) {
+  return useQuery<readonly ExecutionEvent[]>({
+    queryKey: ["execution-events", traceId],
+    queryFn: () => api.get(`/execution-events/trace/${traceId}`),
+    enabled: Boolean(traceId),
+    refetchInterval: 3000,
+  });
+}

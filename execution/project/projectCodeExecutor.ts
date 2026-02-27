@@ -34,6 +34,7 @@ import {
   executeWithClaudeCli,
   buildForgeCodeOutputFromCli,
 } from "../forge/claudeCliExecutor.js";
+import type { ExecutionEventEmitter } from "../shared/executionEventEmitter.js";
 
 const MAX_FILES_PER_CHANGE = 5;
 
@@ -42,6 +43,7 @@ export async function executeProjectCode(
   delegation: KairosDelegation,
   projectId: string,
   traceId?: string,
+  emitter?: ExecutionEventEmitter,
 ): Promise<ExecutionResult> {
   const { task, goal_id } = delegation;
   const startTime = performance.now();
@@ -64,6 +66,11 @@ export async function executeProjectCode(
     try {
       const executorMode = project.forge_executor ?? "legacy";
 
+      emitter?.info("forge", "forge:workspace_created", "Task workspace created", {
+        phase: "setup",
+        metadata: { projectId, executorMode, workspacePath },
+      });
+
       const result = await routeToExecutor({
         executorMode,
         db,
@@ -73,6 +80,7 @@ export async function executeProjectCode(
         project,
         startTime,
         traceId,
+        emitter,
       });
 
       return result;
@@ -158,37 +166,42 @@ interface ExecutorRouteContext {
   };
   readonly startTime: number;
   readonly traceId?: string;
+  readonly emitter?: ExecutionEventEmitter;
 }
 
 async function routeToExecutor(ctx: ExecutorRouteContext): Promise<ExecutionResult> {
-  const { executorMode, db, delegation, projectId, workspacePath, project, startTime, traceId } = ctx;
+  const { executorMode, db, delegation, projectId, workspacePath, project, startTime, traceId, emitter } = ctx;
 
   switch (executorMode) {
     case "openclaw":
       return executeWithOpenClawMode(db, delegation, projectId, workspacePath, project, startTime, traceId);
     case "claude-cli":
-      return executeWithClaudeCliMode(db, delegation, projectId, workspacePath, project, startTime, traceId);
+      return executeWithClaudeCliMode({ db, delegation, projectId, workspacePath, project, startTime, traceId, emitter });
     default:
       return executeWithAgentLoop(db, delegation, projectId, workspacePath, project, startTime, traceId);
   }
 }
 
-async function executeWithClaudeCliMode(
-  db: BetterSqlite3.Database,
-  delegation: KairosDelegation,
-  projectId: string,
-  workspacePath: string,
-  project: {
+interface ClaudeCliModeContext {
+  readonly db: BetterSqlite3.Database;
+  readonly delegation: KairosDelegation;
+  readonly projectId: string;
+  readonly workspacePath: string;
+  readonly project: {
     readonly language: string;
     readonly framework: string;
     readonly repo_source: string;
     readonly forge_executor: string;
     readonly push_enabled: number | null;
     readonly project_id: string;
-  },
-  startTime: number,
-  traceId?: string,
-): Promise<ExecutionResult> {
+  };
+  readonly startTime: number;
+  readonly traceId?: string;
+  readonly emitter?: ExecutionEventEmitter;
+}
+
+async function executeWithClaudeCliMode(ctx: ClaudeCliModeContext): Promise<ExecutionResult> {
+  const { db, delegation, projectId, workspacePath, project, startTime, traceId, emitter } = ctx;
   const { task } = delegation;
 
   logger.info(
@@ -202,6 +215,7 @@ async function executeWithClaudeCliMode(
     project as Parameters<typeof executeWithClaudeCli>[2],
     workspacePath,
     traceId,
+    emitter,
   );
 
   logger.info(
@@ -261,7 +275,17 @@ async function executeWithClaudeCliMode(
   const pushEnabled = project.push_enabled === 1;
   const parsed = buildForgeCodeOutputFromCli(cliResult);
 
-  return handleSuccessfulAgentOutput({
+  emitter?.info("forge", "forge:commit_started", "Commit and push flow started", {
+    phase: "delivery",
+    metadata: {
+      filesChanged: cliResult.filesChanged.length,
+      pushEnabled,
+      tokensUsed: cliResult.totalTokensUsed,
+      costUsd: cliResult.totalCostUsd,
+    },
+  });
+
+  const result = await handleSuccessfulAgentOutput({
     db,
     delegation,
     projectId,
@@ -273,6 +297,19 @@ async function executeWithClaudeCliMode(
     startTime,
     commitOptions: { pushEnabled, branchPrefix: "auto" },
   });
+
+  if (result.status === "success") {
+    emitter?.info("forge", "forge:delivery_complete", "Changes committed and delivered", {
+      phase: "delivery",
+      metadata: {
+        status: result.status,
+        tokensUsed: result.tokensUsed,
+        executionTimeMs: result.executionTimeMs,
+      },
+    });
+  }
+
+  return result;
 }
 
 async function executeWithOpenClawMode(

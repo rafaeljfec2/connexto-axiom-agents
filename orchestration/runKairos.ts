@@ -59,13 +59,24 @@ import type {
   GovernanceInfo,
 } from "./types.js";
 import { validateKairosOutput } from "./validateKairos.js";
+import { createEventEmitter } from "../execution/shared/executionEventEmitter.js";
+import type { ExecutionEventEmitter } from "../execution/shared/executionEventEmitter.js";
+import { cleanupOldEvents } from "../state/executionEvents.js";
 
 export async function runKairos(
   db: BetterSqlite3.Database,
   projectId?: string,
 ): Promise<void> {
   const traceId = crypto.randomUUID().slice(0, 8);
+  const emitter = createEventEmitter(db, traceId);
   logger.info({ projectId: projectId ?? "all", traceId }, "Starting cycle...");
+
+  cleanupOldEvents(db);
+
+  emitter.info("kairos", "cycle:start", "Cycle started", {
+    phase: "orchestration",
+    metadata: { projectId: projectId ?? "all" },
+  });
 
   await trySyncPRs(db);
 
@@ -130,6 +141,17 @@ export async function runKairos(
   });
   logger.info({ cycleId, validation: validation.status }, "Governance decision recorded");
 
+  emitter.info("kairos", "cycle:governance", "Governance policy selected", {
+    phase: "governance",
+    metadata: {
+      model: governance.selectedModel,
+      tier: governance.modelTier,
+      complexity: classification.complexity,
+      risk: classification.risk,
+      validation: validation.status,
+    },
+  });
+
   if (kairosUsage) {
     recordKairosTokenUsage(db, kairosUsage);
   }
@@ -162,9 +184,18 @@ export async function runKairos(
     "Delegations filtered",
   );
 
-  const nexusOutput = await executeApprovedNexus(db, finalApproved, traceId);
-  const forgeOutput = await executeApprovedForge(db, finalApproved, projectId, traceId);
-  const vectorOutput = await executeApprovedVector(db, finalApproved, traceId);
+  emitter.info("kairos", "cycle:delegations_filtered", "Delegations filtered and approved", {
+    phase: "filtering",
+    metadata: {
+      approved: finalApproved.length,
+      rejected: filtered.rejected.length,
+      agents: finalApproved.map((d) => d.agent),
+    },
+  });
+
+  const nexusOutput = await executeApprovedNexus(db, finalApproved, traceId, emitter);
+  const forgeOutput = await executeApprovedForge(db, finalApproved, projectId, traceId, emitter);
+  const vectorOutput = await executeApprovedVector(db, finalApproved, traceId, emitter);
 
   const allResults = [...nexusOutput.results, ...forgeOutput.results, ...vectorOutput.results];
   const allBlocked = [...nexusOutput.blocked, ...forgeOutput.blocked, ...vectorOutput.blocked];
@@ -208,6 +239,17 @@ export async function runKairos(
   });
   await sendTelegramMessage(briefingText);
   logger.info("Daily briefing sent");
+
+  emitter.info("kairos", "cycle:end", "Cycle completed", {
+    phase: "orchestration",
+    metadata: {
+      totalResults: allResults.length,
+      successCount: allResults.filter((r) => r.status === "success").length,
+      failedCount: allResults.filter((r) => r.status === "failed").length,
+      blockedCount: allBlocked.length,
+      kairosTokens: kairosUsage?.totalTokens ?? 0,
+    },
+  });
 
   logger.info("Cycle complete.");
 }
@@ -263,6 +305,7 @@ async function executeApprovedNexus(
   db: BetterSqlite3.Database,
   approved: readonly KairosDelegation[],
   traceId?: string,
+  emitter?: ExecutionEventEmitter,
 ): Promise<AgentExecutionOutput> {
   const nexusDelegations = approved.filter((d) => d.agent === "nexus");
 
@@ -283,6 +326,10 @@ async function executeApprovedNexus(
         { task: delegation.task, reason: budgetCheck.reason },
         "Budget gate blocked nexus execution",
       );
+      emitter?.warn("nexus", "delegation:blocked", "Budget gate blocked execution", {
+        phase: "budget_check",
+        metadata: { task: delegation.task.slice(0, 120), reason: budgetCheck.reason },
+      });
       blocked.push({
         task: delegation.task,
         reason: budgetCheck.reason ?? "Orcamento insuficiente",
@@ -290,17 +337,35 @@ async function executeApprovedNexus(
       continue;
     }
 
+    emitter?.info("nexus", "delegation:start", "NEXUS research started", {
+      phase: "execution",
+      metadata: { task: delegation.task.slice(0, 120), goalId: delegation.goal_id },
+    });
+
     const result = await executeNexus(db, delegation);
     saveOutcome(db, result, { traceId });
     results.push(result);
 
     if (result.status === "failed") {
+      emitter?.error("nexus", "delegation:failed", "NEXUS research failed", {
+        phase: "execution",
+        metadata: { task: delegation.task.slice(0, 120), error: result.error?.slice(0, 200) },
+      });
       logger.error(
         { task: delegation.task, error: result.error, traceId },
         "Nexus execution failed, aborting remaining",
       );
       break;
     }
+
+    emitter?.info("nexus", "delegation:complete", "NEXUS research completed", {
+      phase: "execution",
+      metadata: {
+        task: delegation.task.slice(0, 120),
+        tokensUsed: result.tokensUsed,
+        executionTimeMs: result.executionTimeMs,
+      },
+    });
   }
 
   return { results, blocked };
@@ -311,6 +376,7 @@ async function executeApprovedForge(
   approved: readonly KairosDelegation[],
   projectId?: string,
   traceId?: string,
+  emitter?: ExecutionEventEmitter,
 ): Promise<AgentExecutionOutput> {
   const forgeDelegations = approved.filter((d) => d.agent === "forge");
 
@@ -331,6 +397,10 @@ async function executeApprovedForge(
         { task: delegation.task, reason: budgetCheck.reason },
         "Budget gate blocked execution",
       );
+      emitter?.warn("forge", "delegation:blocked", "Budget gate blocked execution", {
+        phase: "budget_check",
+        metadata: { task: delegation.task.slice(0, 120), reason: budgetCheck.reason },
+      });
       blocked.push({
         task: delegation.task,
         reason: budgetCheck.reason ?? "Orcamento insuficiente",
@@ -338,9 +408,22 @@ async function executeApprovedForge(
       continue;
     }
 
-    const result = await executeForge(db, delegation, projectId, traceId);
+    emitter?.info("forge", "delegation:start", "FORGE execution started", {
+      phase: "execution",
+      metadata: {
+        task: delegation.task.slice(0, 120),
+        goalId: delegation.goal_id,
+        projectId: projectId ?? "default",
+      },
+    });
+
+    const result = await executeForge(db, delegation, projectId, traceId, emitter);
 
     if (result.status === "infra_unavailable") {
+      emitter?.warn("forge", "delegation:infra_unavailable", "Infrastructure unavailable", {
+        phase: "execution",
+        metadata: { task: delegation.task.slice(0, 120), error: result.error?.slice(0, 200) },
+      });
       logger.error(
         { task: delegation.task, error: result.error, traceId },
         "Infra unavailable — skipping outcome (not a FORGE failure)",
@@ -352,12 +435,31 @@ async function executeApprovedForge(
     results.push(result);
 
     if (result.status === "failed") {
+      emitter?.error("forge", "delegation:failed", "FORGE execution failed", {
+        phase: "execution",
+        metadata: {
+          task: delegation.task.slice(0, 120),
+          error: result.error?.slice(0, 200),
+          tokensUsed: result.tokensUsed,
+          executionTimeMs: result.executionTimeMs,
+        },
+      });
       logger.error(
         { task: delegation.task, error: result.error, traceId },
         "Forge execution failed, aborting remaining",
       );
       break;
     }
+
+    emitter?.info("forge", "delegation:complete", "FORGE execution completed", {
+      phase: "execution",
+      metadata: {
+        task: delegation.task.slice(0, 120),
+        status: result.status,
+        tokensUsed: result.tokensUsed,
+        executionTimeMs: result.executionTimeMs,
+      },
+    });
   }
 
   return { results, blocked };
@@ -426,6 +528,7 @@ async function executeApprovedVector(
   db: BetterSqlite3.Database,
   approved: readonly KairosDelegation[],
   traceId?: string,
+  emitter?: ExecutionEventEmitter,
 ): Promise<AgentExecutionOutput> {
   const vectorDelegations = approved.filter((d) => d.agent === "vector");
 
@@ -446,6 +549,10 @@ async function executeApprovedVector(
         { task: delegation.task, reason: budgetCheck.reason },
         "Budget gate blocked vector execution",
       );
+      emitter?.warn("vector", "delegation:blocked", "Budget gate blocked execution", {
+        phase: "budget_check",
+        metadata: { task: delegation.task.slice(0, 120), reason: budgetCheck.reason },
+      });
       blocked.push({
         task: delegation.task,
         reason: budgetCheck.reason ?? "Orcamento insuficiente",
@@ -453,17 +560,35 @@ async function executeApprovedVector(
       continue;
     }
 
+    emitter?.info("vector", "delegation:start", "VECTOR draft started", {
+      phase: "execution",
+      metadata: { task: delegation.task.slice(0, 120), goalId: delegation.goal_id },
+    });
+
     const result = await executeVector(db, delegation);
     saveOutcome(db, result, { traceId });
     results.push(result);
 
     if (result.status === "failed") {
+      emitter?.error("vector", "delegation:failed", "VECTOR draft failed", {
+        phase: "execution",
+        metadata: { task: delegation.task.slice(0, 120), error: result.error?.slice(0, 200) },
+      });
       logger.error(
         { task: delegation.task, error: result.error, traceId },
         "Vector execution failed, aborting remaining",
       );
       break;
     }
+
+    emitter?.info("vector", "delegation:complete", "VECTOR draft completed", {
+      phase: "execution",
+      metadata: {
+        task: delegation.task.slice(0, 120),
+        tokensUsed: result.tokensUsed,
+        executionTimeMs: result.executionTimeMs,
+      },
+    });
   }
 
   return { results, blocked };
