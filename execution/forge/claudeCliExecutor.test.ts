@@ -1,9 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseClaudeCliOutput, buildForgeCodeOutputFromCli } from "./claudeCliExecutor.js";
+import {
+  parseClaudeCliOutput,
+  buildForgeCodeOutputFromCli,
+  selectModelForTask,
+} from "./claudeCliExecutor.js";
+import type { ClaudeCliExecutorConfig, ClaudeCliExecutionResult } from "./claudeCliExecutor.js";
 import { buildClaudeMdContent } from "./claudeCliInstructions.js";
 import type { ClaudeCliInstructionsContext } from "./claudeCliInstructions.js";
-import type { ClaudeCliExecutionResult } from "./claudeCliExecutor.js";
 
 describe("parseClaudeCliOutput", () => {
   it("should parse valid JSON output with result and usage", () => {
@@ -170,6 +174,7 @@ describe("buildForgeCodeOutputFromCli", () => {
       description: "Implemented auth module",
       filesChanged: ["src/auth.ts", "src/auth.test.ts"],
       totalTokensUsed: 1500,
+      totalCostUsd: 0.05,
       iterationsUsed: 1,
       validations: { install: "ok", lint: "ok", build: "ok", tests: "ok" },
       correctionCycles: 0,
@@ -193,6 +198,7 @@ describe("buildForgeCodeOutputFromCli", () => {
       description: "Large refactor",
       filesChanged: ["a.ts", "b.ts", "c.ts", "d.ts"],
       totalTokensUsed: 3000,
+      totalCostUsd: 0.1,
       iterationsUsed: 1,
       validations: { install: "ok", lint: "ok", build: "ok", tests: "ok" },
       correctionCycles: 0,
@@ -211,6 +217,7 @@ describe("buildForgeCodeOutputFromCli", () => {
       description: "Quick fix",
       filesChanged: ["src/fix.ts"],
       totalTokensUsed: 500,
+      totalCostUsd: 0.01,
       iterationsUsed: 1,
       validations: { install: "ok", lint: "ok", build: "ok", tests: "ok" },
       correctionCycles: 0,
@@ -228,6 +235,7 @@ describe("buildForgeCodeOutputFromCli", () => {
       description: "No changes needed",
       filesChanged: [],
       totalTokensUsed: 200,
+      totalCostUsd: 0,
       iterationsUsed: 1,
       validations: { install: "skipped", lint: "skipped", build: "skipped", tests: "skipped" },
       correctionCycles: 0,
@@ -404,6 +412,61 @@ describe("buildClaudeMdContent", () => {
     const content = buildClaudeMdContent(ctxWithIndex);
 
     assert.ok(!content.includes("# Repository Index"));
+  });
+});
+
+describe("selectModelForTask", () => {
+  const baseConfig: ClaudeCliExecutorConfig = {
+    cliPath: "claude",
+    model: "sonnet",
+    fixModel: "haiku",
+    maxTurns: 25,
+    timeoutMs: 300_000,
+    maxBudgetUsd: 5,
+    maxTotalCostUsd: 10,
+  };
+
+  it("should return fixModel for FIX task type", () => {
+    const model = selectModelForTask(baseConfig, "FIX");
+    assert.equal(model, "haiku");
+  });
+
+  it("should return default model for IMPLEMENT task type", () => {
+    const model = selectModelForTask(baseConfig, "IMPLEMENT");
+    assert.equal(model, "sonnet");
+  });
+
+  it("should return default model for REFACTOR task type", () => {
+    const model = selectModelForTask(baseConfig, "REFACTOR");
+    assert.equal(model, "sonnet");
+  });
+
+  it("should return default model for CREATE task type", () => {
+    const model = selectModelForTask(baseConfig, "CREATE");
+    assert.equal(model, "sonnet");
+  });
+});
+
+describe("extractCostUsd via parseClaudeCliOutput", () => {
+  it("should extract total_cost_usd from Claude CLI output", () => {
+    const raw = JSON.stringify({
+      type: "result",
+      result: "Done",
+      total_cost_usd: 0.058846,
+    });
+
+    const parsed = parseClaudeCliOutput(raw);
+    assert.equal(parsed.total_cost_usd, 0.058846);
+  });
+
+  it("should default cost to undefined when not present", () => {
+    const raw = JSON.stringify({
+      type: "result",
+      result: "Done",
+    });
+
+    const parsed = parseClaudeCliOutput(raw);
+    assert.equal(parsed.total_cost_usd, undefined);
   });
 });
 

@@ -14,6 +14,7 @@ import { checkBaselineBuild } from "./forgeValidation.js";
 import { buildClaudeMdContent } from "./claudeCliInstructions.js";
 import type { ClaudeCliInstructionsContext } from "./claudeCliInstructions.js";
 import { classifyTaskType } from "./openclawInstructions.js";
+import type { ForgeTaskType } from "./openclawInstructions.js";
 import type { NexusResearchContext, GoalContext, ForgeCodeOutput } from "./forgeTypes.js";
 import { runValidationCycle, DEFAULT_VALIDATIONS } from "./openclawValidation.js";
 import type { ValidationResults, ExecutionStatus } from "./openclawValidation.js";
@@ -35,9 +36,11 @@ const CLAUDE_MD_FILENAME = "CLAUDE.md";
 export interface ClaudeCliExecutorConfig {
   readonly cliPath: string;
   readonly model: string;
+  readonly fixModel: string;
   readonly maxTurns: number;
   readonly timeoutMs: number;
   readonly maxBudgetUsd: number;
+  readonly maxTotalCostUsd: number;
 }
 
 export interface ClaudeCliExecutionResult {
@@ -46,9 +49,11 @@ export interface ClaudeCliExecutionResult {
   readonly description: string;
   readonly filesChanged: readonly string[];
   readonly totalTokensUsed: number;
+  readonly totalCostUsd: number;
   readonly iterationsUsed: number;
   readonly validations: ValidationResults;
   readonly correctionCycles: number;
+  readonly sessionId?: string;
   readonly review?: ReviewResult;
   readonly error?: string;
 }
@@ -85,10 +90,17 @@ function loadClaudeCliConfig(): ClaudeCliExecutorConfig {
   return {
     cliPath: process.env.CLAUDE_CLI_PATH ?? "claude",
     model: process.env.CLAUDE_CLI_MODEL ?? "sonnet",
+    fixModel: process.env.CLAUDE_CLI_FIX_MODEL ?? "haiku",
     maxTurns: Number(process.env.CLAUDE_CLI_MAX_TURNS ?? 25),
     timeoutMs: Number(process.env.CLAUDE_CLI_TIMEOUT_MS ?? 300_000),
     maxBudgetUsd: Number(process.env.CLAUDE_CLI_MAX_BUDGET_USD ?? 5),
+    maxTotalCostUsd: Number(process.env.CLAUDE_CLI_MAX_TOTAL_COST_USD ?? 10),
   };
+}
+
+export function selectModelForTask(config: ClaudeCliExecutorConfig, taskType: ForgeTaskType): string {
+  if (taskType === "FIX") return config.fixModel;
+  return config.model;
 }
 
 async function verifyClaudeCliAvailable(cliPath: string): Promise<boolean> {
@@ -210,28 +222,41 @@ async function removeClaudeMd(workspacePath: string): Promise<void> {
   }
 }
 
+interface SpawnOptions {
+  readonly model?: string;
+  readonly resumeSessionId?: string;
+}
+
 async function spawnClaudeCli(
   config: ClaudeCliExecutorConfig,
   workspacePath: string,
   prompt: string,
+  options?: SpawnOptions,
 ): Promise<{ readonly stdout: string; readonly stderr: string; readonly exitCode: number }> {
+  const effectiveModel = options?.model ?? config.model;
+
   const args: string[] = [
     "-p",
     prompt,
     "--output-format", "json",
-    "--model", config.model,
+    "--model", effectiveModel,
     "--max-turns", String(config.maxTurns),
     "--max-budget-usd", String(config.maxBudgetUsd),
     "--allowedTools", "Edit,Write,Bash,Read,Glob,Grep",
     "--dangerously-skip-permissions",
   ];
 
+  if (options?.resumeSessionId) {
+    args.push("--resume", options.resumeSessionId);
+  }
+
   logger.info(
     {
       cli: config.cliPath,
-      model: config.model,
+      model: effectiveModel,
       maxTurns: config.maxTurns,
       timeoutMs: config.timeoutMs,
+      resumeSession: options?.resumeSessionId ?? null,
       workspacePath,
     },
     "Spawning Claude CLI process",
@@ -315,17 +340,17 @@ interface ClaudeCliLoopParams {
 
 async function executeClaudeCliTask(
   params: ClaudeCliLoopParams,
+  spawnOpts?: SpawnOptions,
 ): Promise<ClaudeCliExecutionResult> {
   const { delegation, workspacePath, config, startTime, traceId } = params;
   const { task, expected_output } = delegation;
 
   const prompt = buildPrompt(task, expected_output);
-  const cliResult = await spawnClaudeCli(config, workspacePath, prompt);
+  const cliResult = await spawnClaudeCli(config, workspacePath, prompt, spawnOpts);
   const parsed = parseClaudeCliOutput(cliResult.stdout);
   const tokensUsed = extractTokensUsed(parsed);
-  const elapsed = Math.round(performance.now() - startTime);
-
   const costUsd = extractCostUsd(parsed);
+  const elapsed = Math.round(performance.now() - startTime);
 
   logger.info(
     {
@@ -353,9 +378,11 @@ async function executeClaudeCliTask(
       description: "",
       filesChanged: [],
       totalTokensUsed: tokensUsed,
+      totalCostUsd: costUsd,
       iterationsUsed: 1,
       validations: DEFAULT_VALIDATIONS,
       correctionCycles: 0,
+      sessionId: parsed.session_id,
       error: parsed.result ?? cliResult.stderr ?? "Claude CLI execution failed",
     };
   }
@@ -368,9 +395,11 @@ async function executeClaudeCliTask(
     description: parsed.result ?? "Task completed via Claude CLI",
     filesChanged,
     totalTokensUsed: tokensUsed,
+    totalCostUsd: costUsd,
     iterationsUsed: 1,
     validations: DEFAULT_VALIDATIONS,
     correctionCycles: 0,
+    sessionId: parsed.session_id,
   };
 }
 
@@ -378,6 +407,7 @@ async function executeCorrectionTask(
   params: ClaudeCliLoopParams,
   validationErrors: string,
   changedFiles: readonly string[],
+  sessionId?: string,
 ): Promise<ClaudeCliExecutionResult> {
   const correctionParams: ClaudeCliLoopParams = {
     ...params,
@@ -388,13 +418,16 @@ async function executeCorrectionTask(
     },
   };
 
-  return executeClaudeCliTask(correctionParams);
+  return executeClaudeCliTask(correctionParams, {
+    resumeSessionId: sessionId,
+  });
 }
 
 async function executeReviewCorrectionTask(
   params: ClaudeCliLoopParams,
   reviewFindings: string,
   changedFiles: readonly string[],
+  sessionId?: string,
 ): Promise<ClaudeCliExecutionResult> {
   const correctionParams: ClaudeCliLoopParams = {
     ...params,
@@ -405,7 +438,9 @@ async function executeReviewCorrectionTask(
     },
   };
 
-  return executeClaudeCliTask(correctionParams);
+  return executeClaudeCliTask(correctionParams, {
+    resumeSessionId: sessionId,
+  });
 }
 
 async function runCorrectionLoop(
@@ -415,6 +450,8 @@ async function runCorrectionLoop(
   let currentResult = initialResult;
   let correctionCycles = 0;
   let validations = DEFAULT_VALIDATIONS;
+  let accumulatedCostUsd = initialResult.totalCostUsd;
+  const sessionId = initialResult.sessionId;
 
   for (let cycle = 0; cycle < MAX_CORRECTION_CYCLES; cycle++) {
     const validation = await runValidationCycle(params.workspacePath, currentResult.filesChanged);
@@ -426,8 +463,17 @@ async function runCorrectionLoop(
     }
 
     correctionCycles++;
+
+    if (accumulatedCostUsd >= params.config.maxTotalCostUsd) {
+      logger.warn(
+        { accumulatedCostUsd, maxTotalCostUsd: params.config.maxTotalCostUsd },
+        "Total cost ceiling reached — stopping correction cycles",
+      );
+      break;
+    }
+
     logger.warn(
-      { cycle: correctionCycles, maxCycles: MAX_CORRECTION_CYCLES, validations },
+      { cycle: correctionCycles, maxCycles: MAX_CORRECTION_CYCLES, validations, accumulatedCostUsd },
       "Validation failed, starting Claude CLI correction cycle",
     );
 
@@ -441,15 +487,19 @@ async function runCorrectionLoop(
       params,
       validation.errorOutput,
       currentResult.filesChanged,
+      sessionId,
     );
 
+    accumulatedCostUsd += correctionResult.totalCostUsd;
     const updatedFiles = await detectChangedFiles(params.workspacePath);
 
     currentResult = {
       ...correctionResult,
       filesChanged: updatedFiles.length > 0 ? updatedFiles : currentResult.filesChanged,
       totalTokensUsed: currentResult.totalTokensUsed + correctionResult.totalTokensUsed,
+      totalCostUsd: accumulatedCostUsd,
       iterationsUsed: currentResult.iterationsUsed + correctionResult.iterationsUsed,
+      sessionId: correctionResult.sessionId ?? sessionId,
     };
   }
 
@@ -489,6 +539,8 @@ async function runPostCorrectionReview(
   );
 
   let current = result;
+  let accumulatedCostUsd = result.totalCostUsd;
+  const sessionId = result.sessionId;
 
   for (let attempt = 0; attempt < MAX_REVIEW_CORRECTION_ATTEMPTS; attempt++) {
     const elapsed = performance.now() - params.startTime;
@@ -497,19 +549,31 @@ async function runPostCorrectionReview(
       break;
     }
 
+    if (accumulatedCostUsd >= params.config.maxTotalCostUsd) {
+      logger.warn(
+        { accumulatedCostUsd, maxTotalCostUsd: params.config.maxTotalCostUsd },
+        "Total cost ceiling reached — stopping review corrections",
+      );
+      break;
+    }
+
     const correctionResult = await executeReviewCorrectionTask(
       params,
       correctionContext,
       current.filesChanged,
+      sessionId,
     );
 
+    accumulatedCostUsd += correctionResult.totalCostUsd;
     const updatedFiles = await detectChangedFiles(params.workspacePath);
 
     const updatedResult: ClaudeCliExecutionResult = {
       ...current,
       filesChanged: updatedFiles.length > 0 ? updatedFiles : current.filesChanged,
       totalTokensUsed: current.totalTokensUsed + correctionResult.totalTokensUsed,
+      totalCostUsd: accumulatedCostUsd,
       iterationsUsed: current.iterationsUsed + correctionResult.iterationsUsed,
+      sessionId: correctionResult.sessionId ?? sessionId,
     };
 
     const retryReview = await runHeuristicReview(params.workspacePath, updatedResult.filesChanged);
@@ -557,6 +621,7 @@ export async function executeWithClaudeCli(
       description: "",
       filesChanged: [],
       totalTokensUsed: 0,
+      totalCostUsd: 0,
       iterationsUsed: 0,
       validations: DEFAULT_VALIDATIONS,
       correctionCycles: 0,
@@ -565,6 +630,12 @@ export async function executeWithClaudeCli(
   }
 
   const taskType = classifyTaskType(delegation.task);
+  const effectiveModel = selectModelForTask(config, taskType);
+
+  logger.info(
+    { taskType, selectedModel: effectiveModel, defaultModel: config.model, fixModel: config.fixModel },
+    "Model selected based on task type",
+  );
 
   await writeExecutionPlan(workspacePath, {
     task: delegation.task,
@@ -604,7 +675,7 @@ export async function executeWithClaudeCli(
   };
 
   try {
-    const initialResult = await executeClaudeCliTask(params);
+    const initialResult = await executeClaudeCliTask(params, { model: effectiveModel });
 
     if (!initialResult.success) {
       return initialResult;
