@@ -25,20 +25,20 @@ apps/web/            Dashboard Frontend (Vite + React)
          v                    v                    v
      KAIROS               FORGE                VECTOR
    (orquestrador)     (executor tecnico)   (executor marketing)
-    gpt-5.2           gpt-5.3-codex          gpt-4o-mini
+    gpt-5.2          multi-executor          gpt-4o-mini
          |                    |                    |
          |    ┌───────────────┤                    |
          v    v               v                    v
-       NEXUS             ┌──────────────┐    ┌──────────┐
-    (pesquisador)        │ Workspaces   │    │ Artefatos│
-    gpt-4o-mini          │ Git Branches │    │ Drafts   │
-         |               │ Code Changes │    │ Publish  │
-         v               └──────────────┘    └──────────┘
-   ┌──────────┐               │                    │
-   │ Pesquisa │               │                    │
-   │ Analise  │               │                    │
-   └──────────┘               │                    │
-         │                    │                    │
+       NEXUS          ┌──────────────────┐   ┌──────────┐
+    (pesquisador)     │ Executor Modes:  │   │ Artefatos│
+    gpt-4o-mini       │  openclaw (HTTP) │   │ Drafts   │
+         |            │  claude-cli (CLI)│   │ Publish  │
+         v            │  legacy (agent)  │   └──────────┘
+   ┌──────────┐       ├──────────────────┤         │
+   │ Pesquisa │       │ Workspaces       │         │
+   │ Analise  │       │ Git Branches     │         │
+   └──────────┘       │ Code Changes     │         │
+         │            └──────────────────┘         │
          └────────────────────┼────────────────────┘
                               v
                        SQLite (modo WAL)
@@ -50,21 +50,29 @@ apps/web/            Dashboard Frontend (Vite + React)
 
 ## Agentes
 
-| Agente       | Papel                                                                          | Modelo LLM       | Status     |
-| ------------ | ------------------------------------------------------------------------------ | ----------------- | ---------- |
-| **KAIROS**   | Orquestrador estrategico — decide, delega e avalia com contexto historico      | `gpt-5.2`        | Ativo      |
-| **FORGE**    | Executor tecnico — planeja, gera edits search/replace e corrige iterativamente | `gpt-5.3-codex`  | Ativo      |
-| **NEXUS**    | Pesquisa tecnica — analisa opcoes, trade-offs e riscos                         | `gpt-4o-mini`    | Ativo      |
-| **VECTOR**   | Executor de marketing — gera posts, newsletters, landing copy                  | `gpt-4o-mini`    | Ativo      |
-| **QA**       | Validacao funcional — testes E2E hibridos (LLM + Playwright)                   | `gpt-4o-mini`    | Planejado  |
-| **SENTINEL** | Monitor de seguranca e compliance                                              | —                 | Planejado  |
-| **COVENANT** | Fiscalizador de governanca e politicas                                         | —                 | Planejado  |
+| Agente       | Papel                                                                          | Modelo LLM                   | Status     |
+| ------------ | ------------------------------------------------------------------------------ | ---------------------------- | ---------- |
+| **KAIROS**   | Orquestrador estrategico — decide, delega e avalia com contexto historico      | `gpt-5.2`                   | Ativo      |
+| **FORGE**    | Executor tecnico — multi-executor (openclaw, claude-cli, legacy) com validacao | `gpt-5.3-codex` / `claude`  | Ativo      |
+| **NEXUS**    | Pesquisa tecnica — analisa opcoes, trade-offs e riscos                         | `gpt-4o-mini`               | Ativo      |
+| **VECTOR**   | Executor de marketing — gera posts, newsletters, landing copy                  | `gpt-4o-mini`               | Ativo      |
+| **QA**       | Validacao funcional — testes E2E hibridos (LLM + Playwright)                   | `gpt-4o-mini`               | Planejado  |
+| **SENTINEL** | Monitor de seguranca e compliance                                              | —                            | Planejado  |
+| **COVENANT** | Fiscalizador de governanca e politicas                                         | —                            | Planejado  |
 
 ## Modelo de Execucao
 
-O OpenClaw **nao executa tarefas**. Ele e exclusivamente um **gateway de LLM** com API OpenAI-compatible (`/v1/chat/completions`) que recebe prompts e retorna texto (JSON ou Markdown).
+O FORGE suporta **tres modos de execucao** (executor modes), configurados por projeto via `forge_executor` no manifest:
 
-Toda execucao real — escrita de arquivos, lint, build, git — e feita pelo **axiom-agents** (este codebase).
+| Modo | Descricao | Backend LLM | Como funciona |
+| ---- | --------- | ----------- | ------------- |
+| `openclaw` | HTTP tool loop via gateway OpenClaw | gpt-5.3-codex | axiom-agents envia prompts, recebe JSON com edits, aplica no filesystem |
+| `claude-cli` | Autonomo via Claude CLI (Anthropic) | claude sonnet/haiku | Claude CLI opera direto no workspace com tools nativas (Edit, Write, Bash) |
+| `legacy` | Agent loop interno (3 fases) | gpt-5.3-codex | Plan → Edit → Correct loop com ate 4 iteracoes |
+
+### Modo OpenClaw (padrao)
+
+O OpenClaw **nao executa tarefas**. Ele e exclusivamente um **gateway de LLM** com API OpenAI-compatible (`/v1/chat/completions`) que recebe prompts e retorna texto (JSON ou Markdown). Toda execucao real — escrita de arquivos, lint, build, git — e feita pelo **axiom-agents**.
 
 ```mermaid
 sequenceDiagram
@@ -90,17 +98,59 @@ sequenceDiagram
     Forge-->>Kairos: Retorna resultado
 ```
 
-| Responsabilidade               | Quem executa                   |
-| ------------------------------ | ------------------------------ |
-| Receber prompt, retornar texto | OpenClaw (gateway HTTP de LLM) |
-| Escrever/modificar arquivos    | axiom-agents (`fs`)            |
-| ESLint, TypeScript, build      | axiom-agents (`child_process`) |
-| Git (branch, commit, push)     | axiom-agents (`child_process`) |
-| Instalar dependencias          | axiom-agents (`child_process`) |
-| Executar testes                | axiom-agents (`child_process`) |
-| Audit trail (SQLite)           | axiom-agents                   |
+### Modo Claude CLI
 
-> **Resumo:** OpenClaw = LLM gateway. axiom-agents = quem executa tudo no sistema operacional.
+O Claude CLI opera **diretamente no workspace** com suas tools nativas (Edit, Write, Bash, Read, Glob, Grep). O axiom-agents gera um `CLAUDE.md` dinamico com guardrails, spawna o processo `claude`, e apos a execucao roda validacao + review heuristico com ciclos de correcao automaticos.
+
+```mermaid
+sequenceDiagram
+    participant Kairos as KAIROS
+    participant Forge as FORGE
+    participant Claude as Claude CLI
+    participant FS as Workspace
+    participant Val as Validacao
+
+    Kairos->>Forge: Delega task
+    Forge->>FS: Cria workspace isolado (git clone --local)
+    Forge->>FS: Gera CLAUDE.md (guardrails dinamicos)
+    Forge->>Claude: Spawna processo (claude -p "..." --model sonnet)
+    Claude->>FS: Le/escreve arquivos diretamente (tools nativas)
+    Claude-->>Forge: Retorna JSON (result, session_id, cost, tokens)
+    Forge->>FS: Detecta arquivos alterados (git diff)
+    Forge->>Val: Roda lint + build + testes
+    alt Validacao falha (ate 5x)
+        Forge->>Claude: Correcao com --resume (reutiliza sessao)
+        Claude->>FS: Corrige arquivos
+        Forge->>Val: Re-valida
+    end
+    Forge->>Val: Review heuristico
+    Forge->>FS: Remove CLAUDE.md (cleanup)
+    Forge->>FS: Git branch + commit + push
+    Forge-->>Kairos: Retorna resultado
+```
+
+**Otimizacoes de custo do modo Claude CLI:**
+
+- `--resume` para ciclos de correcao (reutiliza prompt caching da sessao anterior)
+- Tracking cumulativo de custo com teto configuravel (`CLAUDE_CLI_MAX_TOTAL_COST_USD`)
+- Modelo `haiku` para tasks do tipo FIX (mais barato que `sonnet`)
+- Prompt caching nativo do Claude CLI para prefixos longos de contexto
+- Repo index truncado (3000 chars max, omitido para tasks FIX)
+
+> Documentacao detalhada do fluxo: [`docs/claude-cli-executor-flow.md`](docs/claude-cli-executor-flow.md)
+
+### Responsabilidades
+
+| Responsabilidade               | OpenClaw mode                  | Claude CLI mode                |
+| ------------------------------ | ------------------------------ | ------------------------------ |
+| Receber prompt, retornar texto | OpenClaw (gateway HTTP de LLM) | Claude CLI (processo local)    |
+| Escrever/modificar arquivos    | axiom-agents (`fs`)            | Claude CLI (tools nativas)     |
+| ESLint, TypeScript, build      | axiom-agents (`child_process`) | axiom-agents (`child_process`) |
+| Git (branch, commit, push)     | axiom-agents (`child_process`) | axiom-agents (`child_process`) |
+| Validacao e review             | axiom-agents                   | axiom-agents                   |
+| Audit trail (SQLite)           | axiom-agents                   | axiom-agents                   |
+
+> **Resumo:** OpenClaw = LLM gateway. Claude CLI = executor autonomo local. axiom-agents = orquestra tudo, valida e commita.
 
 ## Evolucao
 
@@ -122,6 +172,7 @@ sequenceDiagram
 | 27    | FORGE Agent Loop Hibrido            | 3 fases (Planning + Execution + Correction Loop) com ate 4 correcoes     | Feito     |
 | 28    | Hardening Infra OpenClaw            | Classificacao de erros, retry transparente, healthcheck, trace_id E2E    | Feito     |
 | 29    | Dashboard Web                       | NestJS API + React SPA: Daily Report, Kanban, gestao de agentes          | Em andamento |
+| 30    | FORGE Multi-Executor + Claude CLI   | Executor autonomo via Claude CLI com guardrails, resume, cost ceiling    | Feito        |
 
 ## Funcionalidades Principais
 
@@ -132,6 +183,7 @@ sequenceDiagram
 - **Governanca de Decisao** — Classificacao pre-decisao em 4 eixos (complexidade, risco, custo, historico) para selecao dinamica de modelo LLM e thresholds de aprovacao
 - **Suporte Multi-Projeto** — Manifestos de projeto com workspaces isolados, governanca e rastreamento de budget por projeto
 - **Modificacao de Codigo Real** — FORGE le codigo-fonte real, gera diffs search/replace, faz push de branches para revisao humana
+- **Multi-Executor FORGE** — Tres modos de execucao por projeto (openclaw, claude-cli, legacy) com selecao automatica de modelo por tipo de task
 - **Pesquisa Tecnica** — Agente NEXUS pesquisa opcoes, trade-offs e riscos antes do FORGE executar tarefas de codigo
 - **Governanca Humana** — Todas as publicacoes e mudancas de codigo de alto risco exigem aprovacao explicita via Telegram
 - **Inteligencia de Marketing** — Metricas stub/manuais com avaliador; deteccao de tipos de mensagem fortes/fracas retroalimenta a orquestracao
@@ -144,7 +196,8 @@ sequenceDiagram
 | Runtime            | Node.js >= 24 + TypeScript 5.9      |
 | Banco de Dados     | SQLite (modo WAL, better-sqlite3)   |
 | Gateway LLM        | OpenClaw (gateway HTTP de LLM — apenas chat completions, sem execucao) |
-| Provedores LLM     | OpenAI (gpt-5.2, gpt-5.3-codex, gpt-4o-mini) |
+| Executor CLI       | Claude CLI (Anthropic — execucao autonoma direta no workspace)         |
+| Provedores LLM     | OpenAI (gpt-5.2, gpt-5.3-codex, gpt-4o-mini), Anthropic (claude sonnet, claude haiku) |
 | Controle de Versao | Git (workspaces isolados, branch por task) |
 | Agendamento        | Cron (ciclos one-shot)              |
 | Interface Humana   | Bot Telegram (long-polling)         |
@@ -185,16 +238,25 @@ apps/                Dashboard Web (monorepo via Turborepo)
   web/               Vite + React SPA (Daily Report, Kanban, Agents)
 agents/              Configs de agentes, system prompts, memoria
   kairos/            Orquestrador (gpt-5.2)
-  forge/             Executor tecnico (gpt-5.3-codex via OpenClaw)
+  forge/             Executor tecnico (multi-executor)
   nexus/             Pesquisador tecnico (gpt-4o-mini)
   vector/            Executor de marketing (gpt-4o-mini)
   sentinel/          Monitor de seguranca (planejado)
   covenant/          Fiscalizador de governanca (planejado)
 config/              Limites de budget, configuracao de logger
+docs/                Documentacao tecnica (fluxos, arquitetura)
 evaluation/          Avaliadores de execucao, marketing e NEXUS
 execution/           Executores FORGE/VECTOR/NEXUS, sistema de codigo por projeto, sandbox
-  project*.ts        Codigo por projeto: executor, applier, git manager, security, workspace
-  nexus*.ts          Executor e validador NEXUS
+  forge/             Executores do FORGE:
+    openclawAutonomousExecutor   Modo openclaw (HTTP tool loop via gateway)
+    claudeCliExecutor            Modo claude-cli (autonomo via Claude CLI)
+    claudeCliInstructions        Gerador dinamico de CLAUDE.md (guardrails)
+    forgeAgentLoop               Modo legacy (plan → edit → correct)
+    openclawValidation           Ciclo de validacao (lint, build, testes)
+    openclawReview               Review heuristico dos arquivos alterados
+  project/           Codigo por projeto: executor, applier, git manager, security, workspace
+  nexus/             Executor e validador NEXUS
+  discovery/         File discovery e repository indexer
 interfaces/          Telegram sender + bot (long-polling)
 llm/                 Cliente LLM com failover (OpenAI + Claude)
 orchestration/       Ciclo Kairos, filtro de decisao, ajustadores de feedback, briefing
@@ -202,7 +264,7 @@ orchestration/       Ciclo Kairos, filtro de decisao, ajustadores de feedback, b
   decisionGovernance Classificacao pre-decisao e selecao de politica de governanca
 projects/            Manifestos de projetos e suporte multi-projeto
   default/           Projeto padrao (retrocompatibilidade)
-  <project-id>/      Diretorios por projeto
+  <project-id>/      Diretorios por projeto (manifest.yaml com forge_executor)
 runtime/openclaw/    Configs de agentes e skills do OpenClaw
 scripts/             Bootstrap, cron runner, seed data, register-project
 services/            Servico de aprovacao, coletor de metricas, servico de code changes
@@ -282,12 +344,16 @@ pnpm dev:web    # Vite na porta 5173 (com proxy para API)
 - **pnpm** (gerenciador de pacotes)
 - **Git** (para workspaces do FORGE)
 - **ripgrep** (obrigatorio para indexacao de repositorio e busca de conteudo do FORGE)
-- **OpenClaw** (runtime de execucao LLM para FORGE e VECTOR — opcional, mas necessario para execucao de codigo)
+- **OpenClaw** (runtime de execucao LLM — necessario para `forge_executor: openclaw`)
+- **Claude CLI** (Anthropic — necessario para `forge_executor: claude-cli`)
 - **Bot Telegram** (para receber briefings e aprovar drafts — opcional)
 
 ```bash
 # Instalar ripgrep (obrigatorio para FORGE)
 sudo apt install ripgrep
+
+# Instalar Claude CLI (necessario para forge_executor: claude-cli)
+npm install -g @anthropic-ai/claude-code
 
 # Instalar pnpm se necessario
 corepack enable && corepack prepare pnpm@latest --activate
@@ -346,12 +412,21 @@ KAIROS_MAX_OUTPUT_TOKENS=4096            # Tokens de saida para modelos de racio
 FORGE_MAX_CORRECTION_ROUNDS=4            # Tentativas de correcao (0-10)
 FORGE_CONTEXT_MAX_CHARS=20000            # Maximo de chars de contexto por task
 
+# === Claude CLI (necessario para forge_executor: claude-cli) ===
+CLAUDE_CLI_PATH=claude                   # Caminho do binario (default: claude)
+CLAUDE_CLI_MODEL=sonnet                  # Modelo principal (sonnet, opus, etc.)
+CLAUDE_CLI_FIX_MODEL=haiku              # Modelo para tasks FIX (mais barato)
+CLAUDE_CLI_MAX_TURNS=25                  # Max turns por execucao
+CLAUDE_CLI_TIMEOUT_MS=300000             # Timeout total (5 min)
+CLAUDE_CLI_MAX_BUDGET_USD=5              # Budget por execucao individual
+CLAUDE_CLI_MAX_TOTAL_COST_USD=10         # Teto de custo acumulado (todos os ciclos)
+
 # === GitHub (opcional — para PRs automaticos) ===
 GITHUB_TOKEN=ghp_...                     # Token com permissao de repo
 GITHUB_REPO=owner/repo                   # Repositorio para PRs
 ```
 
-> **Minimo para funcionar:** `OPENAI_API_KEY` + `USE_OPENCLAW=true` com OpenClaw rodando.
+> **Minimo para funcionar:** `OPENAI_API_KEY` + `USE_OPENCLAW=true` com OpenClaw rodando (modo openclaw), ou `OPENAI_API_KEY` + Claude CLI instalado (modo claude-cli).
 
 ### 4. Registrar um projeto
 
@@ -377,6 +452,7 @@ risk_profile: medium                                 # low, medium, high
 autonomy_level: 2                                    # 1 (minimo) a 5 (maximo)
 token_budget_monthly: 200000                         # Orcamento mensal para este projeto
 status: active                                       # active, paused, archived
+forge_executor: claude-cli                           # openclaw, claude-cli ou legacy
 ```
 
 | Campo                  | Descricao                                                    |
@@ -389,6 +465,7 @@ status: active                                       # active, paused, archived
 | `autonomy_level`       | Nivel de autonomia do FORGE (1 = conservador, 5 = agressivo)|
 | `token_budget_monthly` | Orcamento de tokens mensal para este projeto                 |
 | `status`               | `active` para o FORGE trabalhar, `paused` para pausar        |
+| `forge_executor`       | Modo de execucao: `openclaw`, `claude-cli` ou `legacy` (padrao: `legacy`) |
 
 > **Importante:** O `repo_source` deve apontar para um repositorio Git valido. O FORGE **nunca** modifica o repo original — ele clona para um workspace isolado.
 
@@ -508,11 +585,13 @@ Logs sao adicionados em `logs/kairos.log`. O Briefing Diario via Telegram e envi
 # 1. Instalar
 ./scripts/bootstrap.sh && cp .env.example .env
 
-# 2. Configurar .env (OPENAI_API_KEY + OpenClaw)
+# 2. Configurar .env (OPENAI_API_KEY + OpenClaw ou Claude CLI)
 
 # 3. Registrar projeto
 pnpm tsx scripts/register-project.ts meu-projeto
-# Editar projects/meu-projeto/manifest.yaml (repo_source, stack, status: active)
+# Editar projects/meu-projeto/manifest.yaml:
+#   repo_source, stack, status: active
+#   forge_executor: claude-cli  (ou openclaw / legacy)
 
 # 4. Criar goal
 pnpm tsx scripts/seed-goal.ts --project meu-projeto "Minha primeira tarefa"
