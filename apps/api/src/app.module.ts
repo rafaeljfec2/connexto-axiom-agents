@@ -8,6 +8,7 @@ import { ArtifactsModule } from "./modules/artifacts/artifacts.module";
 import { CycleModule } from "./modules/cycle/cycle.module";
 import { AgentsModule } from "./modules/agents/agents.module";
 import { ExecutionEventsModule } from "./modules/execution-events/execution-events.module";
+import { ProjectsModule } from "./modules/projects/projects.module";
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { ExecutionEventsModule } from "./modules/execution-events/execution-even
     CycleModule,
     AgentsModule,
     ExecutionEventsModule,
+    ProjectsModule,
   ],
 })
 export class AppModule {}

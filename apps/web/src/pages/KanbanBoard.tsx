@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useGoals, useCreateGoal } from "@/api/hooks";
+import { useGoals, useCreateGoal, useActiveProjects } from "@/api/hooks";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -119,6 +119,7 @@ function GoalCard({ goal, columnColor, onNavigate }: GoalCardProps) {
 
 export function KanbanBoard() {
   const { data: goals, isLoading, error } = useGoals({ includeStats: true });
+  const { data: projects } = useActiveProjects();
   const navigate = useNavigate();
   const createGoal = useCreateGoal();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -132,12 +133,14 @@ export function KanbanBoard() {
 
     const description = (formData.get("description") as string).trim();
     const priority = Number(formData.get("priority"));
+    const projectId = (formData.get("project_id") as string) || undefined;
 
     createGoal.mutate(
       {
         title,
         description: description || undefined,
         priority,
+        project_id: projectId,
       },
       {
         onSuccess: () => {
@@ -231,6 +234,22 @@ export function KanbanBoard() {
                     {PRIORITY_OPTIONS.map((opt) => (
                       <option key={opt.value} value={opt.value}>
                         {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="goal-project">Projeto</Label>
+                  <select
+                    id="goal-project"
+                    name="project_id"
+                    defaultValue={projects?.length === 1 ? projects[0].project_id : ""}
+                    className="flex h-9 w-full cursor-pointer rounded-md border border-[#e5e7eb] bg-white px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#93c5fd]"
+                  >
+                    <option value="">Sem projeto</option>
+                    {projects?.map((p) => (
+                      <option key={p.project_id} value={p.project_id}>
+                        {p.project_id}
                       </option>
                     ))}
                   </select>

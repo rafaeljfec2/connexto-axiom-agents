@@ -217,6 +217,23 @@ interface CreateGoalPayload {
   readonly title: string;
   readonly description?: string;
   readonly priority?: number;
+  readonly project_id?: string;
+}
+
+export interface ActiveProject {
+  readonly id: string;
+  readonly project_id: string;
+  readonly language: string;
+  readonly framework: string;
+  readonly status: string;
+}
+
+export function useActiveProjects() {
+  return useQuery<readonly ActiveProject[]>({
+    queryKey: ["projects", "active"],
+    queryFn: () => api.get("/projects"),
+    staleTime: 60_000,
+  });
 }
 
 export function useCreateGoal() {
@@ -306,7 +323,6 @@ export function useRecentTraces(limit: number = 20) {
   return useQuery<readonly TraceSummary[]>({
     queryKey: ["execution-traces", limit],
     queryFn: () => api.get(`/execution-events/traces?limit=${limit}`),
-    refetchInterval: 5000,
   });
 }
 
@@ -315,6 +331,5 @@ export function useTraceEvents(traceId: string | null) {
     queryKey: ["execution-events", traceId],
     queryFn: () => api.get(`/execution-events/trace/${traceId}`),
     enabled: Boolean(traceId),
-    refetchInterval: 3000,
   });
 }

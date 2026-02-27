@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useRecentTraces, useTraceEvents } from "@/api/hooks";
 import type { TraceSummary, ExecutionEvent } from "@/api/hooks";
 import { useEventSource } from "@/api/useEventSource";
@@ -122,24 +123,39 @@ function TraceListPanel({
 }
 
 export function Executions() {
+  const queryClient = useQueryClient();
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
 
   const { data: traces, isLoading: tracesLoading, error: tracesError } = useRecentTraces();
   const { data: traceEvents } = useTraceEvents(selectedTraceId);
 
-  const selectedTrace = traces?.find((t) => t.trace_id === selectedTraceId);
-  const isLive = selectedTrace ? isTraceActive(selectedTrace) : false;
-
   const { events: sseEvents, status: sseStatus } = useEventSource<ExecutionEvent>({
-    url: selectedTraceId
-      ? `/api/execution-events/stream?trace_id=${selectedTraceId}`
-      : "/api/execution-events/stream",
-    enabled: isLive,
+    url: "/api/execution-events/stream",
+    enabled: true,
   });
 
-  const displayEvents: readonly ExecutionEvent[] = isLive && sseEvents.length > 0
-    ? sseEvents
-    : traceEvents ?? [];
+  const lastSseCountRef = useRef(0);
+  useEffect(() => {
+    if (sseEvents.length > lastSseCountRef.current) {
+      lastSseCountRef.current = sseEvents.length;
+      queryClient.invalidateQueries({ queryKey: ["execution-traces"] });
+    }
+  }, [sseEvents.length, queryClient]);
+
+  const displayEvents: readonly ExecutionEvent[] = useMemo(() => {
+    const historical = traceEvents ?? [];
+    if (!selectedTraceId) return historical;
+
+    const sseForTrace = sseEvents.filter((e) => e.trace_id === selectedTraceId);
+    if (sseForTrace.length === 0) return historical;
+
+    const knownIds = new Set(historical.map((e) => e.id));
+    const newEvents = sseForTrace.filter((e) => !knownIds.has(e.id));
+    return newEvents.length > 0 ? [...historical, ...newEvents] : historical;
+  }, [traceEvents, sseEvents, selectedTraceId]);
+
+  const selectedTrace = traces?.find((t) => t.trace_id === selectedTraceId);
+  const isLive = selectedTrace ? isTraceActive(selectedTrace) : false;
 
   if (tracesLoading) {
     return (
@@ -173,7 +189,7 @@ export function Executions() {
           <Activity className="h-5 w-5 text-primary" />
           <h1 className="text-xl font-semibold">Execuções</h1>
         </div>
-        {isLive && <LiveIndicator status={sseStatus} />}
+        <LiveIndicator status={sseStatus} />
       </div>
 
       <div className="flex flex-col md:flex-row gap-4">
