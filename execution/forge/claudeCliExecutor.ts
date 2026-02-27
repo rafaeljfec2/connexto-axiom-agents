@@ -1,5 +1,5 @@
 import type BetterSqlite3 from "better-sqlite3";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -33,6 +33,7 @@ const REPO_INDEX_MAX_CHARS = 3000;
 const MAX_CORRECTION_CYCLES = 5;
 const MAX_REVIEW_CORRECTION_ATTEMPTS = 2;
 const CLAUDE_MD_FILENAME = "CLAUDE.md";
+const INACTIVITY_TIMEOUT_MS = 60_000;
 
 export interface ClaudeCliExecutorConfig {
   readonly cliPath: string;
@@ -104,12 +105,35 @@ export function selectModelForTask(config: ClaudeCliExecutorConfig, taskType: Fo
   return config.model;
 }
 
-async function verifyClaudeCliAvailable(cliPath: string): Promise<boolean> {
+interface ClaudeAuthStatus {
+  readonly available: boolean;
+  readonly authenticated: boolean;
+  readonly error?: string;
+}
+
+async function verifyClaudeCliAvailable(cliPath: string): Promise<ClaudeAuthStatus> {
   try {
     await execFileAsync(cliPath, ["--version"], { timeout: 10_000 });
-    return true;
   } catch {
-    return false;
+    return { available: false, authenticated: false, error: `Claude CLI not found at "${cliPath}"` };
+  }
+
+  try {
+    const { stdout } = await execFileAsync(cliPath, ["auth", "status"], { timeout: 10_000 });
+    const status = JSON.parse(stdout.trim()) as { loggedIn?: boolean; subscriptionType?: string | null };
+
+    if (!status.loggedIn) {
+      return { available: true, authenticated: false, error: "Claude CLI is not authenticated. Run: claude auth login" };
+    }
+
+    logger.info(
+      { loggedIn: status.loggedIn, subscriptionType: status.subscriptionType },
+      "Claude CLI auth status",
+    );
+
+    return { available: true, authenticated: true };
+  } catch {
+    return { available: true, authenticated: true };
   }
 }
 
@@ -257,44 +281,81 @@ async function spawnClaudeCli(
       model: effectiveModel,
       maxTurns: config.maxTurns,
       timeoutMs: config.timeoutMs,
+      inactivityTimeoutMs: INACTIVITY_TIMEOUT_MS,
       resumeSession: options?.resumeSessionId ?? null,
       workspacePath,
     },
     "Spawning Claude CLI process",
   );
 
-  try {
-    const { stdout, stderr } = await execFileAsync(
-      config.cliPath,
-      args,
-      {
-        cwd: workspacePath,
-        timeout: config.timeoutMs,
-        maxBuffer: 10 * 1024 * 1024,
-        env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" },
-      },
-    );
+  return new Promise((resolve) => {
+    const child = spawn(config.cliPath, args, {
+      cwd: workspacePath,
+      env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
 
-    return { stdout, stderr, exitCode: 0 };
-  } catch (error) {
-    const execError = error as {
-      stdout?: string;
-      stderr?: string;
-      code?: number;
-      signal?: string;
-      message?: string;
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let lastActivityTs = Date.now();
+    let settled = false;
+
+    const finish = (exitCode: number, signal?: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(globalTimer);
+      clearInterval(inactivityChecker);
+
+      const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
+      const stderr = Buffer.concat(stderrChunks).toString("utf-8");
+
+      if (signal === "SIGTERM") {
+        logger.warn({ timeoutMs: config.timeoutMs }, "Claude CLI process timed out (global)");
+      }
+
+      resolve({ stdout, stderr, exitCode });
     };
 
-    if (execError.signal === "SIGTERM") {
-      logger.warn({ timeoutMs: config.timeoutMs }, "Claude CLI process timed out");
-    }
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdoutChunks.push(chunk);
+      lastActivityTs = Date.now();
+    });
 
-    return {
-      stdout: execError.stdout ?? "",
-      stderr: execError.stderr ?? execError.message ?? "",
-      exitCode: execError.code ?? 1,
-    };
-  }
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderrChunks.push(chunk);
+      lastActivityTs = Date.now();
+    });
+
+    child.on("close", (code, signal) => {
+      finish(code ?? 1, signal ?? undefined);
+    });
+
+    child.on("error", (err) => {
+      logger.error({ error: err.message }, "Claude CLI process error");
+      finish(1);
+    });
+
+    const globalTimer = setTimeout(() => {
+      if (!settled) {
+        logger.warn({ timeoutMs: config.timeoutMs }, "Claude CLI global timeout — sending SIGTERM");
+        child.kill("SIGTERM");
+      }
+    }, config.timeoutMs);
+
+    const inactivityChecker = setInterval(() => {
+      if (settled) return;
+      const idle = Date.now() - lastActivityTs;
+      if (idle >= INACTIVITY_TIMEOUT_MS) {
+        const stdoutSize = stdoutChunks.reduce((acc, b) => acc + b.length, 0);
+        const stderrSize = stderrChunks.reduce((acc, b) => acc + b.length, 0);
+        logger.warn(
+          { idleMs: idle, stdoutBytes: stdoutSize, stderrBytes: stderrSize },
+          "Claude CLI inactivity timeout — process produced no output, killing",
+        );
+        child.kill("SIGTERM");
+      }
+    }, 10_000);
+  });
 }
 
 function loadNexusResearchForGoal(
@@ -385,6 +446,23 @@ async function executeClaudeCliTask(
   }
 
   if (parsed.is_error || (cliResult.exitCode !== 0 && !parsed.result)) {
+    const errorMessage = parsed.result ?? cliResult.stderr ?? "Claude CLI execution failed";
+    const isTimeout = cliResult.exitCode === 143;
+
+    params.emitter?.error("forge", "forge:cli_failed", isTimeout
+      ? `Claude CLI timed out after ${Math.round(config.timeoutMs / 1000)}s`
+      : `Claude CLI failed (exit ${cliResult.exitCode})`, {
+      phase: "cli_execution",
+      metadata: {
+        exitCode: cliResult.exitCode,
+        isTimeout,
+        tokensUsed,
+        costUsd,
+        elapsedMs: elapsed,
+        error: errorMessage.slice(0, 500),
+      },
+    });
+
     return {
       success: false,
       status: "FAILURE",
@@ -396,7 +474,7 @@ async function executeClaudeCliTask(
       validations: DEFAULT_VALIDATIONS,
       correctionCycles: 0,
       sessionId: parsed.session_id,
-      error: parsed.result ?? cliResult.stderr ?? "Claude CLI execution failed",
+      error: errorMessage,
     };
   }
 
@@ -676,8 +754,16 @@ export async function executeWithClaudeCli(
     "Starting Claude CLI autonomous execution",
   );
 
-  const isAvailable = await verifyClaudeCliAvailable(config.cliPath);
-  if (!isAvailable) {
+  const authStatus = await verifyClaudeCliAvailable(config.cliPath);
+  if (!authStatus.available || !authStatus.authenticated) {
+    const errorMsg = authStatus.error
+      ?? `Claude CLI not found at "${config.cliPath}". Install it with: npm install -g @anthropic-ai/claude-code`;
+
+    emitter?.error("forge", "forge:cli_failed", errorMsg, {
+      phase: "setup",
+      metadata: { available: authStatus.available, authenticated: authStatus.authenticated },
+    });
+
     return {
       success: false,
       status: "FAILURE",
@@ -688,7 +774,7 @@ export async function executeWithClaudeCli(
       iterationsUsed: 0,
       validations: DEFAULT_VALIDATIONS,
       correctionCycles: 0,
-      error: `Claude CLI not found at "${config.cliPath}". Install it with: npm install -g @anthropic-ai/claude-code`,
+      error: errorMsg,
     };
   }
 

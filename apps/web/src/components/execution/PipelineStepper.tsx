@@ -39,13 +39,13 @@ const AGENT_LABELS: Readonly<Record<string, string>> = {
 };
 
 const AGENT_COLORS: Readonly<Record<string, string>> = {
-  kairos: "bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-300",
-  forge: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300",
-  nexus: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
-  vector: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300",
+  kairos: "bg-violet-500 text-white dark:bg-violet-600",
+  forge: "bg-sky-500 text-white dark:bg-sky-600",
+  nexus: "bg-amber-500 text-white dark:bg-amber-600",
+  vector: "bg-emerald-500 text-white dark:bg-emerald-600",
 };
 
-function inferAgentStatus(events: readonly ExecutionEvent[]): AgentGroup["status"] {
+function inferAgentStatus(events: readonly ExecutionEvent[], isLive: boolean): AgentGroup["status"] {
   const hasError = events.some((e) => e.level === "error");
   if (hasError) return "error";
 
@@ -60,10 +60,14 @@ function inferAgentStatus(events: readonly ExecutionEvent[]): AgentGroup["status
     return hasWarning ? "warning" : "success";
   }
 
+  if (!isLive) {
+    return hasWarning ? "warning" : "success";
+  }
+
   return "running";
 }
 
-function inferPhaseStatus(events: readonly ExecutionEvent[]): PhaseGroup["status"] {
+function inferPhaseStatus(events: readonly ExecutionEvent[], isLive: boolean, agentStatus?: AgentGroup["status"]): PhaseGroup["status"] {
   const hasError = events.some((e) => e.level === "error");
   if (hasError) return "error";
 
@@ -72,8 +76,9 @@ function inferPhaseStatus(events: readonly ExecutionEvent[]): PhaseGroup["status
   const passedTypes = [
     "forge:validation_passed", "forge:review_passed",
     "forge:cli_completed", "forge:delivery_complete",
+    "forge:context_loaded",
   ];
-  const failedTypes = ["forge:validation_failed", "forge:review_failed"];
+  const failedTypes = ["forge:validation_failed", "forge:review_failed", "forge:cli_failed"];
 
   const lastEvent = events.at(-1);
   if (lastEvent && failedTypes.includes(lastEvent.event_type)) return "error";
@@ -81,10 +86,15 @@ function inferPhaseStatus(events: readonly ExecutionEvent[]): PhaseGroup["status
     return hasWarning ? "warning" : "success";
   }
 
+  if (!isLive) {
+    if (agentStatus === "error") return "error";
+    return hasWarning ? "warning" : "success";
+  }
+
   return "running";
 }
 
-function groupEventsByAgent(events: readonly ExecutionEvent[]): readonly AgentGroup[] {
+function groupEventsByAgent(events: readonly ExecutionEvent[], isLive: boolean): readonly AgentGroup[] {
   const agentMap = new Map<string, ExecutionEvent[]>();
   const agentOrder: string[] = [];
 
@@ -100,13 +110,13 @@ function groupEventsByAgent(events: readonly ExecutionEvent[]): readonly AgentGr
 
   return agentOrder.map((agent) => {
     const agentEvents = agentMap.get(agent) ?? [];
-    const phases = groupEventsByPhase(agentEvents);
-    const status = inferAgentStatus(agentEvents);
+    const status = inferAgentStatus(agentEvents, isLive);
+    const phases = groupEventsByPhase(agentEvents, isLive, status);
     return { agent, events: agentEvents, status, phases };
   });
 }
 
-function groupEventsByPhase(events: readonly ExecutionEvent[]): readonly PhaseGroup[] {
+function groupEventsByPhase(events: readonly ExecutionEvent[], isLive: boolean, agentStatus?: AgentGroup["status"]): readonly PhaseGroup[] {
   const phaseMap = new Map<string, ExecutionEvent[]>();
   const phaseOrder: string[] = [];
 
@@ -126,7 +136,7 @@ function groupEventsByPhase(events: readonly ExecutionEvent[]): readonly PhaseGr
     return {
       phase,
       events: phaseEvents,
-      status: inferPhaseStatus(phaseEvents),
+      status: inferPhaseStatus(phaseEvents, isLive, agentStatus),
     };
   });
 }
@@ -220,7 +230,7 @@ function AgentNode({ group, isLast, isLive }: {
 
 export function PipelineStepper({ events, isLive }: PipelineStepperProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const agentGroups = useMemo(() => groupEventsByAgent(events), [events]);
+  const agentGroups = useMemo(() => groupEventsByAgent(events, isLive), [events, isLive]);
 
   useEffect(() => {
     if (isLive && scrollRef.current) {

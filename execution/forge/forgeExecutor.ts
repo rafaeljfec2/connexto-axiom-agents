@@ -23,6 +23,14 @@ export async function executeForge(
     return buildFailedResult(delegation.task, `Agent "${delegation.agent}" is not forge`);
   }
 
+  if (projectId) {
+    logger.info(
+      { task: delegation.task, projectId, traceId },
+      "Routing to project code executor (project-aware task)",
+    );
+    return executeProjectCode(db, delegation, projectId, traceId, emitter);
+  }
+
   const useOpenClaw = process.env.USE_OPENCLAW === "true";
 
   if (useOpenClaw) {
@@ -40,22 +48,12 @@ export async function executeForge(
         error: "OpenClaw unavailable (healthcheck failed)",
       };
     }
-  }
 
-  if (projectId && useOpenClaw) {
-    logger.info(
-      { task: delegation.task, projectId, traceId },
-      "Routing to project code executor (project-aware task)",
-    );
-    return executeProjectCode(db, delegation, projectId, traceId, emitter);
-  }
+    if (isCodingTask(delegation)) {
+      logger.info({ task: delegation.task, traceId }, "Routing to Forge code executor (coding task)");
+      return executeForgeCode(db, delegation);
+    }
 
-  if (useOpenClaw && isCodingTask(delegation)) {
-    logger.info({ task: delegation.task, traceId }, "Routing to Forge code executor (coding task)");
-    return executeForgeCode(db, delegation);
-  }
-
-  if (useOpenClaw) {
     logger.info({ task: delegation.task, traceId }, "Routing to OpenClaw runtime");
     return executeForgeViaOpenClaw(db, delegation);
   }
