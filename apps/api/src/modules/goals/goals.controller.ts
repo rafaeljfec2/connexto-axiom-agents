@@ -30,6 +30,16 @@ export class GoalsController {
     return this.goalsService.update(id, dto);
   }
 
+  @Post(":id/approve")
+  approve(@Param("id") id: string) {
+    return this.goalsService.approve(id);
+  }
+
+  @Post(":id/reject")
+  reject(@Param("id") id: string) {
+    return this.goalsService.reject(id);
+  }
+
   @Delete(":id")
   remove(@Param("id") id: string) {
     return this.goalsService.remove(id);

@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { DATABASE_TOKEN, type DatabaseConnection } from "../../database/database.provider";
 import { type CreateGoalDto, type UpdateGoalDto } from "./goals.dto";
 import { randomUUID } from "node:crypto";
@@ -211,6 +211,42 @@ export class GoalsService {
       .all({ goalId, shortGoalId }) as ReadonlyArray<GoalTokenUsageRow>;
 
     return { goal, codeChanges, tokenUsage };
+  }
+
+  approve(id: string) {
+    const goal = this.db.prepare("SELECT * FROM goals WHERE id = ?").get(id) as GoalRow | undefined;
+    if (!goal) {
+      throw new NotFoundException(`Goal ${id} not found`);
+    }
+    if (goal.status !== "code_review") {
+      throw new BadRequestException(`Goal ${id} is not in code_review status (current: ${goal.status})`);
+    }
+
+    this.db
+      .prepare(
+        "UPDATE goals SET status = 'completed', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+      )
+      .run(id);
+
+    return this.db.prepare("SELECT * FROM goals WHERE id = ?").get(id);
+  }
+
+  reject(id: string) {
+    const goal = this.db.prepare("SELECT * FROM goals WHERE id = ?").get(id) as GoalRow | undefined;
+    if (!goal) {
+      throw new NotFoundException(`Goal ${id} not found`);
+    }
+    if (goal.status !== "code_review") {
+      throw new BadRequestException(`Goal ${id} is not in code_review status (current: ${goal.status})`);
+    }
+
+    this.db
+      .prepare(
+        "UPDATE goals SET status = 'active', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+      )
+      .run(id);
+
+    return this.db.prepare("SELECT * FROM goals WHERE id = ?").get(id);
   }
 
   remove(id: string) {

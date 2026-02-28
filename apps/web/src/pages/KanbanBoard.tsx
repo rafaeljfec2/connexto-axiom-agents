@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useGoals, useCreateGoal, useActiveProjects } from "@/api/hooks";
+import { useGoals, useCreateGoal, useActiveProjects, useApproveGoal, useRejectGoal } from "@/api/hooks";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -22,6 +22,9 @@ import {
   Timer,
   CheckCircle2,
   XCircle,
+  Eye,
+  Check,
+  X,
   FolderGit2,
   GitBranch,
   ChevronRight,
@@ -31,6 +34,7 @@ import { Button } from "@/components/ui/button";
 const COLUMNS = [
   { id: "active", label: "Ativas", color: "bg-blue-500", icon: CircleDot },
   { id: "in_progress", label: "Em Progresso", color: "bg-amber-500", icon: Timer },
+  { id: "code_review", label: "Code Review", color: "bg-violet-500", icon: Eye },
   { id: "completed", label: "Concluídas", color: "bg-emerald-500", icon: CheckCircle2 },
   { id: "cancelled", label: "Canceladas", color: "bg-zinc-400", icon: XCircle },
 ] as const;
@@ -74,55 +78,90 @@ interface GoalCardProps {
       readonly latest_branch?: string | null;
     };
   };
+  readonly columnId: string;
   readonly columnColor: string;
   readonly onNavigate: (id: string) => void;
+  readonly onApprove?: (id: string) => void;
+  readonly onReject?: (id: string) => void;
 }
 
-function GoalCard({ goal, columnColor, onNavigate }: GoalCardProps) {
+function GoalCard({ goal, columnId, columnColor, onNavigate, onApprove, onReject }: GoalCardProps) {
   const prioClass = PRIORITY_COLORS[goal.priority] ?? PRIORITY_COLORS[0];
+  const isCodeReview = columnId === "code_review";
 
   return (
-    <button
-      type="button"
-      onClick={() => onNavigate(goal.id)}
-      className="kanban-card group w-full cursor-pointer text-left"
-    >
-      <div className={`h-[3px] w-full rounded-t-md ${columnColor}`} />
-      <div className="px-3 pb-3 pt-2.5">
-        <p className="kanban-card-title text-[13px] font-semibold leading-snug">
-          {goal.title}
-        </p>
+    <div className="kanban-card group w-full text-left">
+      <button
+        type="button"
+        onClick={() => onNavigate(goal.id)}
+        className="w-full cursor-pointer text-left"
+      >
+        <div className={`h-[3px] w-full rounded-t-md ${columnColor}`} />
+        <div className="px-3 pb-3 pt-2.5">
+          <p className="kanban-card-title text-[13px] font-semibold leading-snug">
+            {goal.title}
+          </p>
 
-        {goal.project_id ? (
-          <div className="mt-1.5 flex items-center gap-1 text-[11px] text-[#6b7280]">
-            <FolderGit2 className="h-3 w-3" />
-            <span>{goal.project_id}</span>
-          </div>
-        ) : null}
+          {goal.project_id ? (
+            <div className="mt-1.5 flex items-center gap-1 text-[11px] text-[#6b7280]">
+              <FolderGit2 className="h-3 w-3" />
+              <span>{goal.project_id}</span>
+            </div>
+          ) : null}
 
-        {goal.stats?.latest_branch ? (
-          <div className="mt-1 flex items-center gap-1 text-[11px] text-[#6b7280]">
-            <GitBranch className="h-3 w-3 shrink-0" />
-            <code className="truncate font-mono text-[10px]">{goal.stats.latest_branch}</code>
-          </div>
-        ) : null}
+          {goal.stats?.latest_branch ? (
+            <div className="mt-1 flex items-center gap-1 text-[11px] text-[#6b7280]">
+              <GitBranch className="h-3 w-3 shrink-0" />
+              <code className="truncate font-mono text-[10px]">{goal.stats.latest_branch}</code>
+            </div>
+          ) : null}
 
-        <div className="mt-2.5 flex items-center justify-between">
-          <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none ${prioClass}`}>
-            P{goal.priority} {PRIORITY_LABEL[goal.priority] ?? ""}
-          </span>
+          <div className="mt-2.5 flex items-center justify-between">
+            <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none ${prioClass}`}>
+              P{goal.priority} {PRIORITY_LABEL[goal.priority] ?? ""}
+            </span>
 
-          <div className="flex items-center gap-1.5">
-            {goal.stats ? (
-              <span className="text-[10px] tabular-nums text-[#9ca3af]">
-                {goal.stats.total_outcomes} exec
-              </span>
-            ) : null}
-            <ChevronRight className="h-3.5 w-3.5 text-[#d1d5db] transition-all group-hover:translate-x-0.5 group-hover:text-[#9ca3af]" />
+            <div className="flex items-center gap-1.5">
+              {goal.stats ? (
+                <span className="text-[10px] tabular-nums text-[#9ca3af]">
+                  {goal.stats.total_outcomes} exec
+                </span>
+              ) : null}
+              <ChevronRight className="h-3.5 w-3.5 text-[#d1d5db] transition-all group-hover:translate-x-0.5 group-hover:text-[#9ca3af]" />
+            </div>
           </div>
         </div>
-      </div>
-    </button>
+      </button>
+
+      {isCodeReview ? (
+        <div className="flex items-center gap-2 border-t border-[#e5e7eb] px-3 py-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 flex-1 cursor-pointer gap-1 border-emerald-300 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"
+            onClick={(e) => {
+              e.stopPropagation();
+              onApprove?.(goal.id);
+            }}
+          >
+            <Check className="h-3.5 w-3.5" />
+            Aprovar
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 flex-1 cursor-pointer gap-1 border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700"
+            onClick={(e) => {
+              e.stopPropagation();
+              onReject?.(goal.id);
+            }}
+          >
+            <X className="h-3.5 w-3.5" />
+            Rejeitar
+          </Button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -131,6 +170,8 @@ export function KanbanBoard() {
   const { data: projects } = useActiveProjects();
   const navigate = useNavigate();
   const createGoal = useCreateGoal();
+  const approveGoal = useApproveGoal();
+  const rejectGoal = useRejectGoal();
   const [dialogOpen, setDialogOpen] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -317,8 +358,11 @@ export function KanbanBoard() {
                   <GoalCard
                     key={goal.id}
                     goal={goal}
+                    columnId={column.id}
                     columnColor={column.color}
                     onNavigate={handleNavigateToGoal}
+                    onApprove={(id) => approveGoal.mutate(id)}
+                    onReject={(id) => rejectGoal.mutate(id)}
                   />
                 ))}
 

@@ -70,7 +70,7 @@ export class CodeChangesService {
     if (total.count > 0 && pending.count === 0) {
       this.db
         .prepare(
-          "UPDATE goals SET status = 'completed', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'in_progress'",
+          "UPDATE goals SET status = 'code_review', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'in_progress'",
         )
         .run(goal.id);
     }

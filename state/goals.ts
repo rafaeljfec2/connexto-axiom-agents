@@ -42,9 +42,21 @@ export function markGoalInProgress(db: BetterSqlite3.Database, goalId: string): 
   }
 }
 
-export function markGoalCompleted(db: BetterSqlite3.Database, goalId: string): void {
+export function markGoalForReview(db: BetterSqlite3.Database, goalId: string): void {
   db.prepare(
-    "UPDATE goals SET status = 'completed', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'in_progress'",
+    "UPDATE goals SET status = 'code_review', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'in_progress'",
+  ).run(goalId);
+}
+
+export function approveGoal(db: BetterSqlite3.Database, goalId: string): void {
+  db.prepare(
+    "UPDATE goals SET status = 'completed', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'code_review'",
+  ).run(goalId);
+}
+
+export function rejectGoal(db: BetterSqlite3.Database, goalId: string): void {
+  db.prepare(
+    "UPDATE goals SET status = 'active', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'code_review'",
   ).run(goalId);
 }
 
@@ -71,7 +83,7 @@ export function tryAutoCompleteGoal(
     .get(shortGoalId) as { count: number };
 
   if (totalCount.count > 0 && pendingCount.count === 0) {
-    markGoalCompleted(db, goal.id);
+    markGoalForReview(db, goal.id);
     return true;
   }
 

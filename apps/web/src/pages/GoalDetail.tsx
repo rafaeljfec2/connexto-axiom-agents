@@ -27,6 +27,7 @@ import {
 const STATUS_LABEL: Record<string, string> = {
   active: "Ativa",
   in_progress: "Em Progresso",
+  code_review: "Em Revisão",
   completed: "Concluída",
   cancelled: "Cancelada",
   pending: "Pendente",
@@ -49,6 +50,7 @@ const PRIORITY_LABEL: Record<number, string> = {
 const STATUS_COLOR: Record<string, string> = {
   active: "bg-blue-500",
   in_progress: "bg-amber-500",
+  code_review: "bg-violet-500",
   completed: "bg-emerald-500",
   cancelled: "bg-zinc-400",
 };

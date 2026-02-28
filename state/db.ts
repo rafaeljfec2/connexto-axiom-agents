@@ -32,6 +32,7 @@ function applyMigrations(db: BetterSqlite3.Database): void {
   migrateProjectsForgeExecutor(db);
   migrateProjectsPushEnabled(db);
   migrateGoalsInProgressStatus(db);
+  migrateGoalsCodeReviewStatus(db);
 }
 
 function migrateArtifactsColumns(db: BetterSqlite3.Database): void {
@@ -179,6 +180,32 @@ function migrateGoalsInProgressStatus(db: BetterSqlite3.Database): void {
         title       TEXT NOT NULL,
         description TEXT,
         status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'in_progress', 'completed', 'cancelled')),
+        priority    INTEGER NOT NULL DEFAULT 0,
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        project_id  TEXT
+      );
+      INSERT INTO goals_new SELECT id, title, description, status, priority, created_at, updated_at, project_id FROM goals;
+      DROP TABLE goals;
+      ALTER TABLE goals_new RENAME TO goals;
+      CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status);
+      CREATE INDEX IF NOT EXISTS idx_goals_project_id ON goals(project_id);
+    `);
+  }
+}
+
+function migrateGoalsCodeReviewStatus(db: BetterSqlite3.Database): void {
+  const tableInfo = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='goals'")
+    .get() as { sql: string } | undefined;
+
+  if (tableInfo && !tableInfo.sql.includes("code_review")) {
+    db.exec(`
+      CREATE TABLE goals_new (
+        id          TEXT PRIMARY KEY,
+        title       TEXT NOT NULL,
+        description TEXT,
+        status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'in_progress', 'code_review', 'completed', 'cancelled')),
         priority    INTEGER NOT NULL DEFAULT 0,
         created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
         updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),

@@ -248,6 +248,28 @@ export function useCreateGoal() {
   });
 }
 
+export function useApproveGoal() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post(`/goals/${id}/approve`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["goals"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+}
+
+export function useRejectGoal() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post(`/goals/${id}/reject`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["goals"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+}
+
 export function useApproveCodeChange() {
   const queryClient = useQueryClient();
   return useMutation({
