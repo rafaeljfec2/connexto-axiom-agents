@@ -88,6 +88,32 @@ interface ClaudeCliJsonOutput {
   readonly modelUsage?: Record<string, ClaudeCliModelUsage>;
 }
 
+interface ClaudeStreamContentBlock {
+  readonly type: string;
+  readonly name?: string;
+  readonly input?: Record<string, unknown>;
+  readonly text?: string;
+  readonly thinking?: string;
+}
+
+interface ClaudeStreamEvent {
+  readonly type: string;
+  readonly subtype?: string;
+  readonly message?: {
+    readonly role?: string;
+    readonly content?: readonly ClaudeStreamContentBlock[];
+  };
+  readonly is_error?: boolean;
+  readonly result?: string;
+  readonly session_id?: string;
+  readonly total_cost_usd?: number;
+  readonly num_turns?: number;
+  readonly duration_ms?: number;
+  readonly duration_api_ms?: number;
+  readonly usage?: ClaudeCliJsonOutput["usage"];
+  readonly modelUsage?: Record<string, ClaudeCliModelUsage>;
+}
+
 function loadClaudeCliConfig(): ClaudeCliExecutorConfig {
   return {
     cliPath: process.env.CLAUDE_CLI_PATH ?? "claude",
@@ -241,6 +267,59 @@ function extractCostUsd(output: ClaudeCliJsonOutput): number {
   return output.total_cost_usd ?? 0;
 }
 
+function parseStreamLine(line: string): ClaudeStreamEvent | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed) as ClaudeStreamEvent;
+  } catch {
+    return null;
+  }
+}
+
+function summarizeToolInput(input?: Record<string, unknown>): string {
+  if (!input) return "";
+  const filePath = input.file_path ?? input.path ?? input.command ?? input.pattern;
+  if (typeof filePath === "string") return filePath.slice(0, 120);
+  return JSON.stringify(input).slice(0, 120);
+}
+
+const TOOL_EVENT_THROTTLE_MS = 2_000;
+
+function createStreamProgressHandler(emitter?: ExecutionEventEmitter) {
+  let lastToolEmitTs = 0;
+  let turnCounter = 0;
+
+  return (event: ClaudeStreamEvent): void => {
+    if (!emitter) return;
+
+    if (event.type === "assistant" && event.message?.content) {
+      turnCounter++;
+      for (const block of event.message.content) {
+        if (block.type === "tool_use" && block.name) {
+          const now = Date.now();
+          if (now - lastToolEmitTs < TOOL_EVENT_THROTTLE_MS) continue;
+          lastToolEmitTs = now;
+
+          emitter.info("forge", "forge:cli_tool_use", `${block.name}: ${summarizeToolInput(block.input)}`, {
+            phase: "cli_execution",
+            metadata: { tool: block.name, input: summarizeToolInput(block.input), turn: turnCounter },
+          });
+        }
+      }
+    }
+
+    if (event.type === "result") {
+      const costUsd = event.total_cost_usd ?? 0;
+      const turns = event.num_turns ?? turnCounter;
+      emitter.info("forge", "forge:cli_progress", `Turn ${turns} completed (cost: $${costUsd.toFixed(4)})`, {
+        phase: "cli_execution",
+        metadata: { turns, costUsd, durationMs: event.duration_ms },
+      });
+    }
+  };
+}
+
 async function writeClaudeMd(
   workspacePath: string,
   ctx: ClaudeCliInstructionsContext,
@@ -283,11 +362,15 @@ interface SpawnOptions {
   readonly resumeSessionId?: string;
 }
 
+interface SpawnClaudeCliOptions extends SpawnOptions {
+  readonly emitter?: ExecutionEventEmitter;
+}
+
 async function spawnClaudeCli(
   config: ClaudeCliExecutorConfig,
   workspacePath: string,
   prompt: string,
-  options?: SpawnOptions,
+  options?: SpawnClaudeCliOptions,
 ): Promise<{ readonly stdout: string; readonly stderr: string; readonly exitCode: number }> {
   const effectiveModel = options?.model ?? config.model;
 
@@ -319,6 +402,8 @@ async function spawnClaudeCli(
     "Spawning Claude CLI process",
   );
 
+  const onStreamEvent = createStreamProgressHandler(options?.emitter);
+
   return new Promise((resolve) => {
     const cleanEnv = buildCleanEnv(workspacePath);
     const singleQuoteEscape = String.raw`'\''`;
@@ -333,14 +418,35 @@ async function spawnClaudeCli(
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
+    let lineBuffer = "";
     let lastActivityTs = Date.now();
     let settled = false;
+
+    const processNdjsonLines = (chunk: string) => {
+      lineBuffer += chunk;
+      const lines = lineBuffer.split("\n");
+      lineBuffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        const event = parseStreamLine(line);
+        if (event) {
+          try { onStreamEvent(event); } catch { /* defensive */ }
+        }
+      }
+    };
 
     const finish = (exitCode: number, signal?: string) => {
       if (settled) return;
       settled = true;
       clearTimeout(globalTimer);
       clearInterval(inactivityChecker);
+
+      if (lineBuffer.trim()) {
+        const event = parseStreamLine(lineBuffer);
+        if (event) {
+          try { onStreamEvent(event); } catch { /* defensive */ }
+        }
+      }
 
       const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
       const stderr = Buffer.concat(stderrChunks).toString("utf-8");
@@ -355,6 +461,7 @@ async function spawnClaudeCli(
     child.stdout.on("data", (chunk: Buffer) => {
       stdoutChunks.push(chunk);
       lastActivityTs = Date.now();
+      processNdjsonLines(chunk.toString("utf-8"));
     });
 
     child.stderr.on("data", (chunk: Buffer) => {
@@ -456,7 +563,10 @@ async function executeClaudeCliTask(
     },
   });
 
-  const cliResult = await spawnClaudeCli(config, workspacePath, prompt, spawnOpts);
+  const cliResult = await spawnClaudeCli(config, workspacePath, prompt, {
+    ...spawnOpts,
+    emitter: params.emitter,
+  });
   const parsed = parseClaudeCliOutput(cliResult.stdout);
   const tokensUsed = extractTokensUsed(parsed);
   const costUsd = extractCostUsd(parsed);

@@ -470,6 +470,91 @@ describe("extractCostUsd via parseClaudeCliOutput", () => {
   });
 });
 
+describe("parseClaudeCliOutput with NDJSON stream-json format", () => {
+  it("should extract result from multi-line NDJSON stream", () => {
+    const lines = [
+      JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", name: "Read", input: { file_path: "src/app.ts" } }] } }),
+      JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", name: "Edit", input: { file_path: "src/app.ts" } }] } }),
+      JSON.stringify({ type: "result", subtype: "success", result: "Fixed the bug", session_id: "sess-1", total_cost_usd: 0.03, num_turns: 3 }),
+    ];
+    const raw = lines.join("\n");
+
+    const parsed = parseClaudeCliOutput(raw);
+
+    assert.equal(parsed.type, "result");
+    assert.equal(parsed.result, "Fixed the bug");
+    assert.equal(parsed.session_id, "sess-1");
+    assert.equal(parsed.total_cost_usd, 0.03);
+    assert.equal(parsed.num_turns, 3);
+  });
+
+  it("should skip non-result lines and find the last result", () => {
+    const lines = [
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "thinking..." }] } }),
+      JSON.stringify({ type: "result", subtype: "success", result: "first result", session_id: "s1" }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash" }] } }),
+      JSON.stringify({ type: "result", subtype: "success", result: "final result", session_id: "s2", total_cost_usd: 0.05 }),
+    ];
+    const raw = lines.join("\n");
+
+    const parsed = parseClaudeCliOutput(raw);
+
+    assert.equal(parsed.result, "final result");
+    assert.equal(parsed.session_id, "s2");
+  });
+
+  it("should handle NDJSON with malformed lines gracefully", () => {
+    const lines = [
+      "not valid json at all",
+      "{broken json",
+      JSON.stringify({ type: "result", result: "recovered", session_id: "s3" }),
+    ];
+    const raw = lines.join("\n");
+
+    const parsed = parseClaudeCliOutput(raw);
+
+    assert.equal(parsed.type, "result");
+    assert.equal(parsed.result, "recovered");
+  });
+
+  it("should fallback to single JSON parse when no result type line found", () => {
+    const raw = JSON.stringify({ result: "legacy format", is_error: false });
+
+    const parsed = parseClaudeCliOutput(raw);
+
+    assert.equal(parsed.result, "legacy format");
+    assert.equal(parsed.is_error, false);
+  });
+
+  it("should handle NDJSON with trailing newline", () => {
+    const lines = [
+      JSON.stringify({ type: "assistant", message: { content: [] } }),
+      JSON.stringify({ type: "result", subtype: "success", result: "done", total_cost_usd: 0.01 }),
+      "",
+    ];
+    const raw = lines.join("\n");
+
+    const parsed = parseClaudeCliOutput(raw);
+
+    assert.equal(parsed.type, "result");
+    assert.equal(parsed.result, "done");
+  });
+
+  it("should handle stream-json error result", () => {
+    const lines = [
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "trying..." }] } }),
+      JSON.stringify({ type: "result", subtype: "error", is_error: true, result: "API rate limit exceeded" }),
+    ];
+    const raw = lines.join("\n");
+
+    const parsed = parseClaudeCliOutput(raw);
+
+    assert.equal(parsed.type, "result");
+    assert.equal(parsed.is_error, true);
+    assert.equal(parsed.result, "API rate limit exceeded");
+  });
+});
+
 describe("manifest validation accepts claude-cli executor", () => {
   it("should accept forge_executor claude-cli", async () => {
     const { validateManifest } = await import("../../projects/manifest.schema.js");
