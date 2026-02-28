@@ -1,7 +1,7 @@
 import type { NexusResearchContext, GoalContext } from "./forgeTypes.js";
 import { classifyTaskType } from "./openclawInstructions.js";
 import type { ForgeTaskType } from "./openclawInstructions.js";
-import type { TaskComplexity } from "./claudeCliTypes.js";
+import type { TaskComplexity, ExecutionPhase } from "./claudeCliTypes.js";
 
 export interface ClaudeCliInstructionsContext {
   readonly task: string;
@@ -15,10 +15,50 @@ export interface ClaudeCliInstructionsContext {
   readonly baselineBuildFailed: boolean;
   readonly projectInstructions?: string;
   readonly complexity?: TaskComplexity;
+  readonly executionPhase?: ExecutionPhase;
 }
 
 export function buildClaudeMdContent(ctx: ClaudeCliInstructionsContext): string {
   const taskType = classifyTaskType(ctx.task);
+  const phase = ctx.executionPhase ?? "implementation";
+
+  if (phase === "planning") return buildPlanningPhaseMd(ctx, taskType);
+  if (phase === "testing") return buildTestingPhaseMd(ctx, taskType);
+
+  return buildImplementationPhaseMd(ctx, taskType);
+}
+
+function buildPlanningPhaseMd(ctx: ClaudeCliInstructionsContext, taskType: ForgeTaskType): string {
+  const sections: string[] = [
+    buildPlanningIdentitySection(),
+    buildTaskContextSection(ctx),
+    buildGoalSection(ctx.goalContext),
+    buildNexusSection(ctx.nexusResearch),
+    buildRepositorySection(ctx.repositoryIndexSummary, taskType),
+    buildPlanningWorkflowSection(),
+    buildArchitectureRulesSection(),
+    buildProjectInstructionsSection(ctx.projectInstructions),
+    buildSecurityRulesSection(),
+  ];
+
+  return sections.filter(Boolean).join("\n\n");
+}
+
+function buildTestingPhaseMd(ctx: ClaudeCliInstructionsContext, taskType: ForgeTaskType): string {
+  const sections: string[] = [
+    buildTestingIdentitySection(),
+    buildTaskContextSection(ctx),
+    buildTestingWorkflowSection(),
+    buildTestingRulesSection(),
+    buildQualityRulesSection(),
+    buildProjectInstructionsSection(ctx.projectInstructions),
+    buildSecurityRulesSection(),
+  ];
+
+  return sections.filter(Boolean).join("\n\n");
+}
+
+function buildImplementationPhaseMd(ctx: ClaudeCliInstructionsContext, taskType: ForgeTaskType): string {
   const complexity = ctx.complexity ?? "standard";
 
   const sections: string[] = [
@@ -61,6 +101,102 @@ function buildComplexityHintSection(complexity: TaskComplexity): string {
     ].join("\n");
   }
   return "";
+}
+
+function buildPlanningIdentitySection(): string {
+  return [
+    "# Identity",
+    "",
+    "You are FORGE PLANNER, an autonomous tech lead agent that ANALYZES codebases and produces execution plans.",
+    "You are a PLANNER — you read and analyze code, but you do NOT modify any files.",
+    "Your role is to understand the project structure, identify impacted areas, and produce a detailed execution plan.",
+    "",
+    "## Absolute Restrictions",
+    "",
+    "- NEVER modify, create, or delete any files",
+    "- NEVER use Write or Edit tools",
+    "- ONLY use Read, Glob, Grep, and Bash (for read-only commands like `cat`, `find`, `ls`, `tsc --noEmit`)",
+    "- NEVER run commands that modify files (no `npm install`, no `git commit`, no write operations)",
+    "- NEVER skip reading the codebase before planning",
+  ].join("\n");
+}
+
+function buildPlanningWorkflowSection(): string {
+  return [
+    "# Workflow",
+    "",
+    "1. Read the project structure (`ls`, `find`, `tree`) to understand the codebase layout",
+    "2. Read the Prisma schema, package.json, tsconfig, and key configuration files",
+    "3. Read the specific source files related to the task",
+    "4. Analyze the impact: what files need changes, what modules are affected, what could break",
+    "5. Produce an execution plan in the following format:",
+    "",
+    "## Execution Plan Format",
+    "",
+    "### Impact Analysis",
+    "- **Files to modify**: list every file that needs changes",
+    "- **Files to create**: list any new files to be created",
+    "- **Dependencies**: list modules/packages that are affected",
+    "- **Risk**: LOW | MEDIUM | HIGH with justification",
+    "",
+    "### Tasks (ordered by dependency)",
+    "For each task:",
+    "- **TASK N — [Name]**: description of what to do",
+    "  - Files: [list of files involved]",
+    "  - Details: [specific changes needed]",
+    "  - Depends on: [previous tasks, if any]",
+    "",
+    "### Verification Steps",
+    "- List specific commands/checks to run after implementation",
+    "",
+    "## Important",
+    "- Be specific: reference exact file paths, function names, and line ranges",
+    "- Order tasks by dependency — schema before logic, types before implementation",
+    "- Consider existing patterns in the codebase",
+  ].join("\n");
+}
+
+function buildTestingIdentitySection(): string {
+  return [
+    "# Identity",
+    "",
+    "You are FORGE TESTER, an autonomous test automation agent.",
+    "Your role is to write automated tests for recently implemented changes.",
+    "You read the changed files, understand the implementation, and create comprehensive test coverage.",
+    "",
+    "## Absolute Restrictions",
+    "",
+    "- ONLY create or modify test files — NEVER touch production code",
+    "- NEVER modify .env files or files containing secrets",
+    "- NEVER skip reading the implementation before writing tests",
+    "- NEVER leave failing tests — fix them before finishing",
+  ].join("\n");
+}
+
+function buildTestingWorkflowSection(): string {
+  return [
+    "# Workflow",
+    "",
+    "1. Read each changed file to understand the implementation",
+    "2. Identify the test framework used (vitest, jest, node:test, etc.)",
+    "3. Check existing test patterns in the project for conventions",
+    "4. Write unit tests for business logic (pure functions, services, utils)",
+    "5. Write integration tests for cross-module flows (API endpoints, controllers)",
+    "6. Run the tests to verify they pass",
+    "7. Fix any failing tests and re-run",
+    "",
+    "## Test Priorities",
+    "- Happy path for each new function/endpoint",
+    "- Edge cases and error handling",
+    "- Input validation",
+    "- Integration between changed modules",
+    "",
+    "## Important",
+    "- Follow existing test file naming conventions (`.test.ts`, `.spec.ts`, etc.)",
+    "- Use the same assertion library the project already uses",
+    "- Do NOT mock external dependencies unless absolutely necessary",
+    "- Clean up test data after each test (isolated tests)",
+  ].join("\n");
 }
 
 function buildIdentitySection(): string {

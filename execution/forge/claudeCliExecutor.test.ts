@@ -1,11 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { parseClaudeCliOutput } from "./claudeCliOutputParser.js";
-import { selectModelForTask, classifyTaskComplexity } from "./claudeCliTypes.js";
+import { selectModelForTask, classifyTaskComplexity, PHASE_TOOL_SETS, PHASE_MAX_TURNS } from "./claudeCliTypes.js";
 import type { ClaudeCliExecutorConfig, ClaudeCliExecutionResult } from "./claudeCliTypes.js";
 import { buildForgeCodeOutputFromCli } from "./claudeCliExecutor.js";
 import { buildClaudeMdContent } from "./claudeCliInstructions.js";
 import type { ClaudeCliInstructionsContext } from "./claudeCliInstructions.js";
+import { buildPlanningPrompt, buildImplementationPrompt, buildTestingPrompt } from "./claudeCliContext.js";
 
 describe("parseClaudeCliOutput", () => {
   it("should parse valid JSON output with result and usage", () => {
@@ -768,6 +769,177 @@ describe("writeImplementationReport (Phase 3)", () => {
     } finally {
       await fsPromises.default.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("PHASE_TOOL_SETS and PHASE_MAX_TURNS (phased execution config)", () => {
+  it("should define read-only tools for planning phase", () => {
+    assert.equal(PHASE_TOOL_SETS.planning, "Read,Glob,Grep,Bash");
+    assert.ok(!PHASE_TOOL_SETS.planning.includes("Write"));
+    assert.ok(!PHASE_TOOL_SETS.planning.includes("Edit"));
+  });
+
+  it("should define full tools for implementation phase", () => {
+    assert.ok(PHASE_TOOL_SETS.implementation.includes("Edit"));
+    assert.ok(PHASE_TOOL_SETS.implementation.includes("Write"));
+    assert.ok(PHASE_TOOL_SETS.implementation.includes("Read"));
+    assert.ok(PHASE_TOOL_SETS.implementation.includes("Bash"));
+  });
+
+  it("should define full tools for testing phase", () => {
+    assert.ok(PHASE_TOOL_SETS.testing.includes("Edit"));
+    assert.ok(PHASE_TOOL_SETS.testing.includes("Write"));
+  });
+
+  it("should have lower max turns for planning than implementation", () => {
+    assert.ok(PHASE_MAX_TURNS.planning < PHASE_MAX_TURNS.implementation);
+  });
+
+  it("should have lower max turns for correction than implementation", () => {
+    assert.ok(PHASE_MAX_TURNS.correction <= PHASE_MAX_TURNS.implementation);
+  });
+});
+
+describe("buildPlanningPrompt", () => {
+  it("should include analysis instructions and read-only restriction", () => {
+    const prompt = buildPlanningPrompt("Create a user service", "A working user CRUD");
+
+    assert.ok(prompt.includes("ANALYZE the codebase"));
+    assert.ok(prompt.includes("TECH LEAD"));
+    assert.ok(prompt.includes("Do NOT modify any files"));
+    assert.ok(prompt.includes("Create a user service"));
+    assert.ok(prompt.includes("A working user CRUD"));
+  });
+
+  it("should include execution plan format template", () => {
+    const prompt = buildPlanningPrompt("Build payment module", "");
+
+    assert.ok(prompt.includes("Impact Analysis"));
+    assert.ok(prompt.includes("Tasks (in order)"));
+    assert.ok(prompt.includes("Verification Steps"));
+  });
+});
+
+describe("buildImplementationPrompt", () => {
+  it("should include task and expected output", () => {
+    const prompt = buildImplementationPrompt("Fix the login bug", "Login works");
+
+    assert.ok(prompt.includes("IMPLEMENT"));
+    assert.ok(prompt.includes("Fix the login bug"));
+    assert.ok(prompt.includes("Login works"));
+  });
+
+  it("should include execution plan when provided", () => {
+    const plan = "TASK 1: Modify auth.ts\nTASK 2: Update tests";
+    const prompt = buildImplementationPrompt("Implement auth", "Auth works", plan);
+
+    assert.ok(prompt.includes("Execution Plan (from planning phase)"));
+    assert.ok(prompt.includes("TASK 1: Modify auth.ts"));
+    assert.ok(prompt.includes("TASK 2: Update tests"));
+  });
+
+  it("should not include plan section when no plan provided", () => {
+    const prompt = buildImplementationPrompt("Fix bug", "Bug fixed");
+
+    assert.ok(!prompt.includes("Execution Plan"));
+  });
+});
+
+describe("buildTestingPrompt", () => {
+  it("should list changed files and include testing instructions", () => {
+    const prompt = buildTestingPrompt("Add user endpoint", ["src/user.ts", "src/user.controller.ts"]);
+
+    assert.ok(prompt.includes("WRITE automated tests"));
+    assert.ok(prompt.includes("- src/user.ts"));
+    assert.ok(prompt.includes("- src/user.controller.ts"));
+    assert.ok(prompt.includes("Add user endpoint"));
+  });
+
+  it("should include testing rules", () => {
+    const prompt = buildTestingPrompt("Task", ["a.ts"]);
+
+    assert.ok(prompt.includes("English"));
+    assert.ok(prompt.includes("do NOT modify existing tests"));
+  });
+});
+
+describe("buildClaudeMdContent with executionPhase (phased execution)", () => {
+  const baseContext: ClaudeCliInstructionsContext = {
+    task: "Create a payment module from scratch",
+    expectedOutput: "Payment module with CRUD",
+    language: "typescript",
+    framework: "nestjs",
+    projectId: "test-project",
+    baselineBuildFailed: false,
+  };
+
+  it("should generate planning identity for planning phase", () => {
+    const ctx = { ...baseContext, executionPhase: "planning" as const };
+    const content = buildClaudeMdContent(ctx);
+
+    assert.ok(content.includes("FORGE PLANNER"));
+    assert.ok(content.includes("NEVER modify, create, or delete any files"));
+    assert.ok(content.includes("NEVER use Write or Edit tools"));
+    assert.ok(!content.includes("FORGE, an autonomous coding agent that IMPLEMENTS"));
+  });
+
+  it("should generate planning workflow for planning phase", () => {
+    const ctx = { ...baseContext, executionPhase: "planning" as const };
+    const content = buildClaudeMdContent(ctx);
+
+    assert.ok(content.includes("Impact Analysis"));
+    assert.ok(content.includes("Tasks (ordered by dependency)"));
+    assert.ok(content.includes("Verification Steps"));
+  });
+
+  it("should generate testing identity for testing phase", () => {
+    const ctx = { ...baseContext, executionPhase: "testing" as const };
+    const content = buildClaudeMdContent(ctx);
+
+    assert.ok(content.includes("FORGE TESTER"));
+    assert.ok(content.includes("ONLY create or modify test files"));
+    assert.ok(!content.includes("FORGE PLANNER"));
+  });
+
+  it("should generate testing workflow for testing phase", () => {
+    const ctx = { ...baseContext, executionPhase: "testing" as const };
+    const content = buildClaudeMdContent(ctx);
+
+    assert.ok(content.includes("Test Priorities"));
+    assert.ok(content.includes("Happy path"));
+    assert.ok(content.includes("Edge cases"));
+  });
+
+  it("should generate standard implementation identity when no phase specified", () => {
+    const content = buildClaudeMdContent(baseContext);
+
+    assert.ok(content.includes("FORGE, an autonomous coding agent that IMPLEMENTS"));
+    assert.ok(!content.includes("FORGE PLANNER"));
+    assert.ok(!content.includes("FORGE TESTER"));
+  });
+
+  it("should generate standard implementation identity for implementation phase", () => {
+    const ctx = { ...baseContext, executionPhase: "implementation" as const };
+    const content = buildClaudeMdContent(ctx);
+
+    assert.ok(content.includes("FORGE, an autonomous coding agent that IMPLEMENTS"));
+  });
+
+  it("should not include implementation sections in planning phase", () => {
+    const ctx = { ...baseContext, executionPhase: "planning" as const };
+    const content = buildClaudeMdContent(ctx);
+
+    assert.ok(!content.includes("# Decision Protocol"));
+    assert.ok(!content.includes("# Code Quality Rules"));
+    assert.ok(!content.includes("# Frontend Rules"));
+  });
+
+  it("should include project instructions in all phases", () => {
+    const ctx = { ...baseContext, executionPhase: "planning" as const, projectInstructions: "Custom rule here" };
+    const content = buildClaudeMdContent(ctx);
+
+    assert.ok(content.includes("# Project-Specific Standards"));
+    assert.ok(content.includes("Custom rule here"));
   });
 });
 

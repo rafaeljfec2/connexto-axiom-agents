@@ -32,7 +32,14 @@ import {
   buildRepositoryIndexSummary,
   readProjectInstructions,
 } from "./claudeCliContext.js";
-import { executeClaudeCliTask, runCorrectionLoop, runPostCorrectionReview } from "./claudeCliCorrectionLoop.js";
+import {
+  executeClaudeCliTask,
+  runCorrectionLoop,
+  runPostCorrectionReview,
+  executePlanningPhase,
+  executeImplementationWithPlan,
+  executeTestingPhase,
+} from "./claudeCliCorrectionLoop.js";
 
 export { parseClaudeCliOutput } from "./claudeCliOutputParser.js";
 export { selectModelForTask } from "./claudeCliTypes.js";
@@ -130,11 +137,11 @@ export async function executeWithClaudeCli(
 
   await writeClaudeMd(workspacePath, instructionsCtx);
 
-  const adjustedMaxTurns = complexity === "simple"
-    ? Math.min(config.maxTurns, 15)
-    : complexity === "complex"
-      ? Math.max(config.maxTurns, 35)
-      : config.maxTurns;
+  const maxTurnsMap: Record<string, number> = {
+    simple: Math.min(config.maxTurns, 15),
+    complex: Math.max(config.maxTurns, 35),
+  };
+  const adjustedMaxTurns = maxTurnsMap[complexity] ?? config.maxTurns;
 
   const adjustedConfig = { ...config, maxTurns: adjustedMaxTurns };
 
@@ -162,7 +169,15 @@ export async function executeWithClaudeCli(
   };
 
   try {
-    const initialResult = await executeClaudeCliTask(params, { model: effectiveModel });
+    const shouldUsePhasedExecution = complexity === "complex" && taskType !== "FIX";
+
+    let initialResult: ClaudeCliExecutionResult;
+
+    if (shouldUsePhasedExecution) {
+      initialResult = await executePhasedPipeline(params, instructionsCtx, effectiveModel, workspacePath);
+    } else {
+      initialResult = await executeClaudeCliTask(params, { model: effectiveModel });
+    }
 
     if (!initialResult.success) {
       return initialResult;
@@ -198,6 +213,76 @@ export async function executeWithClaudeCli(
   } finally {
     await removeClaudeMd(workspacePath);
   }
+}
+
+async function executePhasedPipeline(
+  params: ClaudeCliLoopParams,
+  instructionsCtx: ClaudeCliInstructionsContext,
+  effectiveModel: string,
+  workspacePath: string,
+): Promise<ClaudeCliExecutionResult> {
+  const planningCtx: ClaudeCliInstructionsContext = { ...instructionsCtx, executionPhase: "planning" };
+  await writeClaudeMd(workspacePath, planningCtx);
+
+  const planResult = await executePlanningPhase(params, { model: effectiveModel });
+
+  let totalTokens = planResult.tokensUsed;
+  let totalCost = planResult.costUsd;
+
+  const implementationCtx: ClaudeCliInstructionsContext = { ...instructionsCtx, executionPhase: "implementation" };
+  await writeClaudeMd(workspacePath, implementationCtx);
+
+  let implResult: ClaudeCliExecutionResult;
+
+  if (planResult.success && planResult.plan.length > 50) {
+    implResult = await executeImplementationWithPlan(params, planResult.plan, { model: effectiveModel });
+  } else {
+    logger.info("Planning phase produced no usable plan, falling back to direct implementation");
+    implResult = await executeClaudeCliTask(params, { model: effectiveModel });
+  }
+
+  totalTokens += implResult.totalTokensUsed;
+  totalCost += implResult.totalCostUsd;
+
+  if (!implResult.success || implResult.filesChanged.length === 0) {
+    return { ...implResult, totalTokensUsed: totalTokens, totalCostUsd: totalCost };
+  }
+
+  const elapsed = performance.now() - params.startTime;
+  const remainingBudget = params.config.maxTotalCostUsd - totalCost;
+
+  if (elapsed < params.config.timeoutMs * 0.7 && remainingBudget > 1) {
+    const testingCtx: ClaudeCliInstructionsContext = { ...instructionsCtx, executionPhase: "testing" };
+    await writeClaudeMd(workspacePath, testingCtx);
+
+    const testResult = await executeTestingPhase(
+      params,
+      implResult.filesChanged,
+      implResult.sessionId,
+      { model: effectiveModel },
+    );
+
+    totalTokens += testResult.totalTokensUsed;
+    totalCost += testResult.totalCostUsd;
+
+    const allFiles = [...new Set([...implResult.filesChanged, ...testResult.filesChanged])];
+
+    return {
+      ...implResult,
+      filesChanged: allFiles,
+      totalTokensUsed: totalTokens,
+      totalCostUsd: totalCost,
+      description: implResult.description + (testResult.success ? "\n\nTests written in testing phase." : ""),
+      sessionId: testResult.sessionId ?? implResult.sessionId,
+    };
+  }
+
+  logger.info(
+    { elapsed, remainingBudget },
+    "Skipping testing phase — insufficient time or budget",
+  );
+
+  return { ...implResult, totalTokensUsed: totalTokens, totalCostUsd: totalCost };
 }
 
 export function buildForgeCodeOutputFromCli(result: ClaudeCliExecutionResult): ForgeCodeOutput {

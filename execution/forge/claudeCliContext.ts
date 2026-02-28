@@ -77,6 +77,53 @@ export async function detectChangedFiles(workspacePath: string): Promise<readonl
 }
 
 export function buildPrompt(task: string, expectedOutput: string): string {
+  return buildImplementationPrompt(task, expectedOutput);
+}
+
+export function buildPlanningPrompt(task: string, expectedOutput: string): string {
+  const lines = [
+    "ANALYZE the codebase and create a detailed execution plan for the following task.",
+    "You are a TECH LEAD — you plan, you do NOT implement.",
+    "",
+    "Task:",
+    task,
+  ];
+
+  if (expectedOutput) {
+    lines.push("", `Expected output: ${expectedOutput}`);
+  }
+
+  lines.push(
+    "",
+    "Instructions:",
+    "1. Read the project structure to understand the codebase layout",
+    "2. Read the relevant source files, Prisma schema (if applicable), existing tests, and configuration",
+    "3. Identify ALL files that need to be created or modified",
+    "4. Produce a structured execution plan with this format:",
+    "",
+    "## Execution Plan",
+    "### Impact Analysis",
+    "- Files to modify: [list]",
+    "- Files to create: [list]",
+    "- Dependencies affected: [list]",
+    "- Risk level: LOW | MEDIUM | HIGH",
+    "",
+    "### Tasks (in order)",
+    "TASK 1 — [name]: [description, files, what to do]",
+    "TASK 2 — [name]: [description, files, what to do]",
+    "...",
+    "",
+    "### Verification Steps",
+    "- What to check after implementation",
+    "",
+    "CRITICAL: Do NOT modify any files. Use only Read, Glob, Grep, and Bash (read-only commands).",
+    "Your output will be passed to an implementation agent as a blueprint.",
+  );
+
+  return lines.join("\n");
+}
+
+export function buildImplementationPrompt(task: string, expectedOutput: string, executionPlan?: string): string {
   const lines = [
     "IMPLEMENT the following task by making actual code changes:",
     "",
@@ -87,11 +134,50 @@ export function buildPrompt(task: string, expectedOutput: string): string {
     lines.push("", `Expected output: ${expectedOutput}`);
   }
 
+  if (executionPlan) {
+    lines.push(
+      "",
+      "## Execution Plan (from planning phase)",
+      "Follow this plan. It was produced by analyzing the codebase:",
+      "",
+      executionPlan,
+    );
+  }
+
   lines.push(
     "",
     "CRITICAL: You MUST use tools to read and modify files. Do NOT just write a plan or explanation.",
     "If you respond with only text and no tool calls, the task will be marked as FAILED.",
   );
+
+  return lines.join("\n");
+}
+
+export function buildTestingPrompt(task: string, filesChanged: readonly string[]): string {
+  const lines = [
+    "WRITE automated tests for the following changes that were just implemented:",
+    "",
+    `Original task: ${task}`,
+    "",
+    "Files changed:",
+    ...filesChanged.map((f) => `- ${f}`),
+    "",
+    "Instructions:",
+    "1. Read each changed file to understand what was implemented",
+    "2. Identify which files need test coverage",
+    "3. Write unit tests for business logic and integration tests for cross-module flows",
+    "4. Run the tests to verify they pass: `npx vitest run` or `npm test`",
+    "5. Fix any failing tests before finishing",
+    "",
+    "Rules:",
+    "- All test descriptions (describe/it blocks) MUST be written in English",
+    "- Tests must be clear, descriptive, and independent from each other",
+    "- Never use `any` type in test code",
+    "- Follow existing test patterns and conventions in the project",
+    "- Only create tests for the newly changed/created files — do NOT modify existing tests",
+    "",
+    "CRITICAL: You MUST use tools to create test files. Do NOT just write a plan.",
+  ];
 
   return lines.join("\n");
 }

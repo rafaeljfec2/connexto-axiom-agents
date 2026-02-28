@@ -78,14 +78,17 @@ export async function spawnClaudeCli(
 ): Promise<{ readonly stdout: string; readonly stderr: string; readonly exitCode: number }> {
   const effectiveModel = options?.model ?? config.model;
 
+  const effectiveMaxTurns = options?.maxTurnsOverride ?? config.maxTurns;
+  const effectiveTools = options?.allowedTools ?? "Edit,Write,Bash,Read,Glob,Grep";
+
   const args: string[] = [
     "-p",
     prompt,
     "--output-format", "stream-json",
     "--model", effectiveModel,
-    "--max-turns", String(config.maxTurns),
+    "--max-turns", String(effectiveMaxTurns),
     "--max-budget-usd", String(config.maxBudgetUsd),
-    "--allowedTools", "Edit,Write,Bash,Read,Glob,Grep",
+    "--allowedTools", effectiveTools,
     "--dangerously-skip-permissions",
   ];
 

@@ -97,9 +97,27 @@ export interface ClaudeAuthStatus {
   readonly error?: string;
 }
 
+export type ExecutionPhase = "planning" | "implementation" | "testing" | "correction";
+
+export const PHASE_TOOL_SETS: Record<ExecutionPhase, string> = {
+  planning: "Read,Glob,Grep,Bash",
+  implementation: "Edit,Write,Bash,Read,Glob,Grep",
+  testing: "Edit,Write,Bash,Read,Glob,Grep",
+  correction: "Edit,Write,Bash,Read,Glob,Grep",
+};
+
+export const PHASE_MAX_TURNS: Record<ExecutionPhase, number> = {
+  planning: 10,
+  implementation: 25,
+  testing: 15,
+  correction: 10,
+};
+
 export interface SpawnOptions {
   readonly model?: string;
   readonly resumeSessionId?: string;
+  readonly allowedTools?: string;
+  readonly maxTurnsOverride?: number;
 }
 
 export interface SpawnClaudeCliOptions extends SpawnOptions {
