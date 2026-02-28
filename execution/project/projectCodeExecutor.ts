@@ -7,6 +7,8 @@ import { saveCodeChange, updateCodeChangeStatus } from "../../state/codeChanges.
 import { getProjectById } from "../../state/projects.js";
 import { getResearchByGoalId } from "../../state/nexusResearch.js";
 import { getGoalById } from "../../state/goals.js";
+import { recordTokenUsage } from "../../state/tokenUsage.js";
+import { incrementUsedTokens } from "../../state/budgets.js";
 import {
   runForgeAgentLoop,
   loadForgeAgentConfig,
@@ -231,6 +233,20 @@ async function executeWithClaudeCliMode(ctx: ClaudeCliModeContext): Promise<Exec
     },
     "Claude CLI autonomous execution finished",
   );
+
+  if (cliResult.totalTokensUsed > 0) {
+    recordTokenUsage(db, {
+      agentId: "forge",
+      taskId: delegation.goal_id,
+      inputTokens: Math.round(cliResult.totalTokensUsed * 0.7),
+      outputTokens: Math.round(cliResult.totalTokensUsed * 0.3),
+      totalTokens: cliResult.totalTokensUsed,
+    });
+
+    const now = new Date();
+    const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    incrementUsedTokens(db, period, cliResult.totalTokensUsed);
+  }
 
   if (!cliResult.success) {
     const executionTimeMs = Math.round(performance.now() - startTime);

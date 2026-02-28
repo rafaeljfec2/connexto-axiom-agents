@@ -50,6 +50,31 @@ export function extractCostUsd(output: ClaudeCliJsonOutput): number {
   return output.total_cost_usd ?? 0;
 }
 
+export function extractInputOutputTokens(output: ClaudeCliJsonOutput): {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+} {
+  if (output.modelUsage) {
+    let inputTokens = 0;
+    let outputTokens = 0;
+    for (const model of Object.values(output.modelUsage)) {
+      inputTokens += (model.inputTokens ?? 0)
+        + (model.cacheReadInputTokens ?? 0)
+        + (model.cacheCreationInputTokens ?? 0);
+      outputTokens += (model.outputTokens ?? 0);
+    }
+    return { inputTokens, outputTokens };
+  }
+
+  if (!output.usage) return { inputTokens: 0, outputTokens: 0 };
+  return {
+    inputTokens: (output.usage.input_tokens ?? 0)
+      + (output.usage.cache_creation_input_tokens ?? 0)
+      + (output.usage.cache_read_input_tokens ?? 0),
+    outputTokens: output.usage.output_tokens ?? 0,
+  };
+}
+
 export function parseStreamLine(line: string): ClaudeStreamEvent | null {
   const trimmed = line.trim();
   if (!trimmed) return null;

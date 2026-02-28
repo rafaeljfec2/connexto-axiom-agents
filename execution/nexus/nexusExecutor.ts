@@ -48,7 +48,7 @@ export async function executeNexus(
       maxOutputTokens: budgetConfig.nexusMaxOutputTokens,
     });
 
-    recordNexusTokenUsage(db, delegation.task, response.usage);
+    recordNexusTokenUsage(db, delegation.goal_id, response.usage);
 
     const sanitized = sanitizeOutput(response.text);
 

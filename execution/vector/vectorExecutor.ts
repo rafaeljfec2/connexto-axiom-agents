@@ -3,6 +3,7 @@ import type BetterSqlite3 from "better-sqlite3";
 import { logger } from "../../config/logger.js";
 import type { KairosDelegation } from "../../orchestration/types.js";
 import { logAudit, hashContent } from "../../state/auditLog.js";
+import { recordTokenUsage } from "../../state/tokenUsage.js";
 import type { ExecutionResult } from "../shared/types.js";
 import { hasPermission } from "../shared/permissions.js";
 import { executeVectorViaOpenClaw } from "./vectorOpenClawAdapter.js";
@@ -70,6 +71,14 @@ async function executeVectorLocal(
       outputHash: hashContent(content),
       sanitizerWarnings: [],
       runtime: "local",
+    });
+
+    recordTokenUsage(db, {
+      agentId: AGENT_ID,
+      taskId: goal_id,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
     });
 
     return {

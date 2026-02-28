@@ -26,7 +26,7 @@ import { getPublicationCount7d } from "../state/publications.js";
 import { getCurrentBudget, incrementUsedTokens } from "../state/budgets.js";
 import { saveDecision, loadRecentDecisions } from "../state/decisions.js";
 import { getAverageTokensPerDecision7d } from "../state/efficiencyMetrics.js";
-import { loadGoals, loadGoalsByProject } from "../state/goals.js";
+import { loadGoals, loadGoalsByProject, markGoalInProgress } from "../state/goals.js";
 import { saveOutcome } from "../state/outcomes.js";
 import { recordTokenUsage } from "../state/tokenUsage.js";
 import {
@@ -337,6 +337,10 @@ async function executeApprovedNexus(
       continue;
     }
 
+    if (delegation.goal_id) {
+      markGoalInProgress(db, delegation.goal_id);
+    }
+
     emitter?.info("nexus", "delegation:start", "NEXUS research started", {
       phase: "execution",
       metadata: { task: delegation.task.slice(0, 120), goalId: delegation.goal_id },
@@ -406,6 +410,10 @@ async function executeApprovedForge(
         reason: budgetCheck.reason ?? "Orcamento insuficiente",
       });
       continue;
+    }
+
+    if (delegation.goal_id) {
+      markGoalInProgress(db, delegation.goal_id);
     }
 
     emitter?.info("forge", "delegation:start", "FORGE execution started", {
@@ -558,6 +566,10 @@ async function executeApprovedVector(
         reason: budgetCheck.reason ?? "Orcamento insuficiente",
       });
       continue;
+    }
+
+    if (delegation.goal_id) {
+      markGoalInProgress(db, delegation.goal_id);
     }
 
     emitter?.info("vector", "delegation:start", "VECTOR draft started", {

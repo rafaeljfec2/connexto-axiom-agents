@@ -73,17 +73,33 @@ export class GoalsService {
     }
 
     return goals.map((goal) => {
-      const stats = this.db
+      const tokenStats = this.db
         .prepare(
           `SELECT
             COUNT(*) as total_outcomes,
-            SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_count,
-            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+            COUNT(*) as success_count,
+            0 as failed_count,
             MAX(created_at) as last_execution
-          FROM outcomes
-          WHERE task LIKE '%' || @goalId || '%'`,
+          FROM token_usage
+          WHERE task_id = @goalId`,
         )
-        .get({ goalId: goal.id });
+        .get({ goalId: goal.id }) as {
+          total_outcomes: number;
+          success_count: number;
+          failed_count: number;
+          last_execution: string | null;
+        } | undefined;
+
+      const codeChangeCount = this.db
+        .prepare("SELECT COUNT(*) as count FROM code_changes WHERE task_id = @goalId")
+        .get({ goalId: goal.id }) as { count: number } | undefined;
+
+      const stats = {
+        total_outcomes: Math.max(tokenStats?.total_outcomes ?? 0, codeChangeCount?.count ?? 0),
+        success_count: tokenStats?.success_count ?? 0,
+        failed_count: tokenStats?.failed_count ?? 0,
+        last_execution: tokenStats?.last_execution ?? null,
+      };
 
       return { ...goal, stats };
     });
@@ -153,16 +169,16 @@ export class GoalsService {
       throw new NotFoundException(`Goal ${id} not found`);
     }
 
-    const shortGoalId = id.split("-")[0];
+    const goalId = id;
 
     const codeChanges = this.db
       .prepare(
         `SELECT id, task_id, description, files_changed, risk, status, branch_name, created_at
         FROM code_changes
-        WHERE task_id = @shortGoalId
+        WHERE task_id = @goalId
         ORDER BY created_at DESC`,
       )
-      .all({ shortGoalId }) as ReadonlyArray<GoalCodeChangeRow>;
+      .all({ goalId }) as ReadonlyArray<GoalCodeChangeRow>;
 
     const tokenUsage = this.db
       .prepare(
@@ -174,11 +190,11 @@ export class GoalsService {
           SUM(total_tokens) as total_tokens,
           MAX(created_at) as last_execution
         FROM token_usage
-        WHERE task_id = @shortGoalId
+        WHERE task_id = @goalId
         GROUP BY agent_id
         ORDER BY total_tokens DESC`,
       )
-      .all({ shortGoalId }) as ReadonlyArray<GoalTokenUsageRow>;
+      .all({ goalId }) as ReadonlyArray<GoalTokenUsageRow>;
 
     return { goal, codeChanges, tokenUsage };
   }
