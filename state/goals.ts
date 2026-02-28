@@ -29,9 +29,17 @@ export function loadGoalsByProject(
 }
 
 export function markGoalInProgress(db: BetterSqlite3.Database, goalId: string): void {
-  db.prepare(
-    "UPDATE goals SET status = 'in_progress', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'active'",
-  ).run(goalId);
+  const result = db
+    .prepare(
+      "UPDATE goals SET status = 'in_progress', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND status = 'active'",
+    )
+    .run(goalId);
+
+  if (result.changes === 0 && goalId.length <= 8) {
+    db.prepare(
+      "UPDATE goals SET status = 'in_progress', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id LIKE ? || '%' AND status = 'active'",
+    ).run(goalId);
+  }
 }
 
 export function markGoalCompleted(db: BetterSqlite3.Database, goalId: string): void {

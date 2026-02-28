@@ -62,6 +62,27 @@ import { validateKairosOutput } from "./validateKairos.js";
 import { createEventEmitter } from "../execution/shared/executionEventEmitter.js";
 import type { ExecutionEventEmitter } from "../execution/shared/executionEventEmitter.js";
 import { cleanupOldEvents } from "../state/executionEvents.js";
+import type { Goal } from "../state/goals.js";
+
+function normalizeDelegationGoalIds(
+  delegations: readonly KairosDelegation[],
+  goals: readonly Goal[],
+): KairosDelegation[] {
+  const shortToFull = new Map<string, string>();
+  for (const goal of goals) {
+    shortToFull.set(goal.id.slice(0, 8), goal.id);
+  }
+
+  return delegations.map((d) => {
+    if (!d.goal_id) return { ...d };
+
+    const fullId = shortToFull.get(d.goal_id) ?? d.goal_id;
+    if (fullId !== d.goal_id) {
+      logger.debug({ shortId: d.goal_id, fullId }, "Normalized delegation goal_id");
+    }
+    return { ...d, goal_id: fullId };
+  });
+}
 
 export async function runKairos(
   db: BetterSqlite3.Database,
@@ -159,8 +180,11 @@ export async function runKairos(
   saveDecision(db, output);
   logger.info("Decision persisted to database");
 
+  const normalizedDelegations = normalizeDelegationGoalIds(output.delegations, goals);
+  const normalizedOutput: KairosOutput = { ...output, delegations: normalizedDelegations };
+
   const budgetConfig = loadBudgetConfig();
-  const filterResult = filterDelegations(output.delegations, db, budgetConfig);
+  const filterResult = filterDelegations(normalizedOutput.delegations, db, budgetConfig);
   const filtered = filterResult.delegations;
 
   const effectiveApproved = resolveNeedsApproval(

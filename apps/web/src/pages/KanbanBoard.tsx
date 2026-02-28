@@ -23,6 +23,7 @@ import {
   CheckCircle2,
   XCircle,
   FolderGit2,
+  GitBranch,
   ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -70,6 +71,7 @@ interface GoalCardProps {
       readonly total_outcomes: number;
       readonly success_count: number;
       readonly failed_count: number;
+      readonly latest_branch?: string | null;
     };
   };
   readonly columnColor: string;
@@ -95,6 +97,13 @@ function GoalCard({ goal, columnColor, onNavigate }: GoalCardProps) {
           <div className="mt-1.5 flex items-center gap-1 text-[11px] text-[#6b7280]">
             <FolderGit2 className="h-3 w-3" />
             <span>{goal.project_id}</span>
+          </div>
+        ) : null}
+
+        {goal.stats?.latest_branch ? (
+          <div className="mt-1 flex items-center gap-1 text-[11px] text-[#6b7280]">
+            <GitBranch className="h-3 w-3 shrink-0" />
+            <code className="truncate font-mono text-[10px]">{goal.stats.latest_branch}</code>
           </div>
         ) : null}
 
@@ -125,7 +134,7 @@ export function KanbanBoard() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
 
-  function handleCreateGoal(e: SubmitEvent & { currentTarget: HTMLFormElement }) {
+  function handleCreateGoal(e: React.SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const title = (formData.get("title") as string).trim();
@@ -243,7 +252,7 @@ export function KanbanBoard() {
                   <select
                     id="goal-project"
                     name="project_id"
-                    defaultValue={projects?.length === 1 ? projects[0].project_id : ""}
+                    defaultValue={projects?.length === 1 ? projects.at(0)?.project_id ?? "" : ""}
                     className="flex h-9 w-full cursor-pointer rounded-md border border-[#e5e7eb] bg-white px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#93c5fd]"
                   >
                     <option value="">Sem projeto</option>

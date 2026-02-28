@@ -173,14 +173,27 @@ function computeProgress(
   return { total: codeChanges.length, applied, rejected, failed, pending };
 }
 
+const PROGRESS_SEGMENTS = [
+  { key: "applied", color: "bg-emerald-500", label: "aplicada" },
+  { key: "rejected", color: "bg-red-500", label: "rejeitada" },
+  { key: "failed", color: "bg-amber-500", label: "falha" },
+  { key: "pending", color: "bg-zinc-300", label: "pendente" },
+] as const;
+
 function ProgressBar({ counts }: Readonly<{ counts: ProgressCounts }>) {
   if (counts.total === 0) return null;
 
   const resolved = counts.applied + counts.rejected + counts.failed;
   const resolvedPct = Math.round((resolved / counts.total) * 100);
-  const appliedPct = Math.round((counts.applied / counts.total) * 100);
-  const rejectedPct = Math.round((counts.rejected / counts.total) * 100);
-  const failedPct = Math.round((counts.failed / counts.total) * 100);
+
+  const barSegments = PROGRESS_SEGMENTS
+    .filter((s) => s.key !== "pending")
+    .map((s) => ({ ...s, pct: Math.round((counts[s.key] / counts.total) * 100) }))
+    .filter((s) => s.pct > 0);
+
+  const legendItems = PROGRESS_SEGMENTS
+    .map((s) => ({ ...s, count: counts[s.key] }))
+    .filter((s) => s.count > 0);
 
   return (
     <Card>
@@ -192,50 +205,21 @@ function ProgressBar({ counts }: Readonly<{ counts: ProgressCounts }>) {
           </span>
         </div>
         <div className="flex h-2.5 overflow-hidden rounded-full bg-muted">
-          {appliedPct > 0 ? (
+          {barSegments.map((s) => (
             <div
-              className="h-full bg-emerald-500 transition-all"
-              style={{ width: `${appliedPct}%` }}
+              key={s.key}
+              className={`h-full ${s.color} transition-all`}
+              style={{ width: `${s.pct}%` }}
             />
-          ) : null}
-          {rejectedPct > 0 ? (
-            <div
-              className="h-full bg-red-500 transition-all"
-              style={{ width: `${rejectedPct}%` }}
-            />
-          ) : null}
-          {failedPct > 0 ? (
-            <div
-              className="h-full bg-amber-500 transition-all"
-              style={{ width: `${failedPct}%` }}
-            />
-          ) : null}
+          ))}
         </div>
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
-          {counts.applied > 0 ? (
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
-              {counts.applied} aplicada{counts.applied === 1 ? "" : "s"}
+          {legendItems.map((s) => (
+            <span key={s.key} className="inline-flex items-center gap-1.5">
+              <span className={`h-2 w-2 rounded-full ${s.color}`} />
+              {s.count} {s.label}{s.count === 1 ? "" : "s"}
             </span>
-          ) : null}
-          {counts.rejected > 0 ? (
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-red-500" />
-              {counts.rejected} rejeitada{counts.rejected === 1 ? "" : "s"}
-            </span>
-          ) : null}
-          {counts.failed > 0 ? (
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-amber-500" />
-              {counts.failed} falha{counts.failed === 1 ? "" : "s"}
-            </span>
-          ) : null}
-          {counts.pending > 0 ? (
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-zinc-300" />
-              {counts.pending} pendente{counts.pending === 1 ? "" : "s"}
-            </span>
-          ) : null}
+          ))}
         </div>
       </CardContent>
     </Card>
@@ -425,7 +409,8 @@ function CodeChangesPanel({
 
 function TokenUsagePanel({
   tokenUsage,
-}: Readonly<{ tokenUsage: ReadonlyArray<GoalTokenUsage> }>) {
+  latestBranch,
+}: Readonly<{ tokenUsage: ReadonlyArray<GoalTokenUsage>; latestBranch: string | null }>) {
   const totalTokens = tokenUsage.reduce((sum, u) => sum + u.total_tokens, 0);
   const totalExecs = tokenUsage.reduce((sum, u) => sum + u.executions, 0);
 
@@ -440,6 +425,12 @@ function TokenUsagePanel({
           {totalExecs} exec
         </Badge>
       </div>
+      {latestBranch ? (
+        <div className="flex items-center gap-1.5 border-b px-4 py-2 text-xs text-muted-foreground">
+          <GitBranch className="h-3.5 w-3.5 shrink-0" />
+          <code className="truncate font-mono text-[11px]">{latestBranch}</code>
+        </div>
+      ) : null}
       {tokenUsage.length === 0 ? (
         <div className="flex flex-col items-center gap-2 px-4 py-8 text-center text-muted-foreground">
           <Activity className="h-8 w-8 opacity-30" />
@@ -503,6 +494,7 @@ export function GoalDetail() {
   const priorityColor = PRIORITY_COLOR[goal.priority] ?? "border-zinc-400 text-zinc-500";
 
   const progress = computeProgress(codeChanges);
+  const latestBranch = codeChanges.find((cc) => cc.branch_name)?.branch_name ?? null;
 
   return (
     <div className="space-y-4">
@@ -522,7 +514,7 @@ export function GoalDetail() {
         <div className="space-y-4">
           <ProgressBar counts={progress} />
           <CodeChangesPanel codeChanges={codeChanges} />
-          <TokenUsagePanel tokenUsage={tokenUsage} />
+          <TokenUsagePanel tokenUsage={tokenUsage} latestBranch={latestBranch} />
         </div>
 
         <aside className="space-y-1">

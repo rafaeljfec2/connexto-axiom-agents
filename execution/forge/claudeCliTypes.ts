@@ -145,6 +145,7 @@ export interface ClaudeCliLoopParams {
   readonly startTime: number;
   readonly traceId?: string;
   readonly emitter?: ExecutionEventEmitter;
+  readonly baselineBuildFailed?: boolean;
 }
 
 export type TaskComplexity = "simple" | "standard" | "complex";

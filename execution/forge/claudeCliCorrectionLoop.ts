@@ -1,6 +1,6 @@
 import { logger } from "../../config/logger.js";
 import { runValidationCycle, DEFAULT_VALIDATIONS } from "./openclawValidation.js";
-import type { ExecutionStatus } from "./openclawValidation.js";
+import type { ExecutionStatus, ValidationCycleOptions } from "./openclawValidation.js";
 import { runHeuristicReview, formatReviewForCorrection } from "./openclawReview.js";
 import type {
   ClaudeCliExecutionResult,
@@ -377,6 +377,9 @@ export async function runCorrectionLoop(
   let validations = DEFAULT_VALIDATIONS;
   let accumulatedCostUsd = initialResult.totalCostUsd;
   const sessionId = initialResult.sessionId;
+  const validationOptions: ValidationCycleOptions = {
+    skipBuild: params.baselineBuildFailed,
+  };
 
   for (let cycle = 0; cycle < MAX_CORRECTION_CYCLES; cycle++) {
     params.emitter?.info("forge", "forge:validation_started", `Validation cycle ${cycle + 1}`, {
@@ -384,7 +387,7 @@ export async function runCorrectionLoop(
       metadata: { cycle: cycle + 1, accumulatedCostUsd },
     });
 
-    const validation = await runValidationCycle(params.workspacePath, currentResult.filesChanged);
+    const validation = await runValidationCycle(params.workspacePath, currentResult.filesChanged, validationOptions);
     validations = validation.results;
 
     if (validation.passed) {

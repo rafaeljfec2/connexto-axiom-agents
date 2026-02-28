@@ -166,6 +166,7 @@ export async function executeWithClaudeCli(
     startTime,
     traceId,
     emitter,
+    baselineBuildFailed,
   };
 
   try {

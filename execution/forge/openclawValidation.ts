@@ -73,6 +73,7 @@ async function validateInstall(
   workspacePath: string,
   errors: string[],
 ): Promise<ValidationStepResult> {
+  logger.info({ step: "install" }, "Validation step starting: pnpm install");
   const frozen = await runValidationStep("pnpm", ["install", "--frozen-lockfile"], workspacePath);
   if (frozen.ok) return "ok";
 
@@ -93,6 +94,7 @@ async function validateLint(
   );
   if (lintableFiles.length === 0) return "skipped";
 
+  logger.info({ step: "lint", fileCount: lintableFiles.length }, "Validation step starting: eslint");
   const result = await runValidationStep(
     "npx", ["eslint", ...lintableFiles, "--no-error-on-unmatched-pattern"], workspacePath,
   );
@@ -104,6 +106,7 @@ async function validateBuild(
   workspacePath: string,
   errors: string[],
 ): Promise<ValidationStepResult> {
+  logger.info({ step: "build" }, "Validation step starting: tsc --noEmit");
   const result = await runValidationStep("npx", ["tsc", "--noEmit"], workspacePath);
   if (!result.ok) errors.push(`[build FAIL] ${result.output}`);
   return result.ok ? "ok" : "fail";
@@ -116,21 +119,37 @@ async function validateTests(
   const hasTests = await hasTestScript(workspacePath);
   if (!hasTests) return "skipped";
 
+  logger.info({ step: "tests" }, "Validation step starting: pnpm test");
   const result = await runValidationStep("pnpm", ["test", "--", "--run"], workspacePath);
   if (!result.ok) errors.push(`[tests FAIL] ${result.output}`);
   return result.ok ? "ok" : "fail";
 }
 
+export interface ValidationCycleOptions {
+  readonly skipBuild?: boolean;
+}
+
 export async function runValidationCycle(
   workspacePath: string,
   changedFiles: readonly string[],
+  options?: ValidationCycleOptions,
 ): Promise<ValidationCycleResult> {
   const errors: string[] = [];
   const hasPkg = await hasPackageJson(workspacePath);
 
+  logger.info({ changedFiles: changedFiles.length, hasPkg, skipBuild: options?.skipBuild ?? false }, "Starting validation cycle");
+
   const install = hasPkg ? await validateInstall(workspacePath, errors) : "skipped" as ValidationStepResult;
   const lint = await validateLint(workspacePath, changedFiles, errors);
-  const build = hasPkg ? await validateBuild(workspacePath, errors) : "skipped" as ValidationStepResult;
+
+  let build: ValidationStepResult;
+  if (options?.skipBuild) {
+    logger.info("Skipping build validation (baseline build pre-failed)");
+    build = "skipped" as ValidationStepResult;
+  } else {
+    build = hasPkg ? await validateBuild(workspacePath, errors) : "skipped" as ValidationStepResult;
+  }
+
   const tests = hasPkg ? await validateTests(workspacePath, errors) : "skipped" as ValidationStepResult;
 
   const results: ValidationResults = { install, lint, build, tests };

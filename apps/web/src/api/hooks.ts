@@ -80,6 +80,7 @@ interface Goal {
     readonly success_count: number;
     readonly failed_count: number;
     readonly last_execution: string | null;
+    readonly latest_branch: string | null;
   };
 }
 

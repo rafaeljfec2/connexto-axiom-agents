@@ -39,6 +39,7 @@ import {
 import type { ExecutionEventEmitter } from "../shared/executionEventEmitter.js";
 
 const MAX_FILES_PER_CHANGE = 5;
+const MAX_FILES_PER_CHANGE_CLI = 20;
 
 export async function executeProjectCode(
   db: BetterSqlite3.Database,
@@ -312,6 +313,7 @@ async function executeWithClaudeCliMode(ctx: ClaudeCliModeContext): Promise<Exec
     lintOutput: "",
     startTime,
     commitOptions: { pushEnabled, branchPrefix: "auto" },
+    maxFilesOverride: MAX_FILES_PER_CHANGE_CLI,
   });
 
   if (result.status === "success") {
@@ -535,6 +537,7 @@ interface SuccessfulAgentOutputContext {
   readonly lintOutput: string;
   readonly startTime: number;
   readonly commitOptions?: CommitOptions;
+  readonly maxFilesOverride?: number;
 }
 
 async function handleSuccessfulAgentOutput(
@@ -575,13 +578,14 @@ async function handleSuccessfulAgentOutput(
     );
   }
 
-  if (parsed.files.length > MAX_FILES_PER_CHANGE) {
+  const maxFiles = ctx.maxFilesOverride ?? MAX_FILES_PER_CHANGE;
+  if (parsed.files.length > maxFiles) {
     const executionTimeMs = Math.round(performance.now() - startTime);
     return buildResult(
       task,
       "failed",
       "",
-      `Too many files: ${String(parsed.files.length)} (max ${String(MAX_FILES_PER_CHANGE)})`,
+      `Too many files: ${String(parsed.files.length)} (max ${String(maxFiles)})`,
       executionTimeMs,
       totalTokensUsed,
     );
