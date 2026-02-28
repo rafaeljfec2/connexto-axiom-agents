@@ -247,6 +247,24 @@ async function removeClaudeMd(workspacePath: string): Promise<void> {
   }
 }
 
+const IDE_ENV_PREFIXES = ["VSCODE_", "CURSOR_", "ELECTRON_"];
+
+function buildCleanEnv(workspacePath: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+
+  for (const [key, value] of Object.entries(process.env)) {
+    const shouldStrip = IDE_ENV_PREFIXES.some((prefix) => key.startsWith(prefix));
+    if (!shouldStrip) {
+      env[key] = value;
+    }
+  }
+
+  env.CLAUDE_CODE_ENTRYPOINT = "cli";
+  env.GIT_CEILING_DIRECTORIES = path.dirname(workspacePath);
+
+  return env;
+}
+
 interface SpawnOptions {
   readonly model?: string;
   readonly resumeSessionId?: string;
@@ -289,13 +307,14 @@ async function spawnClaudeCli(
   );
 
   return new Promise((resolve) => {
-    const child = spawn(config.cliPath, args, {
+    const cleanEnv = buildCleanEnv(workspacePath);
+    const singleQuoteEscape = String.raw`'\''`;
+    const escapedArgs = args.map((a) => "'" + a.replaceAll("'", singleQuoteEscape) + "'").join(" ");
+    const shellCmd = `for fd in /proc/$$/fd/*; do fd_num=$(basename "$fd"); [ "$fd_num" -gt 2 ] 2>/dev/null && eval "exec $fd_num>&-" 2>/dev/null; done; exec ${config.cliPath} ${escapedArgs}`;
+
+    const child = spawn("/bin/bash", ["-c", shellCmd], {
       cwd: workspacePath,
-      env: {
-        ...process.env,
-        CLAUDE_CODE_ENTRYPOINT: "cli",
-        GIT_CEILING_DIRECTORIES: path.dirname(workspacePath),
-      },
+      env: cleanEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
