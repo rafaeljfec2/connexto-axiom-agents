@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { parseClaudeCliOutput } from "./claudeCliOutputParser.js";
-import { selectModelForTask } from "./claudeCliTypes.js";
+import { selectModelForTask, classifyTaskComplexity } from "./claudeCliTypes.js";
 import type { ClaudeCliExecutorConfig, ClaudeCliExecutionResult } from "./claudeCliTypes.js";
 import { buildForgeCodeOutputFromCli } from "./claudeCliExecutor.js";
 import { buildClaudeMdContent } from "./claudeCliInstructions.js";
@@ -550,6 +550,224 @@ describe("parseClaudeCliOutput with NDJSON stream-json format", () => {
     assert.equal(parsed.type, "result");
     assert.equal(parsed.is_error, true);
     assert.equal(parsed.result, "API rate limit exceeded");
+  });
+});
+
+describe("buildClaudeMdContent with projectInstructions (Phase 1)", () => {
+  const baseContext: ClaudeCliInstructionsContext = {
+    task: "Implement user auth",
+    expectedOutput: "Auth module",
+    language: "typescript",
+    framework: "nestjs",
+    projectId: "test-project",
+    baselineBuildFailed: false,
+  };
+
+  it("should include project instructions when provided", () => {
+    const ctx = { ...baseContext, projectInstructions: "Always use Prisma ORM.\nUse snake_case for DB columns." };
+    const content = buildClaudeMdContent(ctx);
+
+    assert.ok(content.includes("# Project-Specific Standards"));
+    assert.ok(content.includes("Always use Prisma ORM."));
+    assert.ok(content.includes("Use snake_case for DB columns."));
+  });
+
+  it("should omit project instructions section when not provided", () => {
+    const content = buildClaudeMdContent(baseContext);
+
+    assert.ok(!content.includes("# Project-Specific Standards"));
+  });
+
+  it("should place project instructions before security rules", () => {
+    const ctx = { ...baseContext, projectInstructions: "Custom rule here" };
+    const content = buildClaudeMdContent(ctx);
+
+    const projectIdx = content.indexOf("# Project-Specific Standards");
+    const securityIdx = content.indexOf("# Security Rules");
+
+    assert.ok(projectIdx > -1);
+    assert.ok(securityIdx > -1);
+    assert.ok(projectIdx < securityIdx);
+  });
+});
+
+describe("classifyTaskComplexity (Phase 4)", () => {
+  it("should classify short FIX tasks as simple", () => {
+    assert.equal(classifyTaskComplexity("Fix the login bug", "FIX"), "simple");
+  });
+
+  it("should classify FIX tasks mentioning multiple files as standard", () => {
+    assert.equal(classifyTaskComplexity("Fix the bug across multiple files in auth module", "FIX"), "standard");
+  });
+
+  it("should classify long FIX tasks as standard", () => {
+    const longTask = "Fix the authentication bug that occurs when users try to log in with expired tokens and the refresh token mechanism fails to properly generate a new access token because the token rotation logic has a race condition in the middleware chain that prevents proper error handling";
+    assert.equal(classifyTaskComplexity(longTask, "FIX"), "standard");
+  });
+
+  it("should classify CREATE tasks as complex", () => {
+    assert.equal(classifyTaskComplexity("Create a user service", "CREATE"), "complex");
+  });
+
+  it("should classify tasks with 'from scratch' as complex", () => {
+    assert.equal(classifyTaskComplexity("Build the payment system from scratch", "IMPLEMENT"), "complex");
+  });
+
+  it("should classify tasks with 'migration' as complex", () => {
+    assert.equal(classifyTaskComplexity("Run the database migration for v2", "IMPLEMENT"), "complex");
+  });
+
+  it("should classify standard IMPLEMENT tasks as standard", () => {
+    assert.equal(classifyTaskComplexity("Implement user authentication", "IMPLEMENT"), "standard");
+  });
+
+  it("should classify REFACTOR tasks as standard by default", () => {
+    assert.equal(classifyTaskComplexity("Refactor the database layer", "REFACTOR"), "standard");
+  });
+});
+
+describe("buildClaudeMdContent with complexity (Phase 4)", () => {
+  const baseContext: ClaudeCliInstructionsContext = {
+    task: "Implement user auth",
+    expectedOutput: "Auth module",
+    language: "typescript",
+    framework: "nestjs",
+    projectId: "test-project",
+    baselineBuildFailed: false,
+  };
+
+  it("should include complexity hint for complex tasks", () => {
+    const ctx = { ...baseContext, complexity: "complex" as const };
+    const content = buildClaudeMdContent(ctx);
+
+    assert.ok(content.includes("# Complexity: HIGH"));
+    assert.ok(content.includes("Plan your approach before writing any code"));
+  });
+
+  it("should not include complexity hint for standard tasks", () => {
+    const ctx = { ...baseContext, complexity: "standard" as const };
+    const content = buildClaudeMdContent(ctx);
+
+    assert.ok(!content.includes("# Complexity:"));
+  });
+
+  it("should omit architecture and dependency rules for simple tasks", () => {
+    const ctx = { ...baseContext, complexity: "simple" as const };
+    const content = buildClaudeMdContent(ctx);
+
+    assert.ok(!content.includes("# Architecture Rules"));
+    assert.ok(!content.includes("# Dependency Rules"));
+  });
+
+  it("should include architecture and dependency rules for standard tasks", () => {
+    const ctx = { ...baseContext, complexity: "standard" as const };
+    const content = buildClaudeMdContent(ctx);
+
+    assert.ok(content.includes("# Architecture Rules"));
+    assert.ok(content.includes("# Dependency Rules"));
+  });
+});
+
+describe("writeReviewReport tabular format (Phase 3)", () => {
+  it("should generate tabular review report with severity groups", async () => {
+    const fsPromises = await import("node:fs/promises");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const { writeReviewReport } = await import("./openclawArtifacts.js");
+    const tmpDir = await fsPromises.default.mkdtemp(path.default.join(os.default.tmpdir(), "review-report-"));
+
+    try {
+      const review = {
+        passed: false,
+        criticalCount: 1,
+        warningCount: 2,
+        findings: [
+          { severity: "CRITICAL" as const, rule: "no-secrets", file: "src/auth.ts", line: 45, message: "Possible API key detected" },
+          { severity: "WARNING" as const, rule: "no-any-type", file: "src/utils.ts", line: 12, message: "Usage of any type" },
+          { severity: "WARNING" as const, rule: "no-console-log", file: "src/service.ts", line: 5, message: "Use structured logger" },
+          { severity: "INFO" as const, rule: "max-function-params", file: "src/utils.ts", line: 20, message: "Too many params" },
+        ],
+      };
+
+      await writeReviewReport(tmpDir, review);
+
+      const content = await fsPromises.default.readFile(path.default.join(tmpDir, ".axiom", "review.md"), "utf-8");
+
+      assert.ok(content.includes("| Metric | Value |"));
+      assert.ok(content.includes("| Result | FAILED |"));
+      assert.ok(content.includes("| Critical | 1 |"));
+      assert.ok(content.includes("| Warnings | 2 |"));
+      assert.ok(content.includes("| Info | 1 |"));
+      assert.ok(content.includes("## CRITICAL"));
+      assert.ok(content.includes("## WARNING"));
+      assert.ok(content.includes("## INFO"));
+      assert.ok(content.includes("`no-secrets` at `src/auth.ts:45`"));
+    } finally {
+      await fsPromises.default.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("should generate passing report without findings", async () => {
+    const fsPromises = await import("node:fs/promises");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const { writeReviewReport } = await import("./openclawArtifacts.js");
+    const tmpDir = await fsPromises.default.mkdtemp(path.default.join(os.default.tmpdir(), "review-report-pass-"));
+
+    try {
+      const review = { passed: true, criticalCount: 0, warningCount: 0, findings: [] };
+
+      await writeReviewReport(tmpDir, review);
+
+      const content = await fsPromises.default.readFile(path.default.join(tmpDir, ".axiom", "review.md"), "utf-8");
+
+      assert.ok(content.includes("| Result | PASSED |"));
+      assert.ok(content.includes("No issues found."));
+    } finally {
+      await fsPromises.default.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("writeImplementationReport (Phase 3)", () => {
+  it("should generate implementation report with all fields", async () => {
+    const fsPromises = await import("node:fs/promises");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const { writeImplementationReport } = await import("./openclawArtifacts.js");
+    const tmpDir = await fsPromises.default.mkdtemp(path.default.join(os.default.tmpdir(), "impl-report-"));
+
+    try {
+      await writeImplementationReport(tmpDir, {
+        taskType: "IMPLEMENT",
+        model: "sonnet",
+        totalTokensUsed: 5000,
+        totalCostUsd: 0.15,
+        durationMs: 45000,
+        filesChanged: ["src/auth.ts", "src/auth.test.ts"],
+        validations: { install: "ok", lint: "ok", build: "ok", tests: "ok" },
+        correctionCycles: 1,
+        status: "SUCCESS",
+      });
+
+      const content = await fsPromises.default.readFile(path.default.join(tmpDir, ".axiom", "implementation.md"), "utf-8");
+
+      assert.ok(content.includes("# Implementation Report"));
+      assert.ok(content.includes("| Status | SUCCESS |"));
+      assert.ok(content.includes("| Task Type | IMPLEMENT |"));
+      assert.ok(content.includes("| Model | sonnet |"));
+      assert.ok(content.includes("| Tokens Used | 5000 |"));
+      assert.ok(content.includes("| Cost (USD) | $0.1500 |"));
+      assert.ok(content.includes("| Duration | 45s |"));
+      assert.ok(content.includes("| Files Changed | 2 |"));
+      assert.ok(content.includes("| Correction Cycles | 1 |"));
+      assert.ok(content.includes("## Files Changed"));
+      assert.ok(content.includes("- src/auth.ts"));
+      assert.ok(content.includes("- src/auth.test.ts"));
+      assert.ok(content.includes("| Install | ok |"));
+    } finally {
+      await fsPromises.default.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 

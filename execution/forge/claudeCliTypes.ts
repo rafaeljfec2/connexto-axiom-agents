@@ -106,6 +106,18 @@ export interface SpawnClaudeCliOptions extends SpawnOptions {
   readonly emitter?: ExecutionEventEmitter;
 }
 
+export interface ImplementationReportData {
+  readonly taskType: string;
+  readonly model: string;
+  readonly totalTokensUsed: number;
+  readonly totalCostUsd: number;
+  readonly durationMs: number;
+  readonly filesChanged: readonly string[];
+  readonly validations: ValidationResults;
+  readonly correctionCycles: number;
+  readonly status: ExecutionStatus;
+}
+
 export interface ClaudeCliLoopParams {
   readonly db: BetterSqlite3.Database;
   readonly delegation: KairosDelegation;
@@ -115,6 +127,28 @@ export interface ClaudeCliLoopParams {
   readonly startTime: number;
   readonly traceId?: string;
   readonly emitter?: ExecutionEventEmitter;
+}
+
+export type TaskComplexity = "simple" | "standard" | "complex";
+
+const COMPLEX_TASK_PATTERNS = [
+  "from scratch", "new module", "new service", "migration", "migrate",
+  "redesign", "rewrite", "full rewrite", "new api", "new endpoint",
+  "new feature", "new system", "architecture",
+];
+
+export function classifyTaskComplexity(task: string, taskType: ForgeTaskType): TaskComplexity {
+  if (taskType === "FIX" && task.length < 200) {
+    const multiFileHints = /\b(multiple files|several files|across files|all files)\b/i;
+    if (!multiFileHints.test(task)) return "simple";
+  }
+
+  if (taskType === "CREATE") return "complex";
+
+  const lower = task.toLowerCase();
+  if (COMPLEX_TASK_PATTERNS.some((pattern) => lower.includes(pattern))) return "complex";
+
+  return "standard";
 }
 
 export function loadClaudeCliConfig(): ClaudeCliExecutorConfig {

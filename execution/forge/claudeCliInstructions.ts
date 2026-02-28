@@ -1,6 +1,7 @@
 import type { NexusResearchContext, GoalContext } from "./forgeTypes.js";
 import { classifyTaskType } from "./openclawInstructions.js";
 import type { ForgeTaskType } from "./openclawInstructions.js";
+import type { TaskComplexity } from "./claudeCliTypes.js";
 
 export interface ClaudeCliInstructionsContext {
   readonly task: string;
@@ -12,28 +13,54 @@ export interface ClaudeCliInstructionsContext {
   readonly goalContext?: GoalContext;
   readonly repositoryIndexSummary?: string;
   readonly baselineBuildFailed: boolean;
+  readonly projectInstructions?: string;
+  readonly complexity?: TaskComplexity;
 }
 
 export function buildClaudeMdContent(ctx: ClaudeCliInstructionsContext): string {
   const taskType = classifyTaskType(ctx.task);
+  const complexity = ctx.complexity ?? "standard";
 
   const sections: string[] = [
     buildIdentitySection(),
     buildDecisionProtocolSection(taskType),
+    buildComplexityHintSection(complexity),
     buildTaskContextSection(ctx),
     buildGoalSection(ctx.goalContext),
     buildNexusSection(ctx.nexusResearch),
     buildRepositorySection(ctx.repositoryIndexSummary, taskType),
     buildWorkflowSection(ctx.baselineBuildFailed),
     buildQualityRulesSection(),
-    buildArchitectureRulesSection(),
+  ];
+
+  const isSimple = complexity === "simple";
+  const conditionalSections = [
+    ...(isSimple ? [] : [buildArchitectureRulesSection()]),
     buildFrontendRulesSection(ctx.language, ctx.framework),
     buildTestingRulesSection(),
-    buildDependencyRulesSection(),
+    ...(isSimple ? [] : [buildDependencyRulesSection()]),
+    buildProjectInstructionsSection(ctx.projectInstructions),
     buildSecurityRulesSection(),
   ];
 
+  sections.push(...conditionalSections);
+
   return sections.filter(Boolean).join("\n\n");
+}
+
+function buildComplexityHintSection(complexity: TaskComplexity): string {
+  if (complexity === "complex") {
+    return [
+      "# Complexity: HIGH",
+      "",
+      "This is a complex task. Before implementing:",
+      "1. Read the full project structure and understand the architecture",
+      "2. Plan your approach before writing any code",
+      "3. Identify all files that need changes and their dependencies",
+      "4. Implement incrementally, verifying after each major step",
+    ].join("\n");
+  }
+  return "";
 }
 
 function buildIdentitySection(): string {
@@ -285,6 +312,11 @@ function buildArchitectureRulesSection(): string {
     "- Every new feature or fix should be accompanied by automated tests when feasible",
     "- Never introduce new libraries, frameworks, or architecture patterns without verifying necessity",
   ].join("\n");
+}
+
+function buildProjectInstructionsSection(instructions?: string): string {
+  if (!instructions) return "";
+  return ["# Project-Specific Standards", "", instructions].join("\n");
 }
 
 function buildSecurityRulesSection(): string {

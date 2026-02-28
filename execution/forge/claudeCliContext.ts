@@ -135,11 +135,23 @@ export function loadGoalContext(db: BetterSqlite3.Database, goalId: string): Goa
   return { title: goal.title, description: goal.description };
 }
 
-export async function buildRepositoryIndexSummary(workspacePath: string): Promise<string> {
+export async function readProjectInstructions(workspacePath: string): Promise<string | undefined> {
+  try {
+    const content = await fsPromises.readFile(
+      path.join(workspacePath, ".axiom", "instructions.md"),
+      "utf-8",
+    );
+    return content.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function buildRepositoryIndexSummary(workspacePath: string, maxChars?: number): Promise<string> {
   try {
     const structure = await discoverProjectStructure(workspacePath);
     const index = await buildRepositoryIndex(workspacePath, structure);
-    return formatIndexForPrompt(index, REPO_INDEX_MAX_CHARS);
+    return formatIndexForPrompt(index, maxChars ?? REPO_INDEX_MAX_CHARS);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     logger.warn({ error: msg }, "Failed to build repository index for Claude CLI");

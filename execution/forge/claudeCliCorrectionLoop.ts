@@ -268,7 +268,8 @@ export async function runPostCorrectionReview(
     metadata: { filesCount: result.filesChanged.length },
   });
 
-  const review = await runHeuristicReview(params.workspacePath, result.filesChanged);
+  const stackContext = { language: params.project.language, framework: params.project.framework };
+  const review = await runHeuristicReview(params.workspacePath, result.filesChanged, stackContext);
 
   if (review.passed) {
     params.emitter?.info("forge", "forge:review_passed", "Heuristic review passed", {
@@ -330,7 +331,7 @@ export async function runPostCorrectionReview(
       sessionId: correctionResult.sessionId ?? sessionId,
     };
 
-    const retryReview = await runHeuristicReview(params.workspacePath, updatedResult.filesChanged);
+    const retryReview = await runHeuristicReview(params.workspacePath, updatedResult.filesChanged, stackContext);
 
     if (retryReview.passed) {
       logger.info({ attempt: attempt + 1 }, "Review correction resolved all CRITICAL issues (Claude CLI)");
