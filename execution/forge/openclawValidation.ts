@@ -143,6 +143,7 @@ async function validateTests(
 
 export interface ValidationCycleOptions {
   readonly skipBuild?: boolean;
+  readonly skipTests?: boolean;
 }
 
 export async function runValidationCycle(
@@ -166,7 +167,13 @@ export async function runValidationCycle(
     build = hasPkg ? await validateBuild(workspacePath, errors) : "skipped" as ValidationStepResult;
   }
 
-  const tests = hasPkg ? await validateTests(workspacePath, errors) : "skipped" as ValidationStepResult;
+  let tests: ValidationStepResult;
+  if (options?.skipTests) {
+    logger.info("Skipping test validation (baseline tests pre-failed)");
+    tests = "skipped" as ValidationStepResult;
+  } else {
+    tests = hasPkg ? await validateTests(workspacePath, errors) : "skipped" as ValidationStepResult;
+  }
 
   const results: ValidationResults = { install, lint, build, tests };
   const passed = errors.length === 0;

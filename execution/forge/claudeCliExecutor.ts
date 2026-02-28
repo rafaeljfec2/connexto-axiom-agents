@@ -2,7 +2,7 @@ import type BetterSqlite3 from "better-sqlite3";
 import { logger } from "../../config/logger.js";
 import type { KairosDelegation } from "../../orchestration/types.js";
 import type { Project } from "../../state/projects.js";
-import { checkBaselineBuild } from "./forgeValidation.js";
+import { checkBaselineBuild, checkBaselineTests } from "./forgeValidation.js";
 import type { ClaudeCliInstructionsContext } from "./claudeCliInstructions.js";
 import { classifyTaskType } from "./openclawInstructions.js";
 import type { ForgeCodeOutput } from "./forgeTypes.js";
@@ -113,11 +113,12 @@ export async function executeWithClaudeCli(
   const repoIndexMaxChars = complexity === "complex" ? 5000 : undefined;
   const skipRepoIndex = complexity === "simple";
 
-  const [nexusResearch, goalContext, repoIndexSummary, baselineBuildFailed, projectInstructions] = await Promise.all([
+  const [nexusResearch, goalContext, repoIndexSummary, baselineBuildFailed, baselineTestsFailed, projectInstructions] = await Promise.all([
     Promise.resolve(loadNexusResearchForGoal(db, delegation.goal_id)),
     Promise.resolve(loadGoalContext(db, delegation.goal_id)),
     skipRepoIndex ? Promise.resolve("") : buildRepositoryIndexSummary(workspacePath, repoIndexMaxChars),
     checkBaselineBuild(workspacePath, 60_000),
+    checkBaselineTests(workspacePath, 90_000),
     readProjectInstructions(workspacePath),
   ]);
 
@@ -152,6 +153,7 @@ export async function executeWithClaudeCli(
       hasGoalContext: Boolean(goalContext),
       repoIndexChars: repoIndexSummary?.length ?? 0,
       baselineBuildFailed,
+      baselineTestsFailed,
       complexity,
       adjustedMaxTurns: adjustedConfig.maxTurns,
     },
@@ -167,6 +169,7 @@ export async function executeWithClaudeCli(
     traceId,
     emitter,
     baselineBuildFailed,
+    baselineTestsFailed,
   };
 
   try {

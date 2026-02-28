@@ -73,6 +73,41 @@ export async function checkBaselineBuild(
   return false;
 }
 
+export async function checkBaselineTests(
+  workspacePath: string,
+  testTimeout: number,
+): Promise<boolean> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+
+  try {
+    const pkgPath = path.join(workspacePath, "package.json");
+    const raw = await fs.readFile(pkgPath, "utf-8");
+    const pkg = JSON.parse(raw) as { scripts?: Record<string, string> };
+    if (!pkg.scripts?.["test"]) return false;
+  } catch {
+    return false;
+  }
+
+  try {
+    await execFileAsync("pnpm", ["test", "--", "--run"], {
+      cwd: workspacePath,
+      timeout: testTimeout,
+    });
+    logger.info("Baseline test check passed");
+    return false;
+  } catch (error) {
+    const execError = error as { stdout?: string; stderr?: string; message?: string };
+    const output = `${execError.stdout ?? ""}${execError.stderr ?? execError.message ?? ""}`.trim();
+    logger.warn(
+      { workspacePath, outputPreview: output.slice(0, 300) },
+      "Baseline test check FAILED (pre-existing issue). Test validation will be skipped for this task.",
+    );
+    return true;
+  }
+}
+
 export async function runLintCheck(
   filePaths: readonly string[],
   workspacePath: string,

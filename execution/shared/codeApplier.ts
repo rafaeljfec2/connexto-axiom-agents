@@ -45,7 +45,7 @@ const FORBIDDEN_FILES: readonly string[] = [
 
 const PROTECTED_FILES: ReadonlySet<string> = new Set(["state/schema.sql"]);
 
-const ALLOWED_EXTENSIONS: ReadonlySet<string> = new Set([".ts", ".js", ".json", ".sql", ".md"]);
+const ALLOWED_EXTENSIONS: ReadonlySet<string> = new Set([".ts", ".js", ".mjs", ".cjs", ".mts", ".cts", ".json", ".sql", ".md"]);
 
 const WHITELISTED_COMMANDS: readonly string[] = ["npx"];
 const WHITELISTED_ARGS: readonly string[] = ["eslint", "tsc"];

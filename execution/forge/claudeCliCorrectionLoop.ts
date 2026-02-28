@@ -379,6 +379,7 @@ export async function runCorrectionLoop(
   const sessionId = initialResult.sessionId;
   const validationOptions: ValidationCycleOptions = {
     skipBuild: params.baselineBuildFailed,
+    skipTests: params.baselineTestsFailed,
   };
 
   for (let cycle = 0; cycle < MAX_CORRECTION_CYCLES; cycle++) {

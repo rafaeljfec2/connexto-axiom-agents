@@ -63,6 +63,10 @@ const ALLOWED_EXTENSIONS: ReadonlySet<string> = new Set([
   ".tsx",
   ".js",
   ".jsx",
+  ".mjs",
+  ".cjs",
+  ".mts",
+  ".cts",
   ".json",
   ".css",
   ".scss",
@@ -71,6 +75,10 @@ const ALLOWED_EXTENSIONS: ReadonlySet<string> = new Set([
   ".sql",
   ".yaml",
   ".yml",
+  ".toml",
+  ".prisma",
+  ".graphql",
+  ".gql",
 ]);
 
 export interface FileEdit {
