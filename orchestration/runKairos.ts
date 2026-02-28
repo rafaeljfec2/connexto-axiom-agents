@@ -2,38 +2,15 @@ import crypto from "node:crypto";
 import type BetterSqlite3 from "better-sqlite3";
 import { loadBudgetConfig } from "../config/budget.js";
 import { logger } from "../config/logger.js";
-import { evaluateExecution } from "../evaluation/forgeEvaluator.js";
-import { evaluateNexusExecution } from "../evaluation/nexusEvaluator.js";
-import { checkBudget } from "../execution/shared/budgetGate.js";
-import { executeForge } from "../execution/forge/forgeExecutor.js";
-import { executeNexus } from "../execution/nexus/nexusExecutor.js";
-import type { ExecutionResult } from "../execution/shared/types.js";
-import { executeVector } from "../execution/vector/vectorExecutor.js";
 import type { LLMUsage } from "../llm/client.js";
 import { sendTelegramMessage } from "../interfaces/telegram.js";
-import { saveFeedback, normalizeTaskType, getFeedbackSummary } from "../state/agentFeedback.js";
-import { getPendingArtifacts, getApprovedArtifacts } from "../state/artifacts.js";
-import {
-  getAverageEngagement7d,
-  getMarketingPerformanceSummary,
-} from "../state/marketingFeedback.js";
 import { isGitHubConfigured } from "../execution/shared/githubClient.js";
 import { syncOpenPRsStatus } from "../services/mergeReadinessService.js";
-import { getCodeChangeStats7d, getBranchStats7d } from "../state/codeChanges.js";
-import { getResearchStats7d, getResearchByGoalId } from "../state/nexusResearch.js";
-import { getPRStats7d } from "../state/pullRequests.js";
-import { getPublicationCount7d } from "../state/publications.js";
-import { getCurrentBudget, incrementUsedTokens } from "../state/budgets.js";
+import { getResearchByGoalId } from "../state/nexusResearch.js";
+import { incrementUsedTokens } from "../state/budgets.js";
 import { saveDecision, loadRecentDecisions } from "../state/decisions.js";
-import { getAverageTokensPerDecision7d } from "../state/efficiencyMetrics.js";
-import { loadGoals, loadGoalsByProject, markGoalInProgress } from "../state/goals.js";
-import { saveOutcome } from "../state/outcomes.js";
+import { loadGoals, loadGoalsByProject } from "../state/goals.js";
 import { recordTokenUsage } from "../state/tokenUsage.js";
-import {
-  getAgentSummary,
-  getRecurrentFailurePatterns,
-  getFrequentFiles,
-} from "../state/executionHistory.js";
 import { callKairosLLM } from "./kairosLLM.js";
 import { formatDailyBriefing } from "./dailyBriefing.js";
 import { filterDelegations } from "./decisionFilter.js";
@@ -48,21 +25,27 @@ import { saveGovernanceDecision } from "../state/governanceLog.js";
 import type {
   KairosOutput,
   KairosDelegation,
-  BlockedTask,
-  BudgetInfo,
-  EfficiencyInfo,
-  FeedbackInfo,
-  VectorInfo,
-  ForgeCodeInfo,
-  NexusInfo,
-  HistoricalPatternInfo,
   GovernanceInfo,
 } from "./types.js";
 import { validateKairosOutput } from "./validateKairos.js";
 import { createEventEmitter } from "../execution/shared/executionEventEmitter.js";
-import type { ExecutionEventEmitter } from "../execution/shared/executionEventEmitter.js";
 import { cleanupOldEvents } from "../state/executionEvents.js";
 import type { Goal } from "../state/goals.js";
+import {
+  executeApprovedNexus,
+  executeApprovedForge,
+  executeApprovedVector,
+  evaluateAndRecordFeedback,
+} from "./kairosAgentDispatcher.js";
+import {
+  buildBudgetInfo,
+  buildEfficiencyInfo,
+  buildFeedbackInfo,
+  buildVectorInfo,
+  buildForgeCodeInfo,
+  buildNexusInfo,
+  buildHistoricalInfo,
+} from "./kairosBriefingData.js";
 
 function normalizeDelegationGoalIds(
   delegations: readonly KairosDelegation[],
@@ -302,397 +285,6 @@ function recordKairosTokenUsage(db: BetterSqlite3.Database, usage: LLMUsage): vo
   );
 }
 
-function buildEfficiencyInfo(
-  db: BetterSqlite3.Database,
-  usage: LLMUsage | null,
-  output: KairosOutput,
-): EfficiencyInfo {
-  const cycleInputTokens = usage?.inputTokens ?? 0;
-  const cycleOutputTokens = usage?.outputTokens ?? 0;
-  const cycleTotalTokens = usage?.totalTokens ?? 0;
-
-  const decisionCount = output.delegations.length + output.decisions_needed.length;
-  const tokensPerDecision = decisionCount > 0 ? Math.round(cycleTotalTokens / decisionCount) : 0;
-
-  const avg7dTokensPerDecision = getAverageTokensPerDecision7d(db, "kairos");
-
-  return {
-    cycleInputTokens,
-    cycleOutputTokens,
-    cycleTotalTokens,
-    tokensPerDecision,
-    avg7dTokensPerDecision,
-  };
-}
-
-async function executeApprovedNexus(
-  db: BetterSqlite3.Database,
-  approved: readonly KairosDelegation[],
-  traceId?: string,
-  emitter?: ExecutionEventEmitter,
-): Promise<AgentExecutionOutput> {
-  const nexusDelegations = approved.filter((d) => d.agent === "nexus");
-
-  if (nexusDelegations.length === 0) {
-    logger.info("No nexus delegations to execute");
-    return { results: [], blocked: [] };
-  }
-
-  logger.info({ count: nexusDelegations.length }, "Executing nexus delegations");
-
-  const results: ExecutionResult[] = [];
-  const blocked: BlockedTask[] = [];
-
-  for (const delegation of nexusDelegations) {
-    const budgetCheck = checkBudget(db, delegation.agent);
-    if (!budgetCheck.allowed) {
-      logger.warn(
-        { task: delegation.task, reason: budgetCheck.reason },
-        "Budget gate blocked nexus execution",
-      );
-      emitter?.warn("nexus", "delegation:blocked", "Budget gate blocked execution", {
-        phase: "budget_check",
-        metadata: { task: delegation.task.slice(0, 120), reason: budgetCheck.reason },
-      });
-      blocked.push({
-        task: delegation.task,
-        reason: budgetCheck.reason ?? "Orcamento insuficiente",
-      });
-      continue;
-    }
-
-    if (delegation.goal_id) {
-      markGoalInProgress(db, delegation.goal_id);
-    }
-
-    emitter?.info("nexus", "delegation:start", "NEXUS research started", {
-      phase: "execution",
-      metadata: { task: delegation.task.slice(0, 120), goalId: delegation.goal_id },
-    });
-
-    const result = await executeNexus(db, delegation);
-    saveOutcome(db, result, { traceId });
-    results.push(result);
-
-    if (result.status === "failed") {
-      emitter?.error("nexus", "delegation:failed", "NEXUS research failed", {
-        phase: "execution",
-        metadata: { task: delegation.task.slice(0, 120), error: result.error?.slice(0, 200) },
-      });
-      logger.error(
-        { task: delegation.task, error: result.error, traceId },
-        "Nexus execution failed, aborting remaining",
-      );
-      break;
-    }
-
-    emitter?.info("nexus", "delegation:complete", "NEXUS research completed", {
-      phase: "execution",
-      metadata: {
-        task: delegation.task.slice(0, 120),
-        tokensUsed: result.tokensUsed,
-        executionTimeMs: result.executionTimeMs,
-      },
-    });
-  }
-
-  return { results, blocked };
-}
-
-async function executeApprovedForge(
-  db: BetterSqlite3.Database,
-  approved: readonly KairosDelegation[],
-  projectId?: string,
-  traceId?: string,
-  emitter?: ExecutionEventEmitter,
-): Promise<AgentExecutionOutput> {
-  const forgeDelegations = approved.filter((d) => d.agent === "forge");
-
-  if (forgeDelegations.length === 0) {
-    logger.info("No forge delegations to execute");
-    return { results: [], blocked: [] };
-  }
-
-  logger.info({ count: forgeDelegations.length, projectId: projectId ?? "none", traceId }, "Executing forge delegations");
-
-  const results: ExecutionResult[] = [];
-  const blocked: BlockedTask[] = [];
-
-  for (const delegation of forgeDelegations) {
-    const budgetCheck = checkBudget(db, delegation.agent);
-    if (!budgetCheck.allowed) {
-      logger.warn(
-        { task: delegation.task, reason: budgetCheck.reason },
-        "Budget gate blocked execution",
-      );
-      emitter?.warn("forge", "delegation:blocked", "Budget gate blocked execution", {
-        phase: "budget_check",
-        metadata: { task: delegation.task.slice(0, 120), reason: budgetCheck.reason },
-      });
-      blocked.push({
-        task: delegation.task,
-        reason: budgetCheck.reason ?? "Orcamento insuficiente",
-      });
-      continue;
-    }
-
-    if (delegation.goal_id) {
-      markGoalInProgress(db, delegation.goal_id);
-    }
-
-    emitter?.info("forge", "delegation:start", "FORGE execution started", {
-      phase: "execution",
-      metadata: {
-        task: delegation.task.slice(0, 120),
-        goalId: delegation.goal_id,
-        projectId: projectId ?? "default",
-      },
-    });
-
-    const result = await executeForge(db, delegation, projectId, traceId, emitter);
-
-    if (result.status === "infra_unavailable") {
-      emitter?.warn("forge", "delegation:infra_unavailable", "Infrastructure unavailable", {
-        phase: "execution",
-        metadata: { task: delegation.task.slice(0, 120), error: result.error?.slice(0, 200) },
-      });
-      logger.error(
-        { task: delegation.task, error: result.error, traceId },
-        "Infra unavailable — skipping outcome (not a FORGE failure)",
-      );
-      continue;
-    }
-
-    saveOutcome(db, result, { traceId });
-    results.push(result);
-
-    if (result.status === "failed") {
-      emitter?.error("forge", "delegation:failed", "FORGE execution failed", {
-        phase: "execution",
-        metadata: {
-          task: delegation.task.slice(0, 120),
-          error: result.error?.slice(0, 200),
-          tokensUsed: result.tokensUsed,
-          executionTimeMs: result.executionTimeMs,
-        },
-      });
-      logger.error(
-        { task: delegation.task, error: result.error, traceId },
-        "Forge execution failed, aborting remaining",
-      );
-      break;
-    }
-
-    emitter?.info("forge", "delegation:complete", "FORGE execution completed", {
-      phase: "execution",
-      metadata: {
-        task: delegation.task.slice(0, 120),
-        status: result.status,
-        tokensUsed: result.tokensUsed,
-        executionTimeMs: result.executionTimeMs,
-      },
-    });
-  }
-
-  return { results, blocked };
-}
-
-function buildBudgetInfo(
-  db: BetterSqlite3.Database,
-  blockedTasks: readonly BlockedTask[],
-): BudgetInfo {
-  const budget = getCurrentBudget(db);
-  const config = loadBudgetConfig();
-
-  const usedTokens = budget?.used_tokens ?? 0;
-  const totalTokens = budget?.total_tokens ?? config.monthlyTokenLimit;
-  const percentRemaining = totalTokens > 0 ? ((totalTokens - usedTokens) / totalTokens) * 100 : 0;
-  const isExhausted = budget ? budget.hard_limit === 1 && usedTokens >= totalTokens : false;
-
-  return {
-    usedTokens,
-    totalTokens,
-    percentRemaining: Math.max(0, percentRemaining),
-    isExhausted,
-    blockedTasks,
-  };
-}
-
-function evaluateAndRecordFeedback(
-  db: BetterSqlite3.Database,
-  results: readonly ExecutionResult[],
-  approved: readonly KairosDelegation[],
-  budgetConfig: ReturnType<typeof loadBudgetConfig>,
-): void {
-  for (const result of results) {
-    const evaluation =
-      result.agent === "nexus"
-        ? evaluateNexusExecution(result, budgetConfig)
-        : evaluateExecution(result, budgetConfig);
-    const delegation = approved.find((d) => d.task === result.task);
-    const taskType = normalizeTaskType(delegation?.task ?? result.task);
-
-    saveFeedback(db, {
-      agentId: result.agent,
-      taskType,
-      grade: evaluation.grade,
-      reasons: evaluation.reasons,
-    });
-
-    logger.info(
-      {
-        agent: result.agent,
-        task: result.task,
-        grade: evaluation.grade,
-        reasons: evaluation.reasons,
-      },
-      "Execution evaluated and feedback recorded",
-    );
-  }
-}
-
-interface AgentExecutionOutput {
-  readonly results: readonly ExecutionResult[];
-  readonly blocked: readonly BlockedTask[];
-}
-
-async function executeApprovedVector(
-  db: BetterSqlite3.Database,
-  approved: readonly KairosDelegation[],
-  traceId?: string,
-  emitter?: ExecutionEventEmitter,
-): Promise<AgentExecutionOutput> {
-  const vectorDelegations = approved.filter((d) => d.agent === "vector");
-
-  if (vectorDelegations.length === 0) {
-    logger.info("No vector delegations to execute");
-    return { results: [], blocked: [] };
-  }
-
-  logger.info({ count: vectorDelegations.length }, "Executing vector delegations");
-
-  const results: ExecutionResult[] = [];
-  const blocked: BlockedTask[] = [];
-
-  for (const delegation of vectorDelegations) {
-    const budgetCheck = checkBudget(db, delegation.agent);
-    if (!budgetCheck.allowed) {
-      logger.warn(
-        { task: delegation.task, reason: budgetCheck.reason },
-        "Budget gate blocked vector execution",
-      );
-      emitter?.warn("vector", "delegation:blocked", "Budget gate blocked execution", {
-        phase: "budget_check",
-        metadata: { task: delegation.task.slice(0, 120), reason: budgetCheck.reason },
-      });
-      blocked.push({
-        task: delegation.task,
-        reason: budgetCheck.reason ?? "Orcamento insuficiente",
-      });
-      continue;
-    }
-
-    if (delegation.goal_id) {
-      markGoalInProgress(db, delegation.goal_id);
-    }
-
-    emitter?.info("vector", "delegation:start", "VECTOR draft started", {
-      phase: "execution",
-      metadata: { task: delegation.task.slice(0, 120), goalId: delegation.goal_id },
-    });
-
-    const result = await executeVector(db, delegation);
-    saveOutcome(db, result, { traceId });
-    results.push(result);
-
-    if (result.status === "failed") {
-      emitter?.error("vector", "delegation:failed", "VECTOR draft failed", {
-        phase: "execution",
-        metadata: { task: delegation.task.slice(0, 120), error: result.error?.slice(0, 200) },
-      });
-      logger.error(
-        { task: delegation.task, error: result.error, traceId },
-        "Vector execution failed, aborting remaining",
-      );
-      break;
-    }
-
-    emitter?.info("vector", "delegation:complete", "VECTOR draft completed", {
-      phase: "execution",
-      metadata: {
-        task: delegation.task.slice(0, 120),
-        tokensUsed: result.tokensUsed,
-        executionTimeMs: result.executionTimeMs,
-      },
-    });
-  }
-
-  return { results, blocked };
-}
-
-function buildVectorInfo(
-  db: BetterSqlite3.Database,
-  vectorResults: readonly ExecutionResult[],
-): VectorInfo {
-  const pendingDrafts = getPendingArtifacts(db, "vector");
-  const approvedDrafts = getApprovedArtifacts(db, "vector");
-  const publishedCount7d = getPublicationCount7d(db);
-  const avgEngagement7d = getAverageEngagement7d(db);
-
-  const performanceSummary = getMarketingPerformanceSummary(db, 7);
-  const strongMessageTypes = performanceSummary
-    .filter((s) => s.strongCount > s.weakCount)
-    .map((s) => s.messageType);
-  const weakMessageTypes = performanceSummary
-    .filter((s) => s.weakCount > s.strongCount)
-    .map((s) => s.messageType);
-
-  return {
-    executionResults: vectorResults,
-    pendingDraftsCount: pendingDrafts.length,
-    approvedDraftsCount: approvedDrafts.length,
-    publishedCount7d,
-    avgEngagement7d,
-    strongMessageTypes,
-    weakMessageTypes,
-  };
-}
-
-function buildFeedbackInfo(db: BetterSqlite3.Database, adjustmentsApplied: number): FeedbackInfo {
-  const forgeSummary = getFeedbackSummary(db, "forge", 7);
-  const vectorSummary = getFeedbackSummary(db, "vector", 7);
-  const nexusSummary = getFeedbackSummary(db, "nexus", 7);
-
-  const problematicTasks = findProblematicTasks(db);
-
-  return {
-    forgeSuccessRate7d: forgeSummary.successRate,
-    forgeTotalExecutions7d: forgeSummary.total,
-    vectorSuccessRate7d: vectorSummary.successRate,
-    vectorTotalExecutions7d: vectorSummary.total,
-    nexusSuccessRate7d: nexusSummary.successRate,
-    nexusTotalExecutions7d: nexusSummary.total,
-    problematicTasks,
-    adjustmentsApplied,
-  };
-}
-
-function findProblematicTasks(db: BetterSqlite3.Database): readonly string[] {
-  const rows = db
-    .prepare(
-      `SELECT agent_id, task_type, COUNT(*) as failure_count
-       FROM agent_feedback
-       WHERE grade = 'FAILURE'
-         AND created_at >= datetime('now', '-7 days')
-       GROUP BY agent_id, task_type
-       HAVING failure_count >= 2
-       ORDER BY failure_count DESC`,
-    )
-    .all() as ReadonlyArray<{ agent_id: string; task_type: string; failure_count: number }>;
-
-  return rows.map((r) => `${r.agent_id}/${r.task_type} (${r.failure_count} falhas)`);
-}
-
 async function trySyncPRs(db: BetterSqlite3.Database): Promise<void> {
   if (!isGitHubConfigured()) return;
   try {
@@ -701,56 +293,6 @@ async function trySyncPRs(db: BetterSqlite3.Database): Promise<void> {
     const msg = error instanceof Error ? error.message : String(error);
     logger.warn({ error: msg }, "Failed to sync PR statuses from GitHub");
   }
-}
-
-function buildForgeCodeInfo(db: BetterSqlite3.Database): ForgeCodeInfo {
-  const stats = getCodeChangeStats7d(db);
-  const branchStats = getBranchStats7d(db);
-  const prStats = getPRStats7d(db);
-
-  return {
-    appliedCount7d: stats.appliedCount,
-    pendingApprovalCount: stats.pendingApprovalCount,
-    failedCount7d: stats.failedCount,
-    totalRisk7d: stats.totalRisk,
-    activeBranches: branchStats.activeBranches,
-    totalCommits7d: branchStats.totalCommits7d,
-    pendingReviewBranches: branchStats.pendingReviewBranches,
-    openPRs: prStats.openCount,
-    pendingApprovalPRs: prStats.pendingApprovalCount,
-    closedPRs7d: prStats.closedCount7d,
-    mergedPRs7d: prStats.mergedCount7d,
-    readyForMergePRs: prStats.readyForMergeCount,
-    stalePRs: prStats.stalePRCount,
-  };
-}
-
-function buildNexusInfo(
-  db: BetterSqlite3.Database,
-  nexusResults: readonly ExecutionResult[],
-): NexusInfo {
-  const stats = getResearchStats7d(db);
-
-  return {
-    executionResults: nexusResults,
-    researchCount7d: stats.researchCount,
-    recentTopics: stats.recentTopics,
-    identifiedRisks: stats.identifiedRisks,
-  };
-}
-
-function buildHistoricalInfo(db: BetterSqlite3.Database): HistoricalPatternInfo {
-  const summary = getAgentSummary(db, "forge", 7);
-  const persistentFailures = getRecurrentFailurePatterns(db, "forge", 7);
-  const frequentFiles = getFrequentFiles(db, 7, 5);
-
-  return {
-    forgeSuccessRate7d: summary.successRate,
-    forgeTotalExecutions7d: summary.totalExecutions,
-    persistentFailures,
-    frequentFiles,
-    historicalContextUsed: summary.totalExecutions > 0,
-  };
 }
 
 const RESEARCH_SATURATION_THRESHOLD = 3;
