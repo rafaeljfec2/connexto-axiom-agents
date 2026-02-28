@@ -42,6 +42,19 @@ export async function verifyClaudeCliAvailable(cliPath: string): Promise<ClaudeA
   }
 }
 
+const IGNORED_CHANGE_PATTERNS: readonly string[] = [
+  "node_modules",
+  "CLAUDE.md",
+  ".axiom/",
+  ".axiom",
+];
+
+function isIgnoredChangePath(filePath: string): boolean {
+  return IGNORED_CHANGE_PATTERNS.some(
+    (pattern) => filePath === pattern || filePath.startsWith(`${pattern}/`),
+  );
+}
+
 export async function detectChangedFiles(workspacePath: string): Promise<readonly string[]> {
   try {
     const { stdout: trackedDiff } = await execFileAsync(
@@ -68,7 +81,9 @@ export async function detectChangedFiles(workspacePath: string): Promise<readonl
       if (trimmed) files.add(trimmed);
     }
 
-    return [...files].sort((a, b) => a.localeCompare(b));
+    return [...files]
+      .filter((f) => !isIgnoredChangePath(f))
+      .sort((a, b) => a.localeCompare(b));
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     logger.warn({ error: msg }, "Failed to detect changed files via git");

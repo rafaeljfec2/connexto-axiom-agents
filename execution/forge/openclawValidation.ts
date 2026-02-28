@@ -69,11 +69,27 @@ async function hasTestScript(workspacePath: string): Promise<boolean> {
   }
 }
 
+async function unlinkSymlinkedNodeModules(workspacePath: string): Promise<void> {
+  const nmPath = path.join(workspacePath, "node_modules");
+  try {
+    const stat = await fsPromises.lstat(nmPath);
+    if (stat.isSymbolicLink()) {
+      await fsPromises.unlink(nmPath);
+      logger.info("Removed symlinked node_modules before install validation");
+    }
+  } catch {
+    // node_modules doesn't exist — nothing to do
+  }
+}
+
 async function validateInstall(
   workspacePath: string,
   errors: string[],
 ): Promise<ValidationStepResult> {
   logger.info({ step: "install" }, "Validation step starting: pnpm install");
+
+  await unlinkSymlinkedNodeModules(workspacePath);
+
   const frozen = await runValidationStep("pnpm", ["install", "--frozen-lockfile"], workspacePath);
   if (frozen.ok) return "ok";
 

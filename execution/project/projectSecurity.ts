@@ -45,6 +45,7 @@ const FORBIDDEN_EXACT_FILES: readonly string[] = [
   "manifest.yaml",
   "docker-compose.yml",
   "Dockerfile",
+  "node_modules",
 ];
 
 const FORBIDDEN_EXTENSIONS: ReadonlySet<string> = new Set([
