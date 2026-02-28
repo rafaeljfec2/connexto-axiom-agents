@@ -85,6 +85,7 @@ export async function spawnClaudeCli(
     "-p",
     prompt,
     "--output-format", "stream-json",
+    "--verbose",
     "--model", effectiveModel,
     "--max-turns", String(effectiveMaxTurns),
     "--max-budget-usd", String(config.maxBudgetUsd),
