@@ -1,11 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import {
-  parseClaudeCliOutput,
-  buildForgeCodeOutputFromCli,
-  selectModelForTask,
-} from "./claudeCliExecutor.js";
-import type { ClaudeCliExecutorConfig, ClaudeCliExecutionResult } from "./claudeCliExecutor.js";
+import { parseClaudeCliOutput } from "./claudeCliOutputParser.js";
+import { selectModelForTask } from "./claudeCliTypes.js";
+import type { ClaudeCliExecutorConfig, ClaudeCliExecutionResult } from "./claudeCliTypes.js";
+import { buildForgeCodeOutputFromCli } from "./claudeCliExecutor.js";
 import { buildClaudeMdContent } from "./claudeCliInstructions.js";
 import type { ClaudeCliInstructionsContext } from "./claudeCliInstructions.js";
 
