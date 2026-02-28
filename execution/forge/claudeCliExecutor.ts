@@ -198,6 +198,19 @@ export function parseClaudeCliOutput(rawOutput: string): ClaudeCliJsonOutput {
     return { result: "", is_error: true };
   }
 
+  const lines = trimmed.split("\n").filter((l) => l.trim().length > 0);
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const parsed = JSON.parse(lines[i]) as ClaudeCliJsonOutput;
+      if (parsed.type === "result") {
+        return parsed;
+      }
+    } catch {
+      continue;
+    }
+  }
+
   try {
     return JSON.parse(trimmed) as ClaudeCliJsonOutput;
   } catch {
@@ -281,7 +294,7 @@ async function spawnClaudeCli(
   const args: string[] = [
     "-p",
     prompt,
-    "--output-format", "json",
+    "--output-format", "stream-json",
     "--model", effectiveModel,
     "--max-turns", String(config.maxTurns),
     "--max-budget-usd", String(config.maxBudgetUsd),
