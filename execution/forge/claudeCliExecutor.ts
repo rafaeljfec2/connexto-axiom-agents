@@ -291,7 +291,7 @@ async function executePhasedPipeline(
 
 export function buildForgeCodeOutputFromCli(result: ClaudeCliExecutionResult): ForgeCodeOutput {
   const fileCount = result.filesChanged.length;
-  const risk = fileCount === 0 ? 0 : Math.min(fileCount, 3);
+  const risk = fileCount === 0 ? 0 : Math.min(fileCount, 2);
 
   return {
     description: result.description,

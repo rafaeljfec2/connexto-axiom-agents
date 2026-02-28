@@ -56,8 +56,8 @@ export function validateAndCalculateRisk(
   }
 
   let risk = 1;
-  if (files.length > 2) risk += 1;
-  if (files.some((f) => f.action === "modify")) risk += 1;
+  if (files.length > 5) risk += 1;
+  if (files.length > 10) risk += 1;
   if (validation.requiresApproval) risk = Math.max(risk, 3);
 
   return { valid: true, errors: [], risk: Math.min(risk, 5) };

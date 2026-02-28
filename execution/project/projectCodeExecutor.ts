@@ -633,6 +633,29 @@ async function handleSuccessfulAgentOutput(
     runtime: "openclaw",
   });
 
+  const commitResult = await commitVerifiedChanges({
+    db, changeId, description: parsed.description, filePaths, workspacePath, lintOutput, repoSource,
+    options: ctx.commitOptions,
+  });
+
+  if (!commitResult.success) {
+    const executionTimeMs = Math.round(performance.now() - startTime);
+    updateCodeChangeStatus(db, changeId, {
+      status: "failed",
+      testOutput: commitResult.lintOutput,
+      error: commitResult.error ?? "Commit failed after agent loop",
+    });
+
+    return buildResult(
+      task,
+      "failed",
+      "",
+      `Project code change commit failed: ${commitResult.error ?? "unknown"}`,
+      executionTimeMs,
+      totalTokensUsed,
+    );
+  }
+
   if (effectiveRisk >= 3) {
     updateCodeChangeStatus(db, changeId, { status: "pending_approval" });
 
@@ -642,7 +665,7 @@ async function handleSuccessfulAgentOutput(
     const executionTimeMs = Math.round(performance.now() - startTime);
     logger.info(
       { changeId, risk: effectiveRisk, projectId },
-      "Project code change requires approval",
+      "Project code change committed to branch but requires approval",
     );
 
     return buildResult(
@@ -655,38 +678,14 @@ async function handleSuccessfulAgentOutput(
     );
   }
 
-  const commitResult = await commitVerifiedChanges({
-    db, changeId, description: parsed.description, filePaths, workspacePath, lintOutput, repoSource,
-    options: ctx.commitOptions,
-  });
-
-  if (commitResult.success) {
-    const executionTimeMs = Math.round(performance.now() - startTime);
-    logger.info({ changeId, files: filePaths, projectId }, "Project code change committed");
-
-    return buildResult(
-      task,
-      "success",
-      `[${projectId}] Mudanca aplicada: ${parsed.description}. Files: ${filePaths.join(", ")}`,
-      undefined,
-      executionTimeMs,
-      totalTokensUsed,
-    );
-  }
-
   const executionTimeMs = Math.round(performance.now() - startTime);
-
-  updateCodeChangeStatus(db, changeId, {
-    status: "failed",
-    testOutput: commitResult.lintOutput,
-    error: commitResult.error ?? "Commit failed after agent loop",
-  });
+  logger.info({ changeId, files: filePaths, projectId }, "Project code change committed");
 
   return buildResult(
     task,
-    "failed",
-    "",
-    `Project code change commit failed: ${commitResult.error ?? "unknown"}`,
+    "success",
+    `[${projectId}] Mudanca aplicada: ${parsed.description}. Files: ${filePaths.join(", ")}`,
+    undefined,
     executionTimeMs,
     totalTokensUsed,
   );
