@@ -291,7 +291,11 @@ async function spawnClaudeCli(
   return new Promise((resolve) => {
     const child = spawn(config.cliPath, args, {
       cwd: workspacePath,
-      env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" },
+      env: {
+        ...process.env,
+        CLAUDE_CODE_ENTRYPOINT: "cli",
+        GIT_CEILING_DIRECTORIES: path.dirname(workspacePath),
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
 
