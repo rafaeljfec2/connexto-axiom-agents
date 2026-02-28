@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useGoals, useCreateGoal, useActiveProjects, useApproveGoal, useRejectGoal } from "@/api/hooks";
+import { useGoals, useCreateGoal, useActiveProjects, useApproveGoal, useRejectGoal, useUpdateGoalStatus } from "@/api/hooks";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -65,6 +65,11 @@ const PRIORITY_LABEL: Record<number, string> = {
   3: "Crítica",
 };
 
+function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "move";
+}
+
 interface GoalCardProps {
   readonly goal: {
     readonly id: string;
@@ -89,8 +94,19 @@ function GoalCard({ goal, columnId, columnColor, onNavigate, onApprove, onReject
   const prioClass = PRIORITY_COLORS[goal.priority] ?? PRIORITY_COLORS[0];
   const isCodeReview = columnId === "code_review";
 
+  function handleDragStart(e: React.DragEvent<HTMLDivElement>) {
+    e.dataTransfer.setData("text/plain", JSON.stringify({ goalId: goal.id, fromColumn: columnId }));
+    e.dataTransfer.effectAllowed = "move";
+    (e.currentTarget as HTMLElement).classList.add("kanban-card-dragging");
+  }
+
   return (
-    <div className="kanban-card group w-full text-left">
+    <div
+      className="kanban-card group w-full text-left"
+      draggable
+      onDragStart={handleDragStart}
+      onDragEnd={(e) => (e.currentTarget as HTMLElement).classList.remove("kanban-card-dragging")}
+    >
       <button
         type="button"
         onClick={() => onNavigate(goal.id)}
@@ -172,7 +188,9 @@ export function KanbanBoard() {
   const createGoal = useCreateGoal();
   const approveGoal = useApproveGoal();
   const rejectGoal = useRejectGoal();
+  const updateGoalStatus = useUpdateGoalStatus();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
 
   function handleCreateGoal(e: React.SyntheticEvent<HTMLFormElement>) {
@@ -203,6 +221,33 @@ export function KanbanBoard() {
 
   function handleNavigateToGoal(goalId: string) {
     navigate(`/kanban/${goalId}`);
+  }
+
+  function handleDragEnter(columnId: string) {
+    setDragOverColumn(columnId);
+  }
+
+  function handleDragLeave(e: React.DragEvent<HTMLDivElement>) {
+    const relatedTarget = e.relatedTarget as Node | null;
+    if (!e.currentTarget.contains(relatedTarget)) {
+      setDragOverColumn(null);
+    }
+  }
+
+  function handleDrop(e: React.DragEvent<HTMLDivElement>, targetColumnId: string) {
+    e.preventDefault();
+    setDragOverColumn(null);
+
+    const raw = e.dataTransfer.getData("text/plain");
+    if (!raw) return;
+
+    try {
+      const { goalId, fromColumn } = JSON.parse(raw) as { goalId: string; fromColumn: string };
+      if (fromColumn === targetColumnId) return;
+      updateGoalStatus.mutate({ id: goalId, status: targetColumnId });
+    } catch {
+      // invalid drag data
+    }
   }
 
   if (isLoading) {
@@ -338,10 +383,17 @@ export function KanbanBoard() {
           const isLast = idx === goalsByStatus.length - 1;
           const bgClass = COLUMN_BG[idx % 2];
 
+          const isDragOver = dragOverColumn === column.id;
+
           return (
             <div
               key={column.id}
-              className={`flex w-72 shrink-0 flex-col md:w-auto md:flex-1 ${bgClass} ${isLast ? "" : "kanban-col-divider"}`}
+              aria-label={column.label}
+              className={`flex w-72 shrink-0 flex-col md:w-auto md:flex-1 ${bgClass} ${isLast ? "" : "kanban-col-divider"} ${isDragOver ? "kanban-col-drop-target" : ""}`}
+              onDragOver={handleDragOver}
+              onDragEnter={() => handleDragEnter(column.id)}
+              onDragLeave={handleDragLeave}
+              onDrop={(e) => handleDrop(e, column.id)}
             >
               <div className="kanban-col-header sticky top-0 z-10 flex items-center gap-2 px-3 py-2.5">
                 <div className={`h-2.5 w-2.5 rounded-full ${column.color}`} />

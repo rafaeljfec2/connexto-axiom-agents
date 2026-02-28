@@ -289,7 +289,7 @@ async function executeWithClaudeCliMode(ctx: ClaudeCliModeContext): Promise<Exec
     );
   }
 
-  const pushEnabled = project.push_enabled === 1;
+  const pushEnabled = project.push_enabled !== 0;
   const parsed = buildForgeCodeOutputFromCli(cliResult);
 
   emitter?.info("forge", "forge:commit_started", "Commit and push flow started", {
@@ -415,7 +415,7 @@ async function executeWithOpenClawMode(
     );
   }
 
-  const pushEnabled = project.push_enabled === 1;
+  const pushEnabled = project.push_enabled !== 0;
   const parsed = buildForgeCodeOutput(openclawResult);
 
   return handleSuccessfulAgentOutput({

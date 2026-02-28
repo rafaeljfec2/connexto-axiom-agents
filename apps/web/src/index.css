@@ -103,6 +103,27 @@
   transform: scale(0.99);
 }
 
+.kanban-card-dragging {
+  opacity: 0.4;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  transform: rotate(2deg);
+}
+
+.kanban-card[draggable="true"] {
+  cursor: grab;
+}
+
+.kanban-card[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.kanban-col-drop-target {
+  background-color: #ede9fe !important;
+  outline: 2px dashed #8b5cf6;
+  outline-offset: -2px;
+  transition: background-color 0.15s ease, outline 0.15s ease;
+}
+
 .kanban-card-title {
   color: #1f2937;
 }

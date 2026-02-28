@@ -248,6 +248,23 @@ export function useCreateGoal() {
   });
 }
 
+interface UpdateGoalStatusPayload {
+  readonly id: string;
+  readonly status: string;
+}
+
+export function useUpdateGoalStatus() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status }: UpdateGoalStatusPayload) =>
+      api.patch<Goal>(`/goals/${id}`, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["goals"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+}
+
 export function useApproveGoal() {
   const queryClient = useQueryClient();
   return useMutation({
