@@ -65,7 +65,7 @@ export function EventDetail({ event }: EventDetailProps) {
         LEVEL_STYLES[event.level] ?? LEVEL_STYLES.info,
       )}
     >
-      <div className="flex items-start gap-2">
+      <div className="flex items-start gap-2 min-w-0">
         <span className="text-muted-foreground tabular-nums shrink-0">
           {formatTime(event.created_at)}
         </span>
@@ -75,7 +75,7 @@ export function EventDetail({ event }: EventDetailProps) {
         >
           {event.event_type}
         </Badge>
-        <span className="text-foreground/80 flex-1">{event.message}</span>
+        <span className="text-foreground/80 flex-1 min-w-0 wrap-break-word">{event.message}</span>
       </div>
 
       {hasMetadata && (
@@ -96,9 +96,9 @@ export function EventDetail({ event }: EventDetailProps) {
           {metadataExpanded && (
             <div className="mt-1 ml-4 space-y-0.5 font-mono">
               {Object.entries(metadata).map(([key, value]) => (
-                <div key={key} className="flex gap-2 text-[10px]">
-                  <span className="text-muted-foreground">{key}:</span>
-                  <span className="text-foreground/80">{formatMetadataValue(value)}</span>
+                <div key={key} className="flex gap-2 text-[10px] min-w-0">
+                  <span className="text-muted-foreground shrink-0">{key}:</span>
+                  <span className="text-foreground/80 break-all">{formatMetadataValue(value)}</span>
                 </div>
               ))}
             </div>

@@ -198,7 +198,7 @@ function AgentNode({ group, isLast, isLive }: {
         <Badge className={cn("text-xs px-2 py-0.5", AGENT_COLORS[group.agent] ?? "bg-muted")}>
           {AGENT_LABELS[group.agent] ?? group.agent.toUpperCase()}
         </Badge>
-        <span className="text-sm text-muted-foreground truncate flex-1">
+        <span className="text-sm text-muted-foreground flex-1 min-w-0 wrap-break-word">
           {group.events.at(-1)?.message}
         </span>
         {durationMs > 0 && (
@@ -215,7 +215,7 @@ function AgentNode({ group, isLast, isLive }: {
 
       {/* Expanded phases */}
       {expanded && (
-        <div className="ml-8 mt-1 mb-3 space-y-1 border-l border-border pl-4">
+        <div className="ml-8 mt-1 mb-3 space-y-1 border-l border-border pl-4 min-w-0 overflow-hidden">
           {group.phases.map((phase, idx) => (
             <PhaseStep
               key={`${phase.phase}-${idx}`}

@@ -71,7 +71,7 @@ export function PhaseStep({ phase }: PhaseStepProps) {
       >
         <PhaseStatusIcon status={phase.status} />
         <span className="text-xs font-medium">{label}</span>
-        <span className="text-xs text-muted-foreground truncate flex-1">{summary}</span>
+        <span className="text-xs text-muted-foreground flex-1 min-w-0 wrap-break-word">{summary}</span>
         <span className="text-[10px] text-muted-foreground tabular-nums">
           {phase.events.length > 1 && `${phase.events.length} events`}
         </span>
@@ -83,7 +83,7 @@ export function PhaseStep({ phase }: PhaseStepProps) {
       </button>
 
       {expanded && (
-        <div className="ml-6 mt-1 mb-2 space-y-1">
+        <div className="ml-6 mt-1 mb-2 space-y-1 min-w-0 overflow-hidden">
           {phase.events.map((event) => (
             <EventDetail key={event.id} event={event} />
           ))}
