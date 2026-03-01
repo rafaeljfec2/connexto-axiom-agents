@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { useProjectDetail, useReindexProject } from "@/api/hooks";
+import { useQueryClient } from "@tanstack/react-query";
+import { useProjectDetail, useReindexProject, type ActiveProject } from "@/api/hooks";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,8 +31,8 @@ interface SSEEvent {
 const PIPELINE_STEPS = [
   { key: "cloning", label: "Clone", icon: GitBranch },
   { key: "copying", label: "Workspace", icon: Copy },
-  { key: "documenting", label: "Documentation", icon: FileText },
   { key: "indexing", label: "Indexing", icon: Database },
+  { key: "documenting", label: "Documentation", icon: FileText },
   { key: "ready", label: "Ready", icon: CheckCircle2 },
 ] as const;
 
@@ -40,8 +41,8 @@ const STEP_ORDER: Record<string, number> = {
   cloning: 0,
   cloned: 1,
   copying: 1,
-  documenting: 2,
-  indexing: 3,
+  indexing: 2,
+  documenting: 3,
   ready: 4,
   error: -2,
 };
@@ -86,16 +87,58 @@ function StepIndicator({ status }: { readonly status: "completed" | "active" | "
   );
 }
 
+const ONBOARDING_ACTIVE_STATUSES = new Set(["cloning", "cloned", "copying", "documenting", "indexing"]);
+const SSE_RECONNECT_BASE_MS = 2_000;
+const SSE_RECONNECT_MAX_MS = 30_000;
+
+type MutableProject = { -readonly [K in keyof ActiveProject]: ActiveProject[K] };
+
+function applySSEToProject(prev: ActiveProject, event: SSEEvent): ActiveProject {
+  const next: MutableProject = { ...prev, onboarding_status: event.status };
+
+  if (event.type === "error") {
+    next.onboarding_error = event.message;
+  }
+
+  const d = event.data;
+  if (d) {
+    if (typeof d.stack_detected === "string") next.stack_detected = d.stack_detected;
+    if (typeof d.files_indexed === "number") next.files_indexed = d.files_indexed;
+    if (typeof d.files_total === "number") next.files_total = d.files_total;
+    if (typeof d.docs_status === "string") next.docs_status = d.docs_status;
+    if (typeof d.index_status === "string") next.index_status = d.index_status;
+
+    if (d.stack && typeof d.stack === "object") {
+      const stack = d.stack as { language: string; framework: string };
+      next.stack_detected = `${stack.language}/${stack.framework}`;
+    }
+  }
+
+  return next;
+}
+
 export function ProjectDetail() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { data: project, isLoading, error, refetch } = useProjectDetail(projectId ?? null);
   const reindex = useReindexProject();
   const [sseMessages, setSSEMessages] = useState<readonly SSEEvent[]>([]);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+
+  const clearReconnect = useCallback(() => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+  }, []);
 
   const connectSSE = useCallback(() => {
     if (!projectId) return;
+
+    clearReconnect();
 
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
@@ -104,17 +147,24 @@ export function ProjectDetail() {
     const es = new EventSource(`/api/projects/${projectId}/status/stream`);
     eventSourceRef.current = es;
 
+    es.onopen = () => {
+      reconnectAttemptsRef.current = 0;
+    };
+
     es.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data) as SSEEvent;
         setSSEMessages((prev) => [...prev, data]);
 
+        queryClient.setQueryData<ActiveProject>(
+          ["projects", projectId],
+          (prev) => prev ? applySSEToProject(prev, data) : prev,
+        );
+
         if (data.type === "complete" || data.type === "error") {
           refetch();
-        }
-
-        if (data.type === "progress") {
-          refetch();
+          es.close();
+          eventSourceRef.current = null;
         }
       } catch {
         // ignore malformed events
@@ -123,18 +173,34 @@ export function ProjectDetail() {
 
     es.onerror = () => {
       es.close();
+      eventSourceRef.current = null;
+
+      const delay = Math.min(
+        SSE_RECONNECT_BASE_MS * 2 ** reconnectAttemptsRef.current,
+        SSE_RECONNECT_MAX_MS,
+      );
+      reconnectAttemptsRef.current += 1;
+
+      reconnectTimeoutRef.current = setTimeout(() => {
+        const cached = queryClient.getQueryData<ActiveProject>(["projects", projectId]);
+        if (cached && ONBOARDING_ACTIVE_STATUSES.has(cached.onboarding_status)) {
+          connectSSE();
+        }
+      }, delay);
     };
-  }, [projectId, refetch]);
+  }, [projectId, queryClient, refetch, clearReconnect]);
 
   useEffect(() => {
-    if (project && ["cloning", "cloned", "copying", "documenting", "indexing"].includes(project.onboarding_status)) {
+    if (project && ONBOARDING_ACTIVE_STATUSES.has(project.onboarding_status)) {
       connectSSE();
     }
 
     return () => {
+      clearReconnect();
       eventSourceRef.current?.close();
+      eventSourceRef.current = null;
     };
-  }, [project?.onboarding_status, connectSSE]);
+  }, [project?.onboarding_status, connectSSE, clearReconnect]);
 
   const handleReindex = useCallback(() => {
     if (!projectId) return;

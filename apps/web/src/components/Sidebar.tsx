@@ -7,9 +7,9 @@ interface SidebarProps {
 }
 
 const NAV_ITEMS = [
+  { to: "/projects", label: "Projetos", icon: FolderGit2 },
   { to: "/", label: "Resumo Diário", icon: LayoutDashboard },
   { to: "/kanban", label: "Quadro Kanban", icon: Columns3 },
-  { to: "/projects", label: "Projetos", icon: FolderGit2 },
   { to: "/agents", label: "Agentes", icon: Bot },
   { to: "/execucoes", label: "Execuções", icon: Activity },
   { to: "/historico", label: "Histórico", icon: History },

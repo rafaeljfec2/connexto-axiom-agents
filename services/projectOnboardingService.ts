@@ -225,28 +225,6 @@ export async function startOnboarding(
     const totalFiles = await countProjectFiles(workspacePath);
     updateOnboardingProgress(db, projectId, { files_total: totalFiles });
 
-    updateOnboardingStatus(db, projectId, "documenting");
-    updateOnboardingProgress(db, projectId, { docs_status: "in_progress" });
-    emitEvent({
-      type: "status_change",
-      projectId,
-      status: "documenting",
-      message: "Generating documentation...",
-    });
-
-    try {
-      const { runDocumentationAgent } =
-        await import("../agents/documentation/documentationAgent.js");
-      await runDocumentationAgent(workspacePath, (progress) => {
-        emitEvent({ type: "progress", projectId, status: "documenting", message: progress });
-      });
-      updateOnboardingProgress(db, projectId, { docs_status: "completed" });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.warn({ projectId, error: msg }, "Documentation generation failed, continuing...");
-      updateOnboardingProgress(db, projectId, { docs_status: "error" });
-    }
-
     updateOnboardingStatus(db, projectId, "indexing");
     updateOnboardingProgress(db, projectId, { index_status: "in_progress" });
     emitEvent({
@@ -254,6 +232,7 @@ export async function startOnboarding(
       projectId,
       status: "indexing",
       message: "Indexing project files...",
+      data: { index_status: "in_progress", files_total: totalFiles },
     });
 
     try {
@@ -265,7 +244,7 @@ export async function startOnboarding(
           projectId,
           status: "indexing",
           message: `Indexed ${String(indexed)} of ${String(totalFiles)} files`,
-          data: { files_indexed: indexed, files_total: totalFiles },
+          data: { files_indexed: indexed, files_total: totalFiles, index_status: "in_progress" },
         });
       });
       updateOnboardingProgress(db, projectId, {
@@ -278,6 +257,43 @@ export async function startOnboarding(
       updateOnboardingProgress(db, projectId, { index_status: "error" });
     }
 
+    updateOnboardingStatus(db, projectId, "documenting");
+    updateOnboardingProgress(db, projectId, { docs_status: "in_progress" });
+    emitEvent({
+      type: "status_change",
+      projectId,
+      status: "documenting",
+      message: "Generating documentation...",
+      data: { docs_status: "in_progress", files_total: totalFiles },
+    });
+
+    try {
+      const { runDocumentationAgent } =
+        await import("../agents/documentation/documentationAgent.js");
+      await runDocumentationAgent(workspacePath, (progress) => {
+        emitEvent({ type: "progress", projectId, status: "documenting", message: progress });
+      });
+      updateOnboardingProgress(db, projectId, { docs_status: "completed" });
+      emitEvent({
+        type: "progress",
+        projectId,
+        status: "documenting",
+        message: "Documentation completed",
+        data: { docs_status: "completed" },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn({ projectId, error: msg }, "Documentation generation failed, continuing...");
+      updateOnboardingProgress(db, projectId, { docs_status: "error" });
+      emitEvent({
+        type: "progress",
+        projectId,
+        status: "documenting",
+        message: `Documentation failed: ${msg}`,
+        data: { docs_status: "error" },
+      });
+    }
+
     updateOnboardingStatus(db, projectId, "ready");
     db.prepare(
       "UPDATE projects SET onboarding_completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), status = 'active' WHERE project_id = ?",
@@ -288,6 +304,7 @@ export async function startOnboarding(
       projectId,
       status: "ready",
       message: "Project onboarding completed",
+      data: { docs_status: "completed", index_status: "completed", files_total: totalFiles, files_indexed: totalFiles },
     });
     logger.info({ projectId }, "Project onboarding completed successfully");
   } catch (error) {

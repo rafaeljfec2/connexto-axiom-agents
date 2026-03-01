@@ -260,7 +260,6 @@ export function useProjectDetail(projectId: string | null) {
     queryKey: ["projects", projectId],
     queryFn: () => api.get(`/projects/${projectId}`),
     enabled: !!projectId,
-    refetchInterval: 5_000,
   });
 }
 
