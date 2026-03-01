@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type BetterSqlite3 from "better-sqlite3";
 import { logger } from "../config/logger.js";
-import { REPOSITORIES_DIR, WORKSPACES_DIR } from "../config/paths.js";
+import { getRepositoriesDir, getWorkspacesDir } from "../config/paths.js";
 import { detectStack } from "./stackDetector.js";
 import {
   updateOnboardingStatus,
@@ -61,7 +61,7 @@ function emitEvent(event: OnboardingEvent): void {
 }
 
 async function cloneRepository(projectId: string, gitUrl: string): Promise<string> {
-  const repoPath = path.join(REPOSITORIES_DIR, projectId);
+  const repoPath = path.join(getRepositoriesDir(), projectId);
 
   if (fs.existsSync(path.join(repoPath, ".git"))) {
     logger.info({ projectId, repoPath }, "Repository already exists, skipping clone");
@@ -79,7 +79,7 @@ async function cloneRepository(projectId: string, gitUrl: string): Promise<strin
 }
 
 async function copyToWorkspace(projectId: string, repoPath: string): Promise<string> {
-  const workspacePath = path.join(WORKSPACES_DIR, projectId, ".base");
+  const workspacePath = path.join(getWorkspacesDir(), projectId, ".base");
 
   if (fs.existsSync(workspacePath)) {
     logger.info({ projectId, workspacePath }, "Workspace already exists, skipping copy");

@@ -4,7 +4,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { logger } from "../../config/logger.js";
-import { WORKSPACES_DIR } from "../../config/paths.js";
+import { getWorkspacesDir } from "../../config/paths.js";
 import { cloneRepo, pullLatest, cloneLocal } from "./projectGitManager.js";
 
 const execFileAsync = promisify(execFile);
@@ -12,12 +12,12 @@ const BASE_DIR_NAME = ".base";
 const PNPM_INSTALL_TIMEOUT_MS = 120_000;
 
 export function getBaseClonePath(projectId: string): string {
-  return path.resolve(WORKSPACES_DIR, projectId, BASE_DIR_NAME);
+  return path.resolve(getWorkspacesDir(), projectId, BASE_DIR_NAME);
 }
 
 export function getTaskWorkspacePath(projectId: string, taskId: string): string {
   const shortId = taskId.slice(0, 8).toLowerCase();
-  return path.resolve(WORKSPACES_DIR, projectId, `task-${shortId}`);
+  return path.resolve(getWorkspacesDir(), projectId, `task-${shortId}`);
 }
 
 export async function ensureBaseClone(

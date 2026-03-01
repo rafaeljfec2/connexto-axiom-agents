@@ -3,19 +3,35 @@ import os from "node:os";
 import path from "node:path";
 import { logger } from "./logger.js";
 
-const AXIOM_HOME =
-  process.env.AXIOM_HOME ?? path.join(os.homedir(), "connexto-axiom-agents");
+let _resolvedHome: string | null = null;
 
-export const REPOSITORIES_DIR = path.join(AXIOM_HOME, "repositories");
-export const WORKSPACES_DIR = path.join(AXIOM_HOME, "workspaces", "forge");
-export const INDEX_DIR = path.join(AXIOM_HOME, "index");
+function resolveAxiomHome(): string {
+  if (!_resolvedHome) {
+    _resolvedHome =
+      process.env.AXIOM_HOME ?? path.join(os.homedir(), "connexto-axiom-agents");
+    logger.info({ axiomHome: _resolvedHome }, "AXIOM_HOME resolved");
+  }
+  return _resolvedHome;
+}
 
 export function getAxiomHome(): string {
-  return AXIOM_HOME;
+  return resolveAxiomHome();
+}
+
+export function getRepositoriesDir(): string {
+  return path.join(resolveAxiomHome(), "repositories");
+}
+
+export function getWorkspacesDir(): string {
+  return path.join(resolveAxiomHome(), "workspaces", "forge");
+}
+
+export function getIndexDir(): string {
+  return path.join(resolveAxiomHome(), "index");
 }
 
 export function ensureAxiomDirectories(): void {
-  const dirs = [REPOSITORIES_DIR, WORKSPACES_DIR, INDEX_DIR];
+  const dirs = [getRepositoriesDir(), getWorkspacesDir(), getIndexDir()];
 
   for (const dir of dirs) {
     if (!fs.existsSync(dir)) {
