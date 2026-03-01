@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   useGoalDetails,
+  useUpdateGoal,
   type GoalCodeChange,
   type GoalTokenUsage,
 } from "@/api/hooks";
@@ -22,6 +24,9 @@ import {
   GitBranch,
   ShieldAlert,
   FileText,
+  Pencil,
+  Check,
+  X,
 } from "lucide-react";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -328,12 +333,139 @@ function renderMarkdownLine(line: string): React.ReactNode {
   return parts;
 }
 
-function DescriptionPanel({ description }: Readonly<{ description: string }>) {
-  const [collapsed, setCollapsed] = useState(false);
-  const lines = description.split("\n");
-  const isLong = lines.length > 25;
+function DescriptionReadView({ lines, collapsed, onExpand }: Readonly<{
+  lines: ReadonlyArray<string>;
+  collapsed: boolean;
+  onExpand: () => void;
+}>) {
+  const displayLines = collapsed ? lines.slice(0, 6) : lines;
 
-  const displayLines = collapsed ? lines.slice(0, 10) : lines;
+  return (
+    <div className="space-y-0 px-5 py-4 text-sm leading-relaxed text-foreground/90">
+      {displayLines.map((line, idx) => {
+        const trimmed = line.trimStart();
+        const key = `l${idx}`;
+
+        if (trimmed.length === 0) {
+          return <div key={key} className="h-2" />;
+        }
+
+        if (trimmed.startsWith("## ")) {
+          return (
+            <h3 key={key} className="mt-3 mb-1.5 text-sm font-bold text-foreground first:mt-0">
+              {trimmed.slice(3)}
+            </h3>
+          );
+        }
+
+        if (trimmed.startsWith("### ")) {
+          return (
+            <h4 key={key} className="mt-2.5 mb-1 text-[13px] font-semibold text-foreground first:mt-0">
+              {trimmed.slice(4)}
+            </h4>
+          );
+        }
+
+        if (trimmed.startsWith("# ")) {
+          return (
+            <h2 key={key} className="mt-3 mb-1.5 text-base font-bold text-foreground first:mt-0">
+              {trimmed.slice(2)}
+            </h2>
+          );
+        }
+
+        if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+          const indent = line.length - trimmed.length;
+          let ml = "";
+          if (indent >= 4) ml = "ml-6";
+          else if (indent >= 2) ml = "ml-3";
+          return (
+            <div key={key} className={`flex items-start gap-2 py-0.5 ${ml}`}>
+              <span className="mt-[8px] block h-1 w-1 shrink-0 rounded-full bg-muted-foreground/50" />
+              <span className="min-w-0">{renderMarkdownLine(trimmed.slice(2))}</span>
+            </div>
+          );
+        }
+
+        if (/^\d+\)\s/.test(trimmed)) {
+          const match = /^(\d+)\)\s(.*)/.exec(trimmed);
+          if (match) {
+            return (
+              <div key={key} className="flex items-start gap-2 py-0.5">
+                <span className="shrink-0 text-muted-foreground">{match[1]}.</span>
+                <span className="min-w-0">{renderMarkdownLine(match[2] ?? "")}</span>
+              </div>
+            );
+          }
+        }
+
+        return (
+          <p key={key} className="py-0.5">
+            {renderMarkdownLine(line)}
+          </p>
+        );
+      })}
+
+      {collapsed && lines.length > 6 ? (
+        <button
+          type="button"
+          onClick={onExpand}
+          className="mt-2 cursor-pointer text-xs font-medium text-primary/70 transition-colors hover:text-primary"
+        >
+          ... mostrar tudo ({lines.length} linhas)
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+interface DescriptionPanelProps {
+  readonly goalId: string;
+  readonly description: string;
+}
+
+function DescriptionPanel({ goalId, description }: DescriptionPanelProps) {
+  const [collapsed, setCollapsed] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(description);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const updateGoal = useUpdateGoal();
+
+  const lines = description.split("\n");
+
+  const startEditing = useCallback(() => {
+    setDraft(description);
+    setEditing(true);
+    setCollapsed(false);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [description]);
+
+  const cancelEditing = useCallback(() => {
+    setDraft(description);
+    setEditing(false);
+  }, [description]);
+
+  const saveDescription = useCallback(() => {
+    const trimmed = draft.trim();
+    if (trimmed === description.trim()) {
+      setEditing(false);
+      return;
+    }
+    updateGoal.mutate(
+      { id: goalId, description: trimmed },
+      { onSuccess: () => setEditing(false) },
+    );
+  }, [draft, description, goalId, updateGoal]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Escape") {
+      cancelEditing();
+    }
+    if (e.key === "s" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      saveDescription();
+    }
+  }, [cancelEditing, saveDescription]);
 
   return (
     <Card>
@@ -341,93 +473,79 @@ function DescriptionPanel({ description }: Readonly<{ description: string }>) {
         <div className="flex items-center gap-2">
           <FileText className="h-4 w-4 text-muted-foreground" />
           <h3 className="text-sm font-semibold">Descrição</h3>
+          {editing ? null : (
+            <span className="text-[10px] text-muted-foreground/60">duplo-clique para editar</span>
+          )}
         </div>
-        {isLong ? (
-          <button
-            type="button"
-            onClick={() => setCollapsed((prev) => !prev)}
-            className="cursor-pointer text-xs font-medium text-primary/70 transition-colors hover:text-primary"
-          >
-            {collapsed ? "Expandir" : "Recolher"}
-          </button>
-        ) : null}
+        <div className="flex items-center gap-2">
+          {editing ? (
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 gap-1 px-2 text-xs"
+                onClick={cancelEditing}
+                disabled={updateGoal.isPending}
+              >
+                <X className="h-3.5 w-3.5" />
+                Cancelar
+              </Button>
+              <Button
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs"
+                onClick={saveDescription}
+                disabled={updateGoal.isPending}
+              >
+                {updateGoal.isPending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Check className="h-3.5 w-3.5" />
+                )}
+                Salvar
+              </Button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={startEditing}
+                className="cursor-pointer rounded p-1 text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setCollapsed((prev) => !prev)}
+                className="cursor-pointer text-xs font-medium text-primary/70 transition-colors hover:text-primary"
+              >
+                {collapsed ? "Expandir" : "Recolher"}
+              </button>
+            </>
+          )}
+        </div>
       </div>
-      <CardContent className="p-0">
-        <div className="space-y-0 px-5 py-4 text-sm leading-relaxed text-foreground/90">
-          {displayLines.map((line, idx) => {
-            const trimmed = line.trimStart();
-            const key = `l${idx}`;
-
-            if (trimmed.length === 0) {
-              return <div key={key} className="h-2" />;
-            }
-
-            if (trimmed.startsWith("## ")) {
-              return (
-                <h3 key={key} className="mt-3 mb-1.5 text-sm font-bold text-foreground first:mt-0">
-                  {trimmed.slice(3)}
-                </h3>
-              );
-            }
-
-            if (trimmed.startsWith("### ")) {
-              return (
-                <h4 key={key} className="mt-2.5 mb-1 text-[13px] font-semibold text-foreground first:mt-0">
-                  {trimmed.slice(4)}
-                </h4>
-              );
-            }
-
-            if (trimmed.startsWith("# ")) {
-              return (
-                <h2 key={key} className="mt-3 mb-1.5 text-base font-bold text-foreground first:mt-0">
-                  {trimmed.slice(2)}
-                </h2>
-              );
-            }
-
-            if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
-              const indent = line.length - trimmed.length;
-              let ml = "";
-              if (indent >= 4) ml = "ml-6";
-              else if (indent >= 2) ml = "ml-3";
-              return (
-                <div key={key} className={`flex items-start gap-2 py-0.5 ${ml}`}>
-                  <span className="mt-[8px] block h-1 w-1 shrink-0 rounded-full bg-muted-foreground/50" />
-                  <span className="min-w-0">{renderMarkdownLine(trimmed.slice(2))}</span>
-                </div>
-              );
-            }
-
-            if (/^\d+\)\s/.test(trimmed)) {
-              const match = /^(\d+)\)\s(.*)/.exec(trimmed);
-              if (match) {
-                return (
-                  <div key={key} className="flex items-start gap-2 py-0.5">
-                    <span className="shrink-0 text-muted-foreground">{match[1]}.</span>
-                    <span className="min-w-0">{renderMarkdownLine(match[2] ?? "")}</span>
-                  </div>
-                );
-              }
-            }
-
-            return (
-              <p key={key} className="py-0.5">
-                {renderMarkdownLine(line)}
-              </p>
-            );
-          })}
-
-          {collapsed && isLong ? (
-            <button
-              type="button"
-              onClick={() => setCollapsed(false)}
-              className="mt-2 cursor-pointer text-xs font-medium text-primary/70 transition-colors hover:text-primary"
-            >
-              ... mostrar tudo ({lines.length} linhas)
-            </button>
-          ) : null}
-        </div>
+      <CardContent className="p-0" onDoubleClick={editing ? undefined : startEditing}>
+        {editing ? (
+          <div className="px-4 py-3">
+            <textarea
+              ref={textareaRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="w-full min-h-[200px] max-h-[60vh] resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-sm leading-relaxed shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              spellCheck={false}
+            />
+            <p className="mt-1.5 text-[10px] text-muted-foreground">
+              Ctrl+S para salvar · Esc para cancelar
+            </p>
+          </div>
+        ) : (
+          <DescriptionReadView
+            lines={lines}
+            collapsed={collapsed}
+            onExpand={() => setCollapsed(false)}
+          />
+        )}
       </CardContent>
     </Card>
   );
@@ -665,7 +783,7 @@ export function GoalDetail() {
       <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
         <div className="space-y-4">
           {goal.description ? (
-            <DescriptionPanel description={goal.description} />
+            <DescriptionPanel goalId={goal.id} description={goal.description} />
           ) : null}
           <ProgressBar counts={progress} />
           <CodeChangesPanel codeChanges={codeChanges} />
