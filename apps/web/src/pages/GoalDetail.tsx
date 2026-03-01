@@ -280,6 +280,159 @@ function getRiskConfig(risk: number): { readonly color: string; readonly bg: str
   return { color: "text-emerald-600", bg: "bg-emerald-50", label: "Baixo" };
 }
 
+function renderMarkdownLine(line: string): React.ReactNode {
+  const parts: React.ReactNode[] = [];
+  let remaining = line;
+  let keyIdx = 0;
+
+  while (remaining.length > 0) {
+    const codeMatch = /`([^`]+)`/.exec(remaining);
+    const boldMatch = /\*\*([^*]+)\*\*/.exec(remaining);
+
+    let firstMatch: { index: number; length: number; node: React.ReactNode } | null = null;
+
+    if (codeMatch?.index !== undefined) {
+      firstMatch = {
+        index: codeMatch.index,
+        length: codeMatch[0].length,
+        node: (
+          <code key={`c${keyIdx++}`} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[12px] text-foreground">
+            {codeMatch[1]}
+          </code>
+        ),
+      };
+    }
+
+    if (boldMatch?.index !== undefined) {
+      if (!firstMatch || boldMatch.index < firstMatch.index) {
+        firstMatch = {
+          index: boldMatch.index,
+          length: boldMatch[0].length,
+          node: <strong key={`b${keyIdx++}`}>{boldMatch[1]}</strong>,
+        };
+      }
+    }
+
+    if (!firstMatch) {
+      parts.push(remaining);
+      break;
+    }
+
+    if (firstMatch.index > 0) {
+      parts.push(remaining.slice(0, firstMatch.index));
+    }
+    parts.push(firstMatch.node);
+    remaining = remaining.slice(firstMatch.index + firstMatch.length);
+  }
+
+  return parts;
+}
+
+function DescriptionPanel({ description }: Readonly<{ description: string }>) {
+  const [collapsed, setCollapsed] = useState(false);
+  const lines = description.split("\n");
+  const isLong = lines.length > 25;
+
+  const displayLines = collapsed ? lines.slice(0, 10) : lines;
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between border-b px-4 py-3">
+        <div className="flex items-center gap-2">
+          <FileText className="h-4 w-4 text-muted-foreground" />
+          <h3 className="text-sm font-semibold">Descrição</h3>
+        </div>
+        {isLong ? (
+          <button
+            type="button"
+            onClick={() => setCollapsed((prev) => !prev)}
+            className="cursor-pointer text-xs font-medium text-primary/70 transition-colors hover:text-primary"
+          >
+            {collapsed ? "Expandir" : "Recolher"}
+          </button>
+        ) : null}
+      </div>
+      <CardContent className="p-0">
+        <div className="space-y-0 px-5 py-4 text-sm leading-relaxed text-foreground/90">
+          {displayLines.map((line, idx) => {
+            const trimmed = line.trimStart();
+            const key = `l${idx}`;
+
+            if (trimmed.length === 0) {
+              return <div key={key} className="h-2" />;
+            }
+
+            if (trimmed.startsWith("## ")) {
+              return (
+                <h3 key={key} className="mt-3 mb-1.5 text-sm font-bold text-foreground first:mt-0">
+                  {trimmed.slice(3)}
+                </h3>
+              );
+            }
+
+            if (trimmed.startsWith("### ")) {
+              return (
+                <h4 key={key} className="mt-2.5 mb-1 text-[13px] font-semibold text-foreground first:mt-0">
+                  {trimmed.slice(4)}
+                </h4>
+              );
+            }
+
+            if (trimmed.startsWith("# ")) {
+              return (
+                <h2 key={key} className="mt-3 mb-1.5 text-base font-bold text-foreground first:mt-0">
+                  {trimmed.slice(2)}
+                </h2>
+              );
+            }
+
+            if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+              const indent = line.length - trimmed.length;
+              let ml = "";
+              if (indent >= 4) ml = "ml-6";
+              else if (indent >= 2) ml = "ml-3";
+              return (
+                <div key={key} className={`flex items-start gap-2 py-0.5 ${ml}`}>
+                  <span className="mt-[8px] block h-1 w-1 shrink-0 rounded-full bg-muted-foreground/50" />
+                  <span className="min-w-0">{renderMarkdownLine(trimmed.slice(2))}</span>
+                </div>
+              );
+            }
+
+            if (/^\d+\)\s/.test(trimmed)) {
+              const match = /^(\d+)\)\s(.*)/.exec(trimmed);
+              if (match) {
+                return (
+                  <div key={key} className="flex items-start gap-2 py-0.5">
+                    <span className="shrink-0 text-muted-foreground">{match[1]}.</span>
+                    <span className="min-w-0">{renderMarkdownLine(match[2] ?? "")}</span>
+                  </div>
+                );
+              }
+            }
+
+            return (
+              <p key={key} className="py-0.5">
+                {renderMarkdownLine(line)}
+              </p>
+            );
+          })}
+
+          {collapsed && isLong ? (
+            <button
+              type="button"
+              onClick={() => setCollapsed(false)}
+              className="mt-2 cursor-pointer text-xs font-medium text-primary/70 transition-colors hover:text-primary"
+            >
+              ... mostrar tudo ({lines.length} linhas)
+            </button>
+          ) : null}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function CodeChangeRow({ codeChange }: Readonly<{ codeChange: GoalCodeChange }>) {
   const [expanded, setExpanded] = useState(false);
   const variant = CODE_CHANGE_VARIANT_MAP[codeChange.status] ?? "secondary";
@@ -506,14 +659,14 @@ export function GoalDetail() {
         <div className={`mt-1 h-4 w-1 shrink-0 rounded-full ${statusColor}`} />
         <div className="min-w-0 flex-1">
           <h1 className="text-xl font-bold leading-snug md:text-2xl">{goal.title}</h1>
-          {goal.description ? (
-            <p className="mt-1 text-sm text-muted-foreground">{goal.description}</p>
-          ) : null}
         </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
         <div className="space-y-4">
+          {goal.description ? (
+            <DescriptionPanel description={goal.description} />
+          ) : null}
           <ProgressBar counts={progress} />
           <CodeChangesPanel codeChanges={codeChanges} />
           <TokenUsagePanel tokenUsage={tokenUsage} latestBranch={latestBranch} />

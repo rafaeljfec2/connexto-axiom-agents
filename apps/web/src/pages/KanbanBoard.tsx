@@ -26,8 +26,8 @@ import {
   Check,
   X,
   FolderGit2,
-  GitBranch,
-  ChevronRight,
+  Calendar,
+  MoreHorizontal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -70,16 +70,31 @@ function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
   e.dataTransfer.dropEffect = "move";
 }
 
+function formatCardDate(dateStr: string): string {
+  return new Date(dateStr).toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
+function shortId(id: string): string {
+  return id.slice(0, 8);
+}
+
 interface GoalCardProps {
   readonly goal: {
     readonly id: string;
     readonly title: string;
     readonly priority: number;
     readonly project_id: string | null;
+    readonly created_at: string;
+    readonly updated_at: string;
     readonly stats?: {
       readonly total_outcomes: number;
       readonly success_count: number;
       readonly failed_count: number;
+      readonly last_execution?: string | null;
       readonly latest_branch?: string | null;
     };
   };
@@ -112,39 +127,47 @@ function GoalCard({ goal, columnId, columnColor, onNavigate, onApprove, onReject
         onClick={() => onNavigate(goal.id)}
         className="w-full cursor-pointer text-left"
       >
-        <div className={`h-[3px] w-full rounded-t-md ${columnColor}`} />
-        <div className="px-3 pb-3 pt-2.5">
-          <p className="kanban-card-title text-[13px] font-semibold leading-snug">
-            {goal.title}
-          </p>
-
-          {goal.project_id ? (
-            <div className="mt-1.5 flex items-center gap-1 text-[11px] text-[#6b7280]">
-              <FolderGit2 className="h-3 w-3" />
-              <span>{goal.project_id}</span>
+        <div className={`kanban-card-inner border-l-[3px] ${columnColor.replace("bg-", "border-")}`}>
+          <div className="flex items-start justify-between gap-1.5 px-3 pt-2.5">
+            <div className="min-w-0 flex-1">
+              <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none ${prioClass}`}>
+                P{goal.priority} {PRIORITY_LABEL[goal.priority] ?? ""}
+              </span>
+              <p className="kanban-card-title mt-1.5 text-[13px] font-semibold leading-snug">
+                {goal.title}
+              </p>
             </div>
-          ) : null}
+            <MoreHorizontal className="mt-0.5 h-4 w-4 shrink-0 text-[#d1d5db] opacity-0 transition-opacity group-hover:opacity-100" />
+          </div>
 
-          {goal.stats?.latest_branch ? (
-            <div className="mt-1 flex items-center gap-1 text-[11px] text-[#6b7280]">
-              <GitBranch className="h-3 w-3 shrink-0" />
-              <code className="truncate font-mono text-[10px]">{goal.stats.latest_branch}</code>
+          <div className="space-y-1.5 px-3 pb-3 pt-2">
+            {goal.project_id ? (
+              <div className="flex items-center gap-1.5 text-[11px] text-[#6b7280]">
+                <FolderGit2 className="h-3 w-3 shrink-0" />
+                <span className="truncate">{goal.project_id}</span>
+              </div>
+            ) : null}
+
+            <div className="flex items-center gap-1.5 text-[11px] text-[#9ca3af]">
+              <Calendar className="h-3 w-3 shrink-0" />
+              <span>Criado: {formatCardDate(goal.created_at)}</span>
             </div>
-          ) : null}
 
-          <div className="mt-2.5 flex items-center justify-between">
-            <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none ${prioClass}`}>
-              P{goal.priority} {PRIORITY_LABEL[goal.priority] ?? ""}
-            </span>
+            {goal.stats?.last_execution ? (
+              <div className="flex items-center gap-1.5 text-[11px] text-[#9ca3af]">
+                <Calendar className="h-3 w-3 shrink-0" />
+                <span>Última exec: {formatCardDate(goal.stats.last_execution)}</span>
+              </div>
+            ) : null}
+          </div>
 
-            <div className="flex items-center gap-1.5">
-              {goal.stats ? (
-                <span className="text-[10px] tabular-nums text-[#9ca3af]">
-                  {goal.stats.total_outcomes} exec
-                </span>
-              ) : null}
-              <ChevronRight className="h-3.5 w-3.5 text-[#d1d5db] transition-all group-hover:translate-x-0.5 group-hover:text-[#9ca3af]" />
-            </div>
+          <div className="flex items-center justify-between border-t border-[#f3f4f6] px-3 py-1.5">
+            <code className="font-mono text-[10px] text-[#9ca3af]">{shortId(goal.id)}</code>
+            {goal.stats ? (
+              <span className="text-[10px] tabular-nums text-[#9ca3af]">
+                {goal.stats.total_outcomes} exec
+              </span>
+            ) : null}
           </div>
         </div>
       </button>
