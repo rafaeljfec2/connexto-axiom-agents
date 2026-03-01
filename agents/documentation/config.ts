@@ -8,7 +8,8 @@ export const DOCUMENTATION_AGENT_CONFIG = {
   maxRetries: 3,
   maxContextTokens: 100_000,
   chunkSizeChars: 300_000,
-  delayBetweenCallsMs: 15_000,
+  rateLimitInputTokensPerMinute: 30_000,
+  rateLimitBufferMs: 5_000,
 } as const;
 
 export const DOC_FILES = [
@@ -17,6 +18,10 @@ export const DOC_FILES = [
   "interfaces.md",
   "config.md",
   "domain.md",
+  "database.md",
+  "security.md",
+  "frontend.md",
+  "backend.md",
 ] as const;
 
 export function loadSystemPrompt(): string {
@@ -32,7 +37,5 @@ export function loadSystemPrompt(): string {
     }
   }
 
-  throw new Error(
-    `SYSTEM.md not found for DocumentationAgent. Searched: ${candidates.join(", ")}`,
-  );
+  throw new Error(`SYSTEM.md not found for DocumentationAgent. Searched: ${candidates.join(", ")}`);
 }

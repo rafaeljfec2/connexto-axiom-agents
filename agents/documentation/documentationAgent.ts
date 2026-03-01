@@ -2,7 +2,7 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { logger } from "../../config/logger.js";
-import { callLLM, type LLMClientConfig } from "../../llm/client.js";
+import { callLLM, type LLMClientConfig, type LLMUsage } from "../../llm/client.js";
 import { DOCUMENTATION_AGENT_CONFIG, DOC_FILES, loadSystemPrompt } from "./config.js";
 
 const IGNORED_DIRS = new Set([
@@ -149,6 +149,11 @@ function getLLMConfig(): LLMClientConfig {
   };
 }
 
+interface GenerateResult {
+  readonly text: string;
+  readonly usage: LLMUsage;
+}
+
 async function generateDocument(
   llmConfig: LLMClientConfig,
   systemPrompt: string,
@@ -156,7 +161,7 @@ async function generateDocument(
   fileTree: string,
   contextChunks: readonly string[][],
   existingDocs: string,
-): Promise<string> {
+): Promise<GenerateResult> {
   const contextText = contextChunks.length > 0
     ? contextChunks[0].join("\n")
     : "No source files available.";
@@ -184,7 +189,13 @@ async function generateDocument(
     maxOutputTokens: DOCUMENTATION_AGENT_CONFIG.maxOutputTokens,
   });
 
-  return response.text;
+  return { text: response.text, usage: response.usage };
+}
+
+function calculateRateLimitDelay(inputTokensUsed: number): number {
+  const { rateLimitInputTokensPerMinute, rateLimitBufferMs } = DOCUMENTATION_AGENT_CONFIG;
+  const minutesNeeded = inputTokensUsed / rateLimitInputTokensPerMinute;
+  return Math.ceil(minutesNeeded * 60_000) + rateLimitBufferMs;
 }
 
 export async function runDocumentationAgent(
@@ -213,18 +224,19 @@ export async function runDocumentationAgent(
   const llmConfig = getLLMConfig();
   const systemPrompt = loadSystemPrompt();
 
+  let pendingDelayMs = 0;
+
   for (let i = 0; i < DOC_FILES.length; i++) {
-    if (i > 0 && DOCUMENTATION_AGENT_CONFIG.delayBetweenCallsMs > 0) {
-      const waitSec = DOCUMENTATION_AGENT_CONFIG.delayBetweenCallsMs / 1_000;
+    if (i > 0 && pendingDelayMs > 0) {
+      const waitSec = Math.ceil(pendingDelayMs / 1_000);
       notify(`Waiting ${String(waitSec)}s before next document (rate limit)...`);
-      await new Promise((resolve) =>
-        setTimeout(resolve, DOCUMENTATION_AGENT_CONFIG.delayBetweenCallsMs),
-      );
+      logger.info({ waitMs: pendingDelayMs, nextDoc: DOC_FILES[i] }, "Rate limit cooldown");
+      await new Promise((resolve) => setTimeout(resolve, pendingDelayMs));
     }
 
     const docFile = DOC_FILES[i];
     const docType = docFile.replace(".md", "");
-    notify(`Generating ${docType} documentation...`);
+    notify(`Generating ${docType} documentation (${String(i + 1)}/${String(DOC_FILES.length)})...`);
 
     let existingContent = "";
     const existingPath = path.join(docsPath, docFile);
@@ -235,7 +247,7 @@ export async function runDocumentationAgent(
     try {
       const relevantChunks = filterChunksForDocType(docType, contextChunks, files);
 
-      const content = await generateDocument(
+      const result = await generateDocument(
         llmConfig,
         systemPrompt,
         docType,
@@ -244,13 +256,16 @@ export async function runDocumentationAgent(
         existingContent,
       );
 
-      await fsPromises.writeFile(existingPath, content, "utf-8");
-      logger.info({ docFile, workspacePath }, "Documentation generated");
+      await fsPromises.writeFile(existingPath, result.text, "utf-8");
+      logger.info({ docFile, inputTokens: result.usage.inputTokens }, "Documentation generated");
       notify(`Completed ${docType} documentation`);
+
+      pendingDelayMs = calculateRateLimitDelay(result.usage.inputTokens);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn({ docFile, error: msg }, "Failed to generate documentation");
       notify(`Failed to generate ${docType}: ${msg}`);
+      pendingDelayMs = DOCUMENTATION_AGENT_CONFIG.rateLimitBufferMs;
     }
   }
 
@@ -268,6 +283,10 @@ function filterChunksForDocType(
     interfaces: ["interface", "implementation"],
     config: ["config", "other"],
     domain: ["implementation", "docs", "interface"],
+    database: ["implementation", "config", "interface"],
+    security: ["implementation", "config", "interface"],
+    frontend: ["implementation", "interface", "config"],
+    backend: ["implementation", "config", "interface"],
   };
 
   const priorities = categoryPriority[docType] ?? ["implementation"];

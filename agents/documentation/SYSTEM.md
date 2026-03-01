@@ -17,6 +17,10 @@ Generate documentation in Markdown format. Each document should be well-structur
 - **interfaces.md**: API endpoints, type definitions, contracts, integration points
 - **config.md**: Environment variables, configuration files, deployment settings
 - **domain.md**: Domain concepts, business rules, glossary, workflows
+- **database.md**: Database schema, migrations, models, relationships, queries, data access patterns
+- **security.md**: Authentication, authorization, encryption, input validation, security middleware, secrets management
+- **frontend.md**: UI components, pages, routing, state management, hooks, styling, responsive design
+- **backend.md**: Server architecture, controllers, services, middleware, error handling, background jobs
 
 ## Guidelines
 
