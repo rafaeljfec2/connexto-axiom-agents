@@ -117,8 +117,8 @@ export async function pushBranch(branchName: string): Promise<void> {
 export async function createPullRequest(params: CreatePRParams): Promise<PRResponse> {
   validateBranchForPush(params.head);
 
-  if (params.base !== "main") {
-    throw new Error(`PR base must be "main", got: "${params.base}"`);
+  if (!params.base || params.base.trim().length === 0) {
+    throw new Error("PR base branch must be specified");
   }
 
   const config = loadConfig();

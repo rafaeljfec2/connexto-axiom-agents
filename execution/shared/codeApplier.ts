@@ -8,7 +8,7 @@ import { updateCodeChangeStatus, getCodeChangeById } from "../../state/codeChang
 import {
   buildBranchName,
   createBranch,
-  switchToMain,
+  switchToBaseBranch,
   stageFiles,
   commitChanges,
   getBranchDiff,
@@ -378,7 +378,7 @@ export async function applyCodeChangeWithBranch(
   const branchName = buildBranchName(changeId);
 
   try {
-    await switchToMain();
+    await switchToBaseBranch();
     await createBranch(branchName);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -412,7 +412,7 @@ export async function applyCodeChangeWithBranch(
       const commits = await getBranchCommits(branchName);
       const commitsJson = JSON.stringify(commits);
 
-      await switchToMain();
+      await switchToBaseBranch();
 
       updateCodeChangeStatus(db, changeId, {
         status: "applied",
@@ -433,7 +433,7 @@ export async function applyCodeChangeWithBranch(
 
     logger.warn({ changeId, branchName }, "Lint failed after eslint --fix, rolling back");
     await restoreBackups(backups);
-    await switchToMain();
+    await switchToBaseBranch();
     await deleteBranch(branchName);
 
     return {
@@ -452,7 +452,7 @@ export async function applyCodeChangeWithBranch(
     await restoreBackups(backups);
 
     try {
-      await switchToMain();
+      await switchToBaseBranch();
       await deleteBranch(branchName);
     } catch (cleanupError) {
       const cleanupMsg =

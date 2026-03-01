@@ -27,6 +27,7 @@ interface ProjectRef {
   readonly framework: string;
   readonly repo_source: string;
   readonly forge_executor: string;
+  readonly base_branch: string;
   readonly push_enabled: number | null;
   readonly project_id: string;
 }
@@ -95,7 +96,7 @@ export async function executeWithClaudeCliMode(ctx: ClaudeCliModeContext): Promi
   const result = await handleSuccessfulAgentOutput({
     db, delegation, projectId, workspacePath, repoSource: project.repo_source, parsed,
     totalTokensUsed: cliResult.totalTokensUsed, lintOutput: "", startTime,
-    commitOptions: { pushEnabled, branchPrefix: "auto" },
+    commitOptions: { pushEnabled, branchPrefix: "auto", baseBranch: project.base_branch },
     maxFilesOverride: MAX_FILES_PER_CHANGE_CLI,
   });
 
@@ -163,7 +164,7 @@ export async function executeWithOpenClawMode(
   return handleSuccessfulAgentOutput({
     db, delegation, projectId, workspacePath, repoSource: project.repo_source, parsed,
     totalTokensUsed: openclawResult.totalTokensUsed, lintOutput: "", startTime,
-    commitOptions: { pushEnabled, branchPrefix: "auto" },
+    commitOptions: { pushEnabled, branchPrefix: "auto", baseBranch: project.base_branch },
   });
 }
 
@@ -172,7 +173,7 @@ export async function executeWithAgentLoop(
   delegation: KairosDelegation,
   projectId: string,
   workspacePath: string,
-  project: { readonly language: string; readonly framework: string; readonly repo_source: string },
+  project: { readonly language: string; readonly framework: string; readonly repo_source: string; readonly base_branch: string },
   startTime: number,
   traceId?: string,
 ): Promise<ExecutionResult> {
@@ -225,5 +226,6 @@ export async function executeWithAgentLoop(
     db, delegation, projectId, workspacePath, repoSource: project.repo_source,
     parsed: agentResult.parsed, totalTokensUsed: agentResult.totalTokensUsed,
     lintOutput: agentResult.lintOutput ?? "", startTime,
+    commitOptions: { baseBranch: project.base_branch },
   });
 }

@@ -26,6 +26,7 @@ interface ExecutorRouteContext {
     readonly framework: string;
     readonly repo_source: string;
     readonly forge_executor: string;
+    readonly base_branch: string;
     readonly push_enabled: number | null;
     readonly project_id: string;
   };

@@ -12,3 +12,4 @@ push_enabled: true
 references:
   max_tokens: 3000
   include_global: true
+base_branch: develop

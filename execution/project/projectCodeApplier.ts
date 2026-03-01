@@ -9,7 +9,7 @@ import {
   buildBranchName,
   buildAutoBranchName,
   createBranch,
-  switchToMain,
+  switchToBaseBranch,
   stageFiles,
   commitChanges,
   getBranchDiff,
@@ -66,6 +66,7 @@ export function validateAndCalculateRisk(
 export interface CommitOptions {
   readonly pushEnabled?: boolean;
   readonly branchPrefix?: "auto" | "task";
+  readonly baseBranch?: string;
 }
 
 export interface CommitVerifiedParams {
@@ -81,12 +82,13 @@ export interface CommitVerifiedParams {
 
 export async function commitVerifiedChanges(params: CommitVerifiedParams): Promise<ProjectApplyResult> {
   const { db, changeId, description, filePaths, workspacePath, lintOutput, repoSource, options } = params;
+  const baseBranch = options?.baseBranch ?? "main";
   const branchName = options?.branchPrefix === "auto"
     ? buildAutoBranchName()
     : buildBranchName(changeId);
 
   try {
-    await createBranch(branchName, workspacePath);
+    await createBranch(branchName, workspacePath, baseBranch);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error({ changeId, branchName, error: message }, "Failed to create branch for verified changes");
@@ -98,8 +100,8 @@ export async function commitVerifiedChanges(params: CommitVerifiedParams): Promi
     const commitMessage = `forge: ${description.slice(0, 120)}`;
     const hash = await commitChanges(commitMessage, workspacePath);
 
-    const diff = await getBranchDiff(branchName, workspacePath);
-    const commits = await getBranchCommits(branchName, workspacePath);
+    const diff = await getBranchDiff(branchName, workspacePath, baseBranch);
+    const commits = await getBranchCommits(branchName, workspacePath, baseBranch);
     const commitsJson = JSON.stringify(commits);
 
     const shouldPush = repoSource && options?.pushEnabled !== false;
@@ -107,7 +109,7 @@ export async function commitVerifiedChanges(params: CommitVerifiedParams): Promi
       await pushBranchToSource(branchName, repoSource, workspacePath);
     }
 
-    await switchToMain(workspacePath);
+    await switchToBaseBranch(workspacePath, baseBranch);
 
     updateCodeChangeStatus(db, changeId, {
       status: "applied",
@@ -129,8 +131,8 @@ export async function commitVerifiedChanges(params: CommitVerifiedParams): Promi
     logger.error({ changeId, branchName, error: message }, "Commit of verified changes failed");
 
     try {
-      await switchToMain(workspacePath);
-      await deleteBranch(branchName, workspacePath);
+      await switchToBaseBranch(workspacePath, baseBranch);
+      await deleteBranch(branchName, workspacePath, baseBranch);
     } catch (cleanupError) {
       const cleanupMsg = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
       logger.error({ branchName, error: cleanupMsg }, "Failed to cleanup branch after commit error");
@@ -146,6 +148,7 @@ export async function applyProjectCodeChange(
   files: readonly FileChange[],
   workspacePath: string,
   repoSource?: string,
+  baseBranch = "main",
 ): Promise<ProjectApplyResult> {
   const change = getCodeChangeById(db, changeId);
   if (!change) {
@@ -160,8 +163,8 @@ export async function applyProjectCodeChange(
   const branchName = buildBranchName(changeId);
 
   try {
-    await switchToMain(workspacePath);
-    await createBranch(branchName, workspacePath);
+    await switchToBaseBranch(workspacePath, baseBranch);
+    await createBranch(branchName, workspacePath, baseBranch);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error({ changeId, branchName, error: message }, "Failed to create git branch in workspace");
@@ -187,6 +190,7 @@ export async function applyProjectCodeChange(
         workspacePath,
         lintResult,
         repoSource,
+        baseBranch,
       });
     }
 
@@ -195,8 +199,8 @@ export async function applyProjectCodeChange(
       "Lint failed in project workspace, rolling back",
     );
     await restoreBackups(backups, workspacePath);
-    await switchToMain(workspacePath);
-    await deleteBranch(branchName, workspacePath);
+    await switchToBaseBranch(workspacePath, baseBranch);
+    await deleteBranch(branchName, workspacePath, baseBranch);
 
     return {
       success: false,
@@ -214,8 +218,8 @@ export async function applyProjectCodeChange(
     await restoreBackups(backups, workspacePath);
 
     try {
-      await switchToMain(workspacePath);
-      await deleteBranch(branchName, workspacePath);
+      await switchToBaseBranch(workspacePath, baseBranch);
+      await deleteBranch(branchName, workspacePath, baseBranch);
     } catch (cleanupError) {
       const cleanupMsg = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
       logger.error({ branchName, error: cleanupMsg }, "Failed to cleanup branch after error");
@@ -249,6 +253,7 @@ interface CommitContext {
   readonly workspacePath: string;
   readonly lintResult: LintResult;
   readonly repoSource?: string;
+  readonly baseBranch?: string;
 }
 
 async function commitAndFinalize(
@@ -258,21 +263,21 @@ async function commitAndFinalize(
   filePaths: readonly string[],
   ctx: CommitContext,
 ): Promise<ProjectApplyResult> {
-  const { branchName, workspacePath, lintResult, repoSource } = ctx;
+  const { branchName, workspacePath, lintResult, repoSource, baseBranch = "main" } = ctx;
 
   await stageFiles(filePaths, workspacePath);
   const commitMessage = `forge: ${description.slice(0, 120)}`;
   const hash = await commitChanges(commitMessage, workspacePath);
 
-  const diff = await getBranchDiff(branchName, workspacePath);
-  const commits = await getBranchCommits(branchName, workspacePath);
+  const diff = await getBranchDiff(branchName, workspacePath, baseBranch);
+  const commits = await getBranchCommits(branchName, workspacePath, baseBranch);
   const commitsJson = JSON.stringify(commits);
 
   if (repoSource) {
     await pushBranchToSource(branchName, repoSource, workspacePath);
   }
 
-  await switchToMain(workspacePath);
+  await switchToBaseBranch(workspacePath, baseBranch);
 
   updateCodeChangeStatus(db, changeId, {
     status: "applied",

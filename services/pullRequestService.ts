@@ -2,6 +2,7 @@ import type BetterSqlite3 from "better-sqlite3";
 import { logger } from "../config/logger.js";
 import { pushBranch, createPullRequest, closePullRequest } from "../execution/shared/githubClient.js";
 import { getCodeChangeById } from "../state/codeChanges.js";
+import { getProjectById } from "../state/projects.js";
 import {
   savePullRequest,
   getPullRequestById,
@@ -70,6 +71,12 @@ function buildPRBody(
   return sections.join("\n");
 }
 
+function resolveBaseBranch(db: BetterSqlite3.Database, projectId: string | null): string {
+  if (!projectId) return "main";
+  const project = getProjectById(db, projectId);
+  return project?.base_branch ?? "main";
+}
+
 export async function createPRForCodeChange(
   db: BetterSqlite3.Database,
   changeId: string,
@@ -79,6 +86,8 @@ export async function createPRForCodeChange(
   if (!change) {
     return { success: false, message: `Code change "${changeId}" nao encontrado.` };
   }
+
+  const baseBranch = resolveBaseBranch(db, change.project_id);
 
   if (change.status !== "applied") {
     return {
@@ -148,7 +157,7 @@ export async function createPRForCodeChange(
     };
   }
 
-  return executePushAndCreatePR(db, prId);
+  return executePushAndCreatePR(db, prId, baseBranch);
 }
 
 export async function approvePR(
@@ -229,6 +238,7 @@ export async function closePR(db: BetterSqlite3.Database, prId: string): Promise
 async function executePushAndCreatePR(
   db: BetterSqlite3.Database,
   prId: string,
+  baseBranch = "main",
 ): Promise<PRActionResult> {
   const pr = getPullRequestById(db, prId);
 
@@ -251,7 +261,7 @@ async function executePushAndCreatePR(
       title: pr.title,
       body: pr.body,
       head: pr.branch_name,
-      base: "main",
+      base: baseBranch,
     });
 
     updatePullRequestStatus(db, prId, {

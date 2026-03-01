@@ -22,6 +22,7 @@ export interface ProjectManifest {
   readonly tokenBudgetMonthly: number;
   readonly status: ProjectStatus;
   readonly forgeExecutor: ForgeExecutorMode;
+  readonly baseBranch?: string;
   readonly pushEnabled?: boolean;
   readonly references?: ReferencesConfig;
 }
@@ -50,6 +51,7 @@ export function validateManifest(raw: unknown): ProjectManifest {
   const tokenBudgetMonthly = validateTokenBudget(record["token_budget_monthly"] ?? record["tokenBudgetMonthly"]);
   const status = validateStatus(record["status"]);
   const forgeExecutor = validateForgeExecutor(record["forge_executor"] ?? record["forgeExecutor"]);
+  const baseBranch = validateBaseBranch(record["base_branch"] ?? record["baseBranch"]);
   const pushEnabled = validatePushEnabled(record["push_enabled"] ?? record["pushEnabled"]);
   const references = validateReferencesConfig(record["references"]);
 
@@ -62,6 +64,7 @@ export function validateManifest(raw: unknown): ProjectManifest {
     tokenBudgetMonthly,
     status,
     forgeExecutor,
+    baseBranch,
     pushEnabled,
     references,
   };
@@ -159,6 +162,24 @@ function validateForgeExecutor(value: unknown): ForgeExecutorMode {
     );
   }
   return value as ForgeExecutorMode;
+}
+
+const BASE_BRANCH_REGEX = /^[a-zA-Z0-9._/-]+$/;
+
+function validateBaseBranch(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new ManifestValidationError(
+      `base_branch must be a non-empty string. Got: "${String(value)}"`,
+    );
+  }
+  const trimmed = value.trim();
+  if (!BASE_BRANCH_REGEX.test(trimmed)) {
+    throw new ManifestValidationError(
+      `base_branch contains invalid characters: "${trimmed}"`,
+    );
+  }
+  return trimmed;
 }
 
 function validatePushEnabled(value: unknown): boolean | undefined {

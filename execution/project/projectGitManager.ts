@@ -148,15 +148,15 @@ export async function getCurrentBranch(cwd: string): Promise<string> {
   return execGit("rev-parse", ["--abbrev-ref", "HEAD"], cwd);
 }
 
-export async function switchToMain(cwd: string): Promise<void> {
+export async function switchToBaseBranch(cwd: string, baseBranch = "main"): Promise<void> {
   const current = await getCurrentBranch(cwd);
-  if (current === "main") return;
+  if (current === baseBranch) return;
 
-  await execGit("checkout", ["main"], cwd);
-  logger.info({ cwd }, "Switched to main branch");
+  await execGit("checkout", [baseBranch], cwd);
+  logger.info({ cwd, baseBranch }, "Switched to base branch");
 }
 
-export async function createBranch(branchName: string, cwd: string): Promise<void> {
+export async function createBranch(branchName: string, cwd: string, baseBranch = "main"): Promise<void> {
   validateBranchName(branchName);
 
   const exists = await branchExists(branchName, cwd);
@@ -166,7 +166,7 @@ export async function createBranch(branchName: string, cwd: string): Promise<voi
     return;
   }
 
-  await switchToMain(cwd);
+  await switchToBaseBranch(cwd, baseBranch);
   await execGit("checkout", ["-b", branchName], cwd);
   logger.info({ branchName, cwd }, "Created and switched to new forge branch");
 }
@@ -202,10 +202,10 @@ export async function commitChanges(message: string, cwd: string): Promise<strin
   return hash;
 }
 
-export async function getBranchDiff(branchName: string, cwd: string): Promise<string> {
+export async function getBranchDiff(branchName: string, cwd: string, baseBranch = "main"): Promise<string> {
   validateBranchName(branchName);
   try {
-    return await execGit("diff", [`main...${branchName}`], cwd);
+    return await execGit("diff", [`${baseBranch}...${branchName}`], cwd);
   } catch {
     return "";
   }
@@ -214,10 +214,11 @@ export async function getBranchDiff(branchName: string, cwd: string): Promise<st
 export async function getBranchCommits(
   branchName: string,
   cwd: string,
+  baseBranch = "main",
 ): Promise<readonly BranchCommit[]> {
   validateBranchName(branchName);
   try {
-    const output = await execGit("log", [`main..${branchName}`, "--oneline"], cwd);
+    const output = await execGit("log", [`${baseBranch}..${branchName}`, "--oneline"], cwd);
     if (!output) return [];
 
     return output.split("\n").map((line) => {
@@ -232,12 +233,12 @@ export async function getBranchCommits(
   }
 }
 
-export async function deleteBranch(branchName: string, cwd: string): Promise<void> {
+export async function deleteBranch(branchName: string, cwd: string, baseBranch = "main"): Promise<void> {
   validateBranchName(branchName);
 
   const current = await getCurrentBranch(cwd);
   if (current === branchName) {
-    await switchToMain(cwd);
+    await switchToBaseBranch(cwd, baseBranch);
   }
 
   try {
