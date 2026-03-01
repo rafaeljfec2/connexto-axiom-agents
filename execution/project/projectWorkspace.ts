@@ -4,11 +4,10 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { logger } from "../../config/logger.js";
+import { WORKSPACES_DIR } from "../../config/paths.js";
 import { cloneRepo, pullLatest, cloneLocal } from "./projectGitManager.js";
 
 const execFileAsync = promisify(execFile);
-
-const WORKSPACES_DIR = path.resolve("workspaces", "forge");
 const BASE_DIR_NAME = ".base";
 const PNPM_INSTALL_TIMEOUT_MS = 120_000;
 

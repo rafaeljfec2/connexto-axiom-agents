@@ -227,6 +227,16 @@ export interface ActiveProject {
   readonly language: string;
   readonly framework: string;
   readonly status: string;
+  readonly git_repository_url: string | null;
+  readonly onboarding_status: string;
+  readonly onboarding_error: string | null;
+  readonly stack_detected: string | null;
+  readonly files_total: number;
+  readonly files_indexed: number;
+  readonly docs_status: string;
+  readonly index_status: string;
+  readonly onboarding_started_at: string | null;
+  readonly onboarding_completed_at: string | null;
 }
 
 export function useActiveProjects() {
@@ -234,6 +244,50 @@ export function useActiveProjects() {
     queryKey: ["projects", "active"],
     queryFn: () => api.get("/projects"),
     staleTime: 60_000,
+  });
+}
+
+export function useProjects() {
+  return useQuery<readonly ActiveProject[]>({
+    queryKey: ["projects"],
+    queryFn: () => api.get("/projects"),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useProjectDetail(projectId: string | null) {
+  return useQuery<ActiveProject>({
+    queryKey: ["projects", projectId],
+    queryFn: () => api.get(`/projects/${projectId}`),
+    enabled: !!projectId,
+    refetchInterval: 5_000,
+  });
+}
+
+interface CreateProjectPayload {
+  readonly project_name: string;
+  readonly git_repository_url: string;
+}
+
+export function useCreateProject() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: CreateProjectPayload) =>
+      api.post<ActiveProject>("/projects", payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+}
+
+export function useReindexProject() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (projectId: string) =>
+      api.post<ActiveProject>(`/projects/${projectId}/reindex`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
   });
 }
 

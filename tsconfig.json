@@ -22,7 +22,8 @@
     "config/**/*",
     "interfaces/**/*",
     "llm/**/*",
-    "execution/**/*"
+    "execution/**/*",
+    "services/**/*"
   ],
   "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }

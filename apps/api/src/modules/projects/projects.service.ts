@@ -1,21 +1,57 @@
-import { Inject, Injectable } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { DATABASE_TOKEN, type DatabaseConnection } from "../../database/database.provider";
-
-export interface ProjectRow {
-  readonly id: string;
-  readonly project_id: string;
-  readonly language: string;
-  readonly framework: string;
-  readonly status: string;
-}
+import {
+  createProjectFromUI,
+  getAllProjects,
+  getProjectById,
+  updateOnboardingProgress,
+  updateOnboardingStatus,
+} from "../../../../../state/projects.js";
+import type { Project } from "../../../../../state/projects.js";
+import {
+  startOnboarding,
+  subscribeToOnboarding,
+  type OnboardingEvent,
+} from "../../../../../services/projectOnboardingService.js";
 
 @Injectable()
 export class ProjectsService {
   constructor(@Inject(DATABASE_TOKEN) private readonly db: DatabaseConnection) {}
 
-  findActive(): readonly ProjectRow[] {
-    return this.db
-      .prepare("SELECT id, project_id, language, framework, status FROM projects WHERE status = 'active' ORDER BY project_id")
-      .all() as ProjectRow[];
+  findAll(): readonly Project[] {
+    return getAllProjects(this.db);
+  }
+
+  findOne(id: string): Project {
+    const project = getProjectById(this.db, id);
+    if (!project) {
+      throw new NotFoundException(`Project ${id} not found`);
+    }
+    return project;
+  }
+
+  create(projectName: string, gitRepositoryUrl: string): Project {
+    const project = createProjectFromUI(this.db, { projectName, gitRepositoryUrl });
+    startOnboarding(this.db, project.project_id).catch(() => {});
+    return project;
+  }
+
+  reindex(id: string): Project {
+    const project = getProjectById(this.db, id);
+    if (!project) {
+      throw new NotFoundException(`Project ${id} not found`);
+    }
+    updateOnboardingProgress(this.db, id, { index_status: "pending" });
+    updateOnboardingStatus(this.db, id, "indexing");
+    startOnboarding(this.db, id).catch(() => {});
+    const updated = getProjectById(this.db, id);
+    if (!updated) {
+      throw new BadRequestException(`Failed to update project ${id}`);
+    }
+    return updated;
+  }
+
+  subscribeStatus(projectId: string, listener: (event: OnboardingEvent) => void): () => void {
+    return subscribeToOnboarding(projectId, listener);
   }
 }

@@ -1,5 +1,6 @@
 import { loadBudgetConfig } from "../config/budget.js";
 import { logger } from "../config/logger.js";
+import { ensureAxiomDirectories } from "../config/paths.js";
 import { runKairos } from "../orchestration/runKairos.js";
 import { loadAllManifests } from "../projects/manifestLoader.js";
 import { ensureCurrentBudget } from "../state/budgets.js";
@@ -8,6 +9,7 @@ import { syncProjectsFromManifests, getActiveProject } from "../state/projects.j
 import { warnIfRipgrepMissing } from "../execution/discovery/ripgrepSearch.js";
 
 logger.info("connexto-axiom initializing...");
+ensureAxiomDirectories();
 await warnIfRipgrepMissing();
 
 const db = openDatabase();

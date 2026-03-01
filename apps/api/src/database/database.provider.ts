@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { applyMigrations } from "./migrations";
 
 export const DATABASE_TOKEN = "DATABASE_CONNECTION";
 
@@ -37,6 +38,8 @@ export const databaseProvider = {
       const schema = fs.readFileSync(schemaPath, "utf-8");
       db.exec(schema);
     }
+
+    applyMigrations(db);
 
     console.log(`Database connected: ${dbPath}`);
     return db;

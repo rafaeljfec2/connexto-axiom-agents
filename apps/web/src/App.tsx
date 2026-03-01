@@ -6,6 +6,8 @@ import { GoalDetail } from "./pages/GoalDetail";
 import { Agents } from "./pages/Agents";
 import { History } from "./pages/History";
 import { Executions } from "./pages/Executions";
+import { Projects } from "./pages/Projects";
+import { ProjectDetail } from "./pages/ProjectDetail";
 
 export default function App() {
   return (
@@ -14,6 +16,8 @@ export default function App() {
         <Route path="/" element={<DailyReport />} />
         <Route path="/kanban" element={<KanbanBoard />} />
         <Route path="/kanban/:goalId" element={<GoalDetail />} />
+        <Route path="/projects" element={<Projects />} />
+        <Route path="/projects/:projectId" element={<ProjectDetail />} />
         <Route path="/agents" element={<Agents />} />
         <Route path="/execucoes" element={<Executions />} />
         <Route path="/historico" element={<History />} />
