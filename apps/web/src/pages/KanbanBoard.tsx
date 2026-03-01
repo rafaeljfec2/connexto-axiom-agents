@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGoals, useCreateGoal, useActiveProjects, useApproveGoal, useRejectGoal, useUpdateGoalStatus } from "@/api/hooks";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +28,7 @@ import {
   FolderGit2,
   Calendar,
   MoreHorizontal,
+  GripVertical,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -105,22 +106,55 @@ interface GoalCardProps {
   readonly onReject?: (id: string) => void;
 }
 
+function createDragGhost(title: string, borderColor: string): HTMLElement {
+  const ghost = document.createElement("div");
+  ghost.className = "kanban-drag-ghost";
+  ghost.style.borderLeftColor = borderColor;
+
+  const truncated = title.length > 40 ? `${title.slice(0, 40)}…` : title;
+  ghost.textContent = truncated;
+
+  document.body.appendChild(ghost);
+  return ghost;
+}
+
+const BORDER_COLOR_MAP: Record<string, string> = {
+  "bg-blue-500": "#3b82f6",
+  "bg-amber-500": "#f59e0b",
+  "bg-violet-500": "#8b5cf6",
+  "bg-emerald-500": "#10b981",
+  "bg-zinc-400": "#a1a1aa",
+};
+
 function GoalCard({ goal, columnId, columnColor, onNavigate, onApprove, onReject }: GoalCardProps) {
   const prioClass = PRIORITY_COLORS[goal.priority] ?? PRIORITY_COLORS[0];
   const isCodeReview = columnId === "code_review";
 
-  function handleDragStart(e: React.DragEvent<HTMLDivElement>) {
+  const handleDragStart = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.dataTransfer.setData("text/plain", JSON.stringify({ goalId: goal.id, fromColumn: columnId }));
     e.dataTransfer.effectAllowed = "move";
-    (e.currentTarget as HTMLElement).classList.add("kanban-card-dragging");
-  }
+
+    const borderHex = BORDER_COLOR_MAP[columnColor] ?? "#3b82f6";
+    const ghost = createDragGhost(goal.title, borderHex);
+
+    e.dataTransfer.setDragImage(ghost, 12, 16);
+
+    requestAnimationFrame(() => {
+      (e.target as HTMLElement).classList.add("kanban-card-dragging");
+      ghost.remove();
+    });
+  }, [goal.id, goal.title, columnId, columnColor]);
+
+  const handleDragEnd = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    (e.currentTarget as HTMLElement).classList.remove("kanban-card-dragging");
+  }, []);
 
   return (
     <div
       className="kanban-card group w-full text-left"
       draggable
       onDragStart={handleDragStart}
-      onDragEnd={(e) => (e.currentTarget as HTMLElement).classList.remove("kanban-card-dragging")}
+      onDragEnd={handleDragEnd}
     >
       <button
         type="button"
@@ -137,7 +171,10 @@ function GoalCard({ goal, columnId, columnColor, onNavigate, onApprove, onReject
                 {goal.title}
               </p>
             </div>
-            <MoreHorizontal className="mt-0.5 h-4 w-4 shrink-0 text-[#d1d5db] opacity-0 transition-opacity group-hover:opacity-100" />
+            <div className="flex shrink-0 items-center gap-0.5">
+              <GripVertical className="mt-0.5 h-4 w-4 text-[#d1d5db] opacity-0 transition-opacity group-hover:opacity-60" />
+              <MoreHorizontal className="mt-0.5 h-4 w-4 text-[#d1d5db] opacity-0 transition-opacity group-hover:opacity-100" />
+            </div>
           </div>
 
           <div className="space-y-1.5 px-3 pb-3 pt-2">
