@@ -20,8 +20,9 @@ export const DOC_FILES = [
 
 export function loadSystemPrompt(): string {
   const candidates = [
-    path.resolve("agents", "documentation", "SYSTEM.md"),
     path.resolve(__dirname, "SYSTEM.md"),
+    path.resolve("agents", "documentation", "SYSTEM.md"),
+    path.resolve("..", "..", "agents", "documentation", "SYSTEM.md"),
   ];
 
   for (const candidate of candidates) {
@@ -30,5 +31,7 @@ export function loadSystemPrompt(): string {
     }
   }
 
-  throw new Error("SYSTEM.md not found for DocumentationAgent");
+  throw new Error(
+    `SYSTEM.md not found for DocumentationAgent. Searched: ${candidates.join(", ")}`,
+  );
 }

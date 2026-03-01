@@ -119,15 +119,20 @@ function generateManifestYaml(
 
 async function createProjectManifest(
   projectId: string,
-  gitUrl: string,
+  repoSource: string,
   stack: { language: string; framework: string },
 ): Promise<void> {
-  const projectDir = path.resolve("projects", projectId);
+  const projectDir = path.resolve(__dirname, "..", "projects", projectId);
   fs.mkdirSync(projectDir, { recursive: true });
 
   const manifestPath = path.join(projectDir, "manifest.yaml");
-  const manifestContent = generateManifestYaml(projectId, gitUrl, stack);
 
+  if (fs.existsSync(manifestPath)) {
+    logger.info({ projectId, manifestPath }, "Project manifest already exists, skipping creation");
+    return;
+  }
+
+  const manifestContent = generateManifestYaml(projectId, repoSource, stack);
   await fsPromises.writeFile(manifestPath, manifestContent, "utf-8");
   logger.info({ projectId, manifestPath }, "Project manifest created");
 }
