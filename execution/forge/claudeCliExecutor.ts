@@ -2,6 +2,7 @@ import type BetterSqlite3 from "better-sqlite3";
 import { logger } from "../../config/logger.js";
 import type { KairosDelegation } from "../../orchestration/types.js";
 import type { Project } from "../../state/projects.js";
+import { loadManifest } from "../../projects/manifestLoader.js";
 import { checkBaselineBuild, checkBaselineTests } from "./forgeValidation.js";
 import type { ClaudeCliInstructionsContext } from "./claudeCliInstructions.js";
 import { classifyTaskType } from "./openclawInstructions.js";
@@ -32,6 +33,7 @@ import {
   buildRepositoryIndexSummary,
   readProjectInstructions,
 } from "./claudeCliContext.js";
+import { loadAndSelectReferences } from "./referenceLoader.js";
 import {
   executeClaudeCliTask,
   runCorrectionLoop,
@@ -113,13 +115,29 @@ export async function executeWithClaudeCli(
   const repoIndexMaxChars = complexity === "complex" ? 5000 : undefined;
   const skipRepoIndex = complexity === "simple";
 
-  const [nexusResearch, goalContext, repoIndexSummary, baselineBuildFailed, baselineTestsFailed, projectInstructions] = await Promise.all([
+  let referencesConfig: { readonly maxTokens?: number; readonly includeGlobal?: boolean } | undefined;
+  try {
+    const manifest = loadManifest(project.project_id);
+    referencesConfig = manifest.references;
+  } catch {
+    logger.debug({ projectId: project.project_id }, "Could not load manifest for references config, using defaults");
+  }
+
+  const referenceCtx = {
+    taskType,
+    language: project.language,
+    framework: project.framework,
+    taskDescription: delegation.task,
+  };
+
+  const [nexusResearch, goalContext, repoIndexSummary, baselineBuildFailed, baselineTestsFailed, projectInstructions, referenceExamples] = await Promise.all([
     Promise.resolve(loadNexusResearchForGoal(db, delegation.goal_id)),
     Promise.resolve(loadGoalContext(db, delegation.goal_id)),
     skipRepoIndex ? Promise.resolve("") : buildRepositoryIndexSummary(workspacePath, repoIndexMaxChars),
     checkBaselineBuild(workspacePath, 60_000),
     checkBaselineTests(workspacePath, 90_000),
     readProjectInstructions(workspacePath),
+    loadAndSelectReferences(project.project_id, referenceCtx, referencesConfig),
   ]);
 
   const instructionsCtx: ClaudeCliInstructionsContext = {
@@ -133,6 +151,7 @@ export async function executeWithClaudeCli(
     repositoryIndexSummary: repoIndexSummary ?? undefined,
     baselineBuildFailed,
     projectInstructions,
+    referenceExamples: referenceExamples || undefined,
     complexity,
   };
 
@@ -152,6 +171,8 @@ export async function executeWithClaudeCli(
       hasNexusResearch: nexusResearch.length > 0,
       hasGoalContext: Boolean(goalContext),
       repoIndexChars: repoIndexSummary?.length ?? 0,
+      hasReferenceExamples: Boolean(referenceExamples),
+      referenceExamplesChars: referenceExamples?.length ?? 0,
       baselineBuildFailed,
       baselineTestsFailed,
       complexity,

@@ -20,6 +20,8 @@ import { getAllToolDefinitions } from "./openclawTools.js";
 import { createDefaultConfig, executeTool } from "./openclawToolExecutor.js";
 import type { ToolExecutorConfig } from "./openclawToolExecutor.js";
 import { buildOpenClawInstructions, classifyTaskType } from "./openclawInstructions.js";
+import { loadAndSelectReferences } from "./referenceLoader.js";
+import { loadManifest } from "../../projects/manifestLoader.js";
 import type { NexusResearchContext, GoalContext, ForgeCodeOutput } from "./forgeTypes.js";
 import { runValidationCycle, DEFAULT_VALIDATIONS } from "./openclawValidation.js";
 import type { ValidationResults, ExecutionStatus } from "./openclawValidation.js";
@@ -952,11 +954,27 @@ async function executeOpenClawLoop(params: OpenClawLoopParams): Promise<OpenClaw
   const { db, delegation, project, workspacePath, config, startTime, traceId } = params;
   const { task, expected_output, goal_id } = delegation;
 
-  const [nexusResearch, goalContext, repoIndexSummary, baselineBuildFailed] = await Promise.all([
+  const taskType = classifyTaskType(task);
+
+  let referencesConfig: { readonly maxTokens?: number; readonly includeGlobal?: boolean } | undefined;
+  try {
+    const manifest = loadManifest(project.project_id);
+    referencesConfig = manifest.references;
+  } catch {
+    logger.debug({ projectId: project.project_id }, "Could not load manifest for references config");
+  }
+
+  const [nexusResearch, goalContext, repoIndexSummary, baselineBuildFailed, referenceExamples] = await Promise.all([
     Promise.resolve(loadNexusResearchForGoal(db, goal_id)),
     Promise.resolve(loadGoalContext(db, goal_id)),
     buildRepositoryIndexSummary(workspacePath),
     checkBaselineBuild(workspacePath, 60_000),
+    loadAndSelectReferences(project.project_id, {
+      taskType,
+      language: project.language,
+      framework: project.framework,
+      taskDescription: task,
+    }, referencesConfig),
   ]);
 
   const instructions = await buildOpenClawInstructions({
@@ -969,6 +987,7 @@ async function executeOpenClawLoop(params: OpenClawLoopParams): Promise<OpenClaw
     goalContext,
     repositoryIndexSummary: repoIndexSummary || undefined,
     baselineBuildFailed,
+    referenceExamples: referenceExamples || undefined,
   });
 
   const ctx: LoopContext = {

@@ -9,3 +9,6 @@ token_budget_monthly: 200000
 status: active
 forge_executor: claude-cli
 push_enabled: true
+references:
+  max_tokens: 3000
+  include_global: true

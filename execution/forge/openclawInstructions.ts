@@ -18,10 +18,15 @@ export interface InstructionsContext {
   readonly goalContext?: GoalContext;
   readonly repositoryIndexSummary?: string;
   readonly baselineBuildFailed: boolean;
+  readonly referenceExamples?: string;
 }
 
 export async function buildOpenClawInstructions(ctx: InstructionsContext): Promise<string> {
   const taskType = ctx.taskType ?? classifyTaskType(ctx.task);
+
+  const referenceSection = ctx.referenceExamples
+    ? ctx.referenceExamples
+    : await buildGoldenExampleSection(taskType);
 
   const sections: string[] = [
     buildIdentitySection(),
@@ -30,6 +35,7 @@ export async function buildOpenClawInstructions(ctx: InstructionsContext): Promi
     buildGoalSection(ctx.goalContext),
     buildNexusSection(ctx.nexusResearch),
     buildRepositorySection(ctx.repositoryIndexSummary, taskType),
+    referenceSection,
     buildToolUsageRules(ctx.baselineBuildFailed),
     buildQualityRules(),
     buildArchitectureRules(),
@@ -37,7 +43,6 @@ export async function buildOpenClawInstructions(ctx: InstructionsContext): Promi
     buildTestingRules(),
     buildDependencyRules(),
     buildSecurityRules(),
-    await buildGoldenExampleSection(taskType),
   ];
 
   return sections.filter(Boolean).join("\n\n");

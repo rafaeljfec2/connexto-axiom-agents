@@ -8,6 +8,11 @@ export interface ProjectStack {
   readonly framework: string;
 }
 
+export interface ReferencesConfig {
+  readonly maxTokens: number;
+  readonly includeGlobal: boolean;
+}
+
 export interface ProjectManifest {
   readonly projectId: string;
   readonly repoSource: string;
@@ -18,6 +23,7 @@ export interface ProjectManifest {
   readonly status: ProjectStatus;
   readonly forgeExecutor: ForgeExecutorMode;
   readonly pushEnabled?: boolean;
+  readonly references?: ReferencesConfig;
 }
 
 const PROJECT_ID_REGEX = /^[a-z][a-z0-9-]*[a-z0-9]$/;
@@ -45,6 +51,7 @@ export function validateManifest(raw: unknown): ProjectManifest {
   const status = validateStatus(record["status"]);
   const forgeExecutor = validateForgeExecutor(record["forge_executor"] ?? record["forgeExecutor"]);
   const pushEnabled = validatePushEnabled(record["push_enabled"] ?? record["pushEnabled"]);
+  const references = validateReferencesConfig(record["references"]);
 
   return {
     projectId,
@@ -56,6 +63,7 @@ export function validateManifest(raw: unknown): ProjectManifest {
     status,
     forgeExecutor,
     pushEnabled,
+    references,
   };
 }
 
@@ -161,6 +169,34 @@ function validatePushEnabled(value: unknown): boolean | undefined {
     );
   }
   return value;
+}
+
+function validateReferencesConfig(value: unknown): ReferencesConfig | undefined {
+  if (value === undefined || value === null) return undefined;
+
+  if (typeof value !== "object") {
+    throw new ManifestValidationError("references must be an object with max_tokens and include_global");
+  }
+
+  const record = value as Record<string, unknown>;
+
+  const rawMaxTokens = record["max_tokens"] ?? record["maxTokens"];
+  const maxTokens = rawMaxTokens === undefined || rawMaxTokens === null
+    ? 3000
+    : Number(rawMaxTokens);
+
+  if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
+    throw new ManifestValidationError(
+      `references.max_tokens must be a positive number. Got: "${String(rawMaxTokens)}"`,
+    );
+  }
+
+  const rawIncludeGlobal = record["include_global"] ?? record["includeGlobal"];
+  const includeGlobal = rawIncludeGlobal === undefined || rawIncludeGlobal === null
+    ? true
+    : Boolean(rawIncludeGlobal);
+
+  return { maxTokens, includeGlobal };
 }
 
 export class ManifestValidationError extends Error {

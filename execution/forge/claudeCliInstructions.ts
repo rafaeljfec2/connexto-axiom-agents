@@ -14,6 +14,7 @@ export interface ClaudeCliInstructionsContext {
   readonly repositoryIndexSummary?: string;
   readonly baselineBuildFailed: boolean;
   readonly projectInstructions?: string;
+  readonly referenceExamples?: string;
   readonly complexity?: TaskComplexity;
   readonly executionPhase?: ExecutionPhase;
 }
@@ -35,6 +36,7 @@ function buildPlanningPhaseMd(ctx: ClaudeCliInstructionsContext, taskType: Forge
     buildGoalSection(ctx.goalContext),
     buildNexusSection(ctx.nexusResearch),
     buildRepositorySection(ctx.repositoryIndexSummary, taskType),
+    buildReferenceExamplesSection(ctx.referenceExamples),
     buildPlanningWorkflowSection(),
     buildArchitectureRulesSection(),
     buildProjectInstructionsSection(ctx.projectInstructions),
@@ -44,10 +46,11 @@ function buildPlanningPhaseMd(ctx: ClaudeCliInstructionsContext, taskType: Forge
   return sections.filter(Boolean).join("\n\n");
 }
 
-function buildTestingPhaseMd(ctx: ClaudeCliInstructionsContext, taskType: ForgeTaskType): string {
+function buildTestingPhaseMd(ctx: ClaudeCliInstructionsContext, _taskType: ForgeTaskType): string {
   const sections: string[] = [
     buildTestingIdentitySection(),
     buildTaskContextSection(ctx),
+    buildReferenceExamplesSection(ctx.referenceExamples),
     buildTestingWorkflowSection(),
     buildTestingRulesSection(),
     buildQualityRulesSection(),
@@ -69,6 +72,7 @@ function buildImplementationPhaseMd(ctx: ClaudeCliInstructionsContext, taskType:
     buildGoalSection(ctx.goalContext),
     buildNexusSection(ctx.nexusResearch),
     buildRepositorySection(ctx.repositoryIndexSummary, taskType),
+    buildReferenceExamplesSection(ctx.referenceExamples),
     buildWorkflowSection(ctx.baselineBuildFailed),
     buildQualityRulesSection(),
   ];
@@ -453,6 +457,11 @@ function buildArchitectureRulesSection(): string {
 function buildProjectInstructionsSection(instructions?: string): string {
   if (!instructions) return "";
   return ["# Project-Specific Standards", "", instructions].join("\n");
+}
+
+function buildReferenceExamplesSection(referenceExamples?: string): string {
+  if (!referenceExamples) return "";
+  return referenceExamples;
 }
 
 function buildSecurityRulesSection(): string {
