@@ -161,26 +161,40 @@ export async function startOnboarding(
     throw new Error(`Project ${projectId} not found`);
   }
 
-  const gitUrl = project.git_repository_url;
-  if (!gitUrl) {
-    throw new Error(`Project ${projectId} has no git_repository_url`);
+  const repoSource = project.git_repository_url ?? project.repo_source;
+  if (!repoSource) {
+    throw new Error(`Project ${projectId} has no git_repository_url or repo_source`);
   }
+
+  const isLocalRepo = repoSource.startsWith("/") || repoSource.startsWith(".");
 
   db.prepare(
     "UPDATE projects SET onboarding_started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE project_id = ?",
   ).run(projectId);
 
   try {
-    updateOnboardingStatus(db, projectId, "cloning");
-    emitEvent({
-      type: "status_change",
-      projectId,
-      status: "cloning",
-      message: "Cloning repository...",
-    });
+    let repoPath: string;
 
-    const repoPath = await cloneRepository(projectId, gitUrl);
-    logger.info({ projectId, repoPath }, "Repository cloned");
+    if (isLocalRepo && fs.existsSync(path.join(repoSource, ".git"))) {
+      repoPath = repoSource;
+      logger.info({ projectId, repoPath }, "Using existing local repository");
+      emitEvent({
+        type: "status_change",
+        projectId,
+        status: "cloning",
+        message: "Local repository detected, skipping clone...",
+      });
+    } else {
+      updateOnboardingStatus(db, projectId, "cloning");
+      emitEvent({
+        type: "status_change",
+        projectId,
+        status: "cloning",
+        message: "Cloning repository...",
+      });
+      repoPath = await cloneRepository(projectId, repoSource);
+      logger.info({ projectId, repoPath }, "Repository cloned");
+    }
 
     updateOnboardingStatus(db, projectId, "cloned");
     emitEvent({ type: "status_change", projectId, status: "cloned", message: "Clone completed" });
@@ -206,7 +220,7 @@ export async function startOnboarding(
       data: { stack },
     });
 
-    await createProjectManifest(projectId, gitUrl, stack);
+    await createProjectManifest(projectId, repoSource, stack);
 
     const totalFiles = await countProjectFiles(workspacePath);
     updateOnboardingProgress(db, projectId, { files_total: totalFiles });
