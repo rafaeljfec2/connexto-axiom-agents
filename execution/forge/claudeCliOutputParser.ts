@@ -1,5 +1,13 @@
 import type { ClaudeCliJsonOutput, ClaudeStreamEvent } from "./claudeCliTypes.js";
 
+export interface TokenUsageBreakdown {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens: number;
+  readonly cacheCreationTokens: number;
+  readonly totalTokens: number;
+}
+
 export function parseClaudeCliOutput(rawOutput: string): ClaudeCliJsonOutput {
   const trimmed = rawOutput.trim();
 
@@ -27,23 +35,49 @@ export function parseClaudeCliOutput(rawOutput: string): ClaudeCliJsonOutput {
   }
 }
 
-export function extractTokensUsed(output: ClaudeCliJsonOutput): number {
+export function extractTokenUsageBreakdown(output: ClaudeCliJsonOutput): TokenUsageBreakdown {
   if (output.modelUsage) {
-    let total = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheCreationTokens = 0;
+
     for (const model of Object.values(output.modelUsage)) {
-      total += (model.inputTokens ?? 0)
-        + (model.outputTokens ?? 0)
-        + (model.cacheReadInputTokens ?? 0)
-        + (model.cacheCreationInputTokens ?? 0);
+      inputTokens += model.inputTokens ?? 0;
+      outputTokens += model.outputTokens ?? 0;
+      cacheReadTokens += model.cacheReadInputTokens ?? 0;
+      cacheCreationTokens += model.cacheCreationInputTokens ?? 0;
     }
-    return total;
+
+    return {
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheCreationTokens,
+      totalTokens: inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens,
+    };
   }
 
-  if (!output.usage) return 0;
-  return (output.usage.input_tokens ?? 0)
-    + (output.usage.output_tokens ?? 0)
-    + (output.usage.cache_creation_input_tokens ?? 0)
-    + (output.usage.cache_read_input_tokens ?? 0);
+  if (!output.usage) {
+    return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 0 };
+  }
+
+  const inputTokens = output.usage.input_tokens ?? 0;
+  const outputTokens = output.usage.output_tokens ?? 0;
+  const cacheReadTokens = output.usage.cache_read_input_tokens ?? 0;
+  const cacheCreationTokens = output.usage.cache_creation_input_tokens ?? 0;
+
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+    totalTokens: inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens,
+  };
+}
+
+export function extractTokensUsed(output: ClaudeCliJsonOutput): number {
+  return extractTokenUsageBreakdown(output).totalTokens;
 }
 
 export function extractCostUsd(output: ClaudeCliJsonOutput): number {
@@ -54,24 +88,10 @@ export function extractInputOutputTokens(output: ClaudeCliJsonOutput): {
   readonly inputTokens: number;
   readonly outputTokens: number;
 } {
-  if (output.modelUsage) {
-    let inputTokens = 0;
-    let outputTokens = 0;
-    for (const model of Object.values(output.modelUsage)) {
-      inputTokens += (model.inputTokens ?? 0)
-        + (model.cacheReadInputTokens ?? 0)
-        + (model.cacheCreationInputTokens ?? 0);
-      outputTokens += (model.outputTokens ?? 0);
-    }
-    return { inputTokens, outputTokens };
-  }
-
-  if (!output.usage) return { inputTokens: 0, outputTokens: 0 };
+  const breakdown = extractTokenUsageBreakdown(output);
   return {
-    inputTokens: (output.usage.input_tokens ?? 0)
-      + (output.usage.cache_creation_input_tokens ?? 0)
-      + (output.usage.cache_read_input_tokens ?? 0),
-    outputTokens: output.usage.output_tokens ?? 0,
+    inputTokens: breakdown.inputTokens + breakdown.cacheReadTokens + breakdown.cacheCreationTokens,
+    outputTokens: breakdown.outputTokens,
   };
 }
 

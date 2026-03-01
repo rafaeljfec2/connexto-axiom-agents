@@ -21,6 +21,7 @@ import {
   classifyTaskComplexity,
 } from "./claudeCliTypes.js";
 import type {
+  TaskComplexity,
   ClaudeCliExecutionResult,
   ClaudeCliLoopParams,
 } from "./claudeCliTypes.js";
@@ -46,6 +47,43 @@ import {
 export { parseClaudeCliOutput } from "./claudeCliOutputParser.js";
 export { selectModelForTask } from "./claudeCliTypes.js";
 export type { ClaudeCliExecutorConfig, ClaudeCliExecutionResult } from "./claudeCliTypes.js";
+
+interface ContextBudget {
+  readonly repoIndexMaxChars: number;
+  readonly skipRepoIndex: boolean;
+  readonly skipReferences: boolean;
+  readonly referenceMaxTokens: number | undefined;
+  readonly skipPlanningPhase: boolean;
+}
+
+function resolveContextBudget(complexity: TaskComplexity): ContextBudget {
+  switch (complexity) {
+    case "simple":
+      return {
+        repoIndexMaxChars: 0,
+        skipRepoIndex: true,
+        skipReferences: true,
+        referenceMaxTokens: 0,
+        skipPlanningPhase: true,
+      };
+    case "standard":
+      return {
+        repoIndexMaxChars: 2000,
+        skipRepoIndex: false,
+        skipReferences: false,
+        referenceMaxTokens: 2000,
+        skipPlanningPhase: true,
+      };
+    case "complex":
+      return {
+        repoIndexMaxChars: 5000,
+        skipRepoIndex: false,
+        skipReferences: false,
+        referenceMaxTokens: 3000,
+        skipPlanningPhase: false,
+      };
+  }
+}
 
 export async function executeWithClaudeCli(
   db: BetterSqlite3.Database,
@@ -93,8 +131,8 @@ export async function executeWithClaudeCli(
   }
 
   const taskType = classifyTaskType(delegation.task);
-  const effectiveModel = selectModelForTask(config, taskType);
   const complexity = classifyTaskComplexity(delegation.task, taskType);
+  const effectiveModel = selectModelForTask(config, taskType, { complexity });
 
   logger.info(
     { taskType, complexity, selectedModel: effectiveModel, defaultModel: config.model, fixModel: config.fixModel },
@@ -112,8 +150,7 @@ export async function executeWithClaudeCli(
     expectedOutput: delegation.expected_output,
   });
 
-  const repoIndexMaxChars = complexity === "complex" ? 5000 : undefined;
-  const skipRepoIndex = complexity === "simple";
+  const contextBudget = resolveContextBudget(complexity);
 
   let referencesConfig: { readonly maxTokens?: number; readonly includeGlobal?: boolean } | undefined;
   try {
@@ -121,6 +158,15 @@ export async function executeWithClaudeCli(
     referencesConfig = manifest.references;
   } catch {
     logger.debug({ projectId: project.project_id }, "Could not load manifest for references config, using defaults");
+  }
+
+  if (referencesConfig && contextBudget.referenceMaxTokens !== undefined) {
+    referencesConfig = {
+      ...referencesConfig,
+      maxTokens: Math.min(referencesConfig.maxTokens ?? 3000, contextBudget.referenceMaxTokens),
+    };
+  } else if (contextBudget.referenceMaxTokens !== undefined) {
+    referencesConfig = { maxTokens: contextBudget.referenceMaxTokens };
   }
 
   const referenceCtx = {
@@ -133,11 +179,11 @@ export async function executeWithClaudeCli(
   const [nexusResearch, goalContext, repoIndexSummary, baselineBuildFailed, baselineTestsFailed, projectInstructions, referenceExamples] = await Promise.all([
     Promise.resolve(loadNexusResearchForGoal(db, delegation.goal_id)),
     Promise.resolve(loadGoalContext(db, delegation.goal_id)),
-    skipRepoIndex ? Promise.resolve("") : buildRepositoryIndexSummary(workspacePath, repoIndexMaxChars),
+    contextBudget.skipRepoIndex ? Promise.resolve("") : buildRepositoryIndexSummary(workspacePath, contextBudget.repoIndexMaxChars),
     checkBaselineBuild(workspacePath, 60_000),
     checkBaselineTests(workspacePath, 90_000),
     readProjectInstructions(workspacePath),
-    loadAndSelectReferences(project.project_id, referenceCtx, referencesConfig),
+    contextBudget.skipReferences ? Promise.resolve("") : loadAndSelectReferences(project.project_id, referenceCtx, referencesConfig),
   ]);
 
   const instructionsCtx: ClaudeCliInstructionsContext = {
@@ -191,6 +237,14 @@ export async function executeWithClaudeCli(
     emitter,
     baselineBuildFailed,
     baselineTestsFailed,
+    instructionsCtx: {
+      task: delegation.task,
+      expectedOutput: delegation.expected_output,
+      language: project.language,
+      framework: project.framework,
+      projectId: project.project_id,
+      baselineBuildFailed,
+    },
   };
 
   try {

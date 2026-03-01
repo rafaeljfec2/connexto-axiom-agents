@@ -25,8 +25,50 @@ export function buildClaudeMdContent(ctx: ClaudeCliInstructionsContext): string 
 
   if (phase === "planning") return buildPlanningPhaseMd(ctx, taskType);
   if (phase === "testing") return buildTestingPhaseMd(ctx, taskType);
+  if (phase === "correction") return buildCorrectionPhaseMd(ctx, taskType);
 
   return buildImplementationPhaseMd(ctx, taskType);
+}
+
+function buildCorrectionPhaseMd(ctx: ClaudeCliInstructionsContext, taskType: ForgeTaskType): string {
+  const sections: string[] = [
+    buildIdentitySection(),
+    buildDecisionProtocolSection(taskType),
+    buildTaskContextSection(ctx),
+    buildCorrectionWorkflowSection(ctx.baselineBuildFailed),
+    buildQualityRulesSection(),
+    buildSecurityRulesSection(),
+  ];
+
+  return sections.filter(Boolean).join("\n\n");
+}
+
+function buildCorrectionWorkflowSection(baselineBuildFailed: boolean): string {
+  const lines = [
+    "# Correction Workflow",
+    "",
+    "You are fixing validation errors from a previous implementation attempt.",
+    "Focus ONLY on resolving the reported errors — do NOT refactor or change unrelated code.",
+    "",
+    "1. Read the error output carefully to understand each failure.",
+    "2. Read the failing files to understand the context.",
+    "3. Apply the minimal fix for each error.",
+    "4. Verify with `npx tsc --noEmit` and `npx eslint <changed-files>`.",
+  ];
+
+  if (baselineBuildFailed) {
+    lines.push("5. **DO NOT run the build command** — the build was already failing before your changes.");
+  }
+
+  lines.push(
+    "",
+    "## Important",
+    "- Fix errors in order of severity: TypeScript errors first, then lint errors.",
+    "- Do NOT add new features or refactor during correction.",
+    "- Keep changes minimal and focused.",
+  );
+
+  return lines.join("\n");
 }
 
 function buildPlanningPhaseMd(ctx: ClaudeCliInstructionsContext, taskType: ForgeTaskType): string {

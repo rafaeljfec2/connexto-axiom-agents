@@ -33,6 +33,7 @@ function applyMigrations(db: BetterSqlite3.Database): void {
   migrateProjectsPushEnabled(db);
   migrateGoalsInProgressStatus(db);
   migrateGoalsCodeReviewStatus(db);
+  migrateTokenUsageCacheColumns(db);
 }
 
 function migrateArtifactsColumns(db: BetterSqlite3.Database): void {
@@ -217,6 +218,21 @@ function migrateGoalsCodeReviewStatus(db: BetterSqlite3.Database): void {
       CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status);
       CREATE INDEX IF NOT EXISTS idx_goals_project_id ON goals(project_id);
     `);
+  }
+}
+
+function migrateTokenUsageCacheColumns(db: BetterSqlite3.Database): void {
+  const columns = db.pragma("table_info(token_usage)") as ReadonlyArray<{ name: string }>;
+  const columnNames = new Set(columns.map((c) => c.name));
+
+  if (!columnNames.has("cache_read_tokens")) {
+    db.exec("ALTER TABLE token_usage ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columnNames.has("cache_creation_tokens")) {
+    db.exec("ALTER TABLE token_usage ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columnNames.has("cost_usd")) {
+    db.exec("ALTER TABLE token_usage ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0");
   }
 }
 

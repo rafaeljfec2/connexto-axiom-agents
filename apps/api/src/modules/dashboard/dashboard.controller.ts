@@ -9,4 +9,9 @@ export class DashboardController {
   getSummary() {
     return this.dashboardService.getSummary();
   }
+
+  @Get("token-usage")
+  getTokenUsageStats() {
+    return this.dashboardService.getTokenUsageStats();
+  }
 }

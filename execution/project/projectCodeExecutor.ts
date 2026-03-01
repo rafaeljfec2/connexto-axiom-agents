@@ -242,6 +242,7 @@ async function executeWithClaudeCliMode(ctx: ClaudeCliModeContext): Promise<Exec
       inputTokens: Math.round(cliResult.totalTokensUsed * 0.7),
       outputTokens: Math.round(cliResult.totalTokensUsed * 0.3),
       totalTokens: cliResult.totalTokensUsed,
+      costUsd: cliResult.totalCostUsd,
     });
 
     const now = new Date();
@@ -374,6 +375,20 @@ async function executeWithOpenClawMode(
     },
     "OpenClaw autonomous execution finished",
   );
+
+  if (openclawResult.totalTokensUsed > 0) {
+    recordTokenUsage(db, {
+      agentId: "forge",
+      taskId: delegation.goal_id,
+      inputTokens: Math.round(openclawResult.totalTokensUsed * 0.7),
+      outputTokens: Math.round(openclawResult.totalTokensUsed * 0.3),
+      totalTokens: openclawResult.totalTokensUsed,
+    });
+
+    const now = new Date();
+    const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    incrementUsedTokens(db, period, openclawResult.totalTokensUsed);
+  }
 
   if (!openclawResult.success) {
     const executionTimeMs = Math.round(performance.now() - startTime);

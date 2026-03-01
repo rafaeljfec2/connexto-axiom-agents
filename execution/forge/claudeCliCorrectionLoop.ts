@@ -10,7 +10,30 @@ import type {
 import { MAX_CORRECTION_CYCLES, MAX_REVIEW_CORRECTION_ATTEMPTS, PHASE_TOOL_SETS, PHASE_MAX_TURNS } from "./claudeCliTypes.js";
 import { spawnClaudeCli } from "./claudeCliProcess.js";
 import { parseClaudeCliOutput, extractTokensUsed, extractCostUsd } from "./claudeCliOutputParser.js";
-import { detectChangedFiles, buildPrompt, buildPlanningPrompt, buildImplementationPrompt, buildTestingPrompt } from "./claudeCliContext.js";
+import { detectChangedFiles, buildPrompt, buildPlanningPrompt, buildImplementationPrompt, buildTestingPrompt, writeClaudeMd } from "./claudeCliContext.js";
+import type { ClaudeCliInstructionsContext } from "./claudeCliInstructions.js";
+
+function normalizeErrorSignature(errorOutput: string): string {
+  return errorOutput
+    .split("\n")
+    .map((line) => line.replace(/\d+/g, "N").replace(/\s+/g, " ").trim())
+    .filter((line) => line.length > 10)
+    .sort()
+    .join("|");
+}
+
+function computeErrorSimilarity(prev: string, current: string): number {
+  if (prev === current) return 1;
+  if (!prev || !current) return 0;
+  const prevParts = new Set(prev.split("|"));
+  const currentParts = new Set(current.split("|"));
+  let overlap = 0;
+  for (const part of currentParts) {
+    if (prevParts.has(part)) overlap++;
+  }
+  const total = Math.max(prevParts.size, currentParts.size);
+  return total > 0 ? overlap / total : 0;
+}
 
 export async function executeClaudeCliTask(
   params: ClaudeCliLoopParams,
@@ -345,6 +368,7 @@ async function executeCorrectionTask(
 
   return executeClaudeCliTask(correctionParams, {
     resumeSessionId: sessionId,
+    model: params.config.fixModel,
   });
 }
 
@@ -365,6 +389,7 @@ async function executeReviewCorrectionTask(
 
   return executeClaudeCliTask(correctionParams, {
     resumeSessionId: sessionId,
+    model: params.config.fixModel,
   });
 }
 
@@ -376,11 +401,14 @@ export async function runCorrectionLoop(
   let correctionCycles = 0;
   let validations = DEFAULT_VALIDATIONS;
   let accumulatedCostUsd = initialResult.totalCostUsd;
+  let previousErrorSignature = "";
   const sessionId = initialResult.sessionId;
   const validationOptions: ValidationCycleOptions = {
     skipBuild: params.baselineBuildFailed,
     skipTests: params.baselineTestsFailed,
   };
+
+  const maxCorrectionCostUsd = Number(process.env.CLAUDE_CLI_MAX_CORRECTION_COST_USD ?? "2");
 
   for (let cycle = 0; cycle < MAX_CORRECTION_CYCLES; cycle++) {
     params.emitter?.info("forge", "forge:validation_started", `Validation cycle ${cycle + 1}`, {
@@ -400,6 +428,23 @@ export async function runCorrectionLoop(
       return { ...currentResult, status: "SUCCESS", validations, correctionCycles };
     }
 
+    const currentErrorSignature = normalizeErrorSignature(validation.errorOutput);
+    const similarity = computeErrorSimilarity(previousErrorSignature, currentErrorSignature);
+
+    if (cycle > 0 && similarity >= 0.8) {
+      params.emitter?.warn("forge", "forge:correction_diminishing_returns",
+        `Correction cycle ${cycle + 1} has ${Math.round(similarity * 100)}% error overlap with previous — stopping`, {
+          phase: "validation",
+          metadata: { similarity, cycle: cycle + 1 },
+        });
+      logger.warn(
+        { similarity, cycle: cycle + 1 },
+        "Correction circuit breaker: same errors persisting, stopping corrections",
+      );
+      break;
+    }
+
+    previousErrorSignature = currentErrorSignature;
     correctionCycles++;
 
     params.emitter?.warn("forge", "forge:validation_failed", "Validation failed, triggering correction", {
@@ -419,6 +464,20 @@ export async function runCorrectionLoop(
       break;
     }
 
+    const correctionCost = accumulatedCostUsd - initialResult.totalCostUsd;
+    if (correctionCost >= maxCorrectionCostUsd) {
+      params.emitter?.warn("forge", "forge:correction_cost_cap",
+        `Correction cost cap reached ($${correctionCost.toFixed(2)} >= $${maxCorrectionCostUsd})`, {
+          phase: "validation",
+          metadata: { correctionCost, maxCorrectionCostUsd },
+        });
+      logger.warn(
+        { correctionCost, maxCorrectionCostUsd },
+        "Correction cost cap reached — stopping correction cycles",
+      );
+      break;
+    }
+
     logger.warn(
       { cycle: correctionCycles, maxCycles: MAX_CORRECTION_CYCLES, validations, accumulatedCostUsd },
       "Validation failed, starting Claude CLI correction cycle",
@@ -428,6 +487,14 @@ export async function runCorrectionLoop(
     if (elapsed >= params.config.timeoutMs) {
       logger.warn({ elapsed, timeout: params.config.timeoutMs }, "Timeout reached during correction cycle");
       break;
+    }
+
+    if (params.instructionsCtx) {
+      const correctionCtx: ClaudeCliInstructionsContext = {
+        ...params.instructionsCtx,
+        executionPhase: "correction",
+      };
+      await writeClaudeMd(params.workspacePath, correctionCtx);
     }
 
     const correctionResult = await executeCorrectionTask(

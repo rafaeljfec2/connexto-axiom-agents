@@ -7,8 +7,8 @@ import type { ReviewResult } from "./openclawReview.js";
 import type { ExecutionEventEmitter } from "../shared/executionEventEmitter.js";
 
 export const REPO_INDEX_MAX_CHARS = 3000;
-export const MAX_CORRECTION_CYCLES = 5;
-export const MAX_REVIEW_CORRECTION_ATTEMPTS = 2;
+export const MAX_CORRECTION_CYCLES = 2;
+export const MAX_REVIEW_CORRECTION_ATTEMPTS = 1;
 export const CLAUDE_MD_FILENAME = "CLAUDE.md";
 export const INACTIVITY_TIMEOUT_MS = 60_000;
 
@@ -147,6 +147,14 @@ export interface ClaudeCliLoopParams {
   readonly emitter?: ExecutionEventEmitter;
   readonly baselineBuildFailed?: boolean;
   readonly baselineTestsFailed?: boolean;
+  readonly instructionsCtx?: {
+    readonly task: string;
+    readonly expectedOutput: string;
+    readonly language: string;
+    readonly framework: string;
+    readonly projectId: string;
+    readonly baselineBuildFailed: boolean;
+  };
 }
 
 export type TaskComplexity = "simple" | "standard" | "complex";
@@ -183,7 +191,13 @@ export function loadClaudeCliConfig(): ClaudeCliExecutorConfig {
   };
 }
 
-export function selectModelForTask(config: ClaudeCliExecutorConfig, taskType: ForgeTaskType): string {
+export function selectModelForTask(
+  config: ClaudeCliExecutorConfig,
+  taskType: ForgeTaskType,
+  options?: { readonly isCorrection?: boolean; readonly complexity?: TaskComplexity },
+): string {
+  if (options?.isCorrection) return config.fixModel;
   if (taskType === "FIX") return config.fixModel;
+  if (taskType === "REFACTOR" && (options?.complexity ?? "standard") !== "complex") return config.fixModel;
   return config.model;
 }

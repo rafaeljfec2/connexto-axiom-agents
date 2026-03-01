@@ -7,11 +7,15 @@ export interface TokenUsageEntry {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly totalTokens: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheCreationTokens?: number;
+  readonly costUsd?: number;
 }
 
 export function recordTokenUsage(db: BetterSqlite3.Database, entry: TokenUsageEntry): void {
   db.prepare(
-    "INSERT INTO token_usage (id, agent_id, task_id, input_tokens, output_tokens, total_tokens) VALUES (?, ?, ?, ?, ?, ?)",
+    `INSERT INTO token_usage (id, agent_id, task_id, input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_creation_tokens, cost_usd)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     crypto.randomUUID(),
     entry.agentId,
@@ -19,6 +23,9 @@ export function recordTokenUsage(db: BetterSqlite3.Database, entry: TokenUsageEn
     entry.inputTokens,
     entry.outputTokens,
     entry.totalTokens,
+    entry.cacheReadTokens ?? 0,
+    entry.cacheCreationTokens ?? 0,
+    entry.costUsd ?? 0,
   );
 }
 

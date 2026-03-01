@@ -116,6 +116,73 @@ export function getResearchStats7d(db: BetterSqlite3.Database): {
   };
 }
 
+export function findSimilarResearch(
+  db: BetterSqlite3.Database,
+  question: string,
+  goalId: string,
+  maxAgeDays: number = 7,
+): NexusResearch | null {
+  const recent = db
+    .prepare(
+      `SELECT ${COLUMNS}
+       FROM nexus_research
+       WHERE (goal_id = ? OR created_at >= datetime('now', ?))
+       ORDER BY created_at DESC
+       LIMIT 20`,
+    )
+    .all(goalId, `-${maxAgeDays} days`) as NexusResearch[];
+
+  if (recent.length === 0) return null;
+
+  const queryWords = extractSignificantWords(question);
+  if (queryWords.size === 0) return null;
+
+  let bestMatch: NexusResearch | null = null;
+  let bestScore = 0;
+
+  for (const research of recent) {
+    const researchWords = extractSignificantWords(research.question);
+    let overlap = 0;
+    for (const word of queryWords) {
+      if (researchWords.has(word)) overlap++;
+    }
+    const score = queryWords.size > 0 ? overlap / queryWords.size : 0;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = research;
+    }
+  }
+
+  if (bestScore >= 0.6) return bestMatch;
+  return null;
+}
+
+function extractSignificantWords(text: string): ReadonlySet<string> {
+  const stopWords = new Set([
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "shall", "can", "need", "for", "and", "but",
+    "or", "not", "no", "so", "yet", "both", "either", "neither", "all",
+    "any", "some", "such", "than", "too", "very", "just", "because", "as",
+    "until", "while", "of", "at", "by", "from", "up", "about", "into",
+    "through", "during", "before", "after", "to", "in", "on", "off",
+    "over", "under", "with", "this", "that", "these", "those", "it",
+    "de", "do", "da", "em", "um", "uma", "para", "com", "por", "que",
+    "no", "na", "se", "os", "as", "ao", "dos", "das", "nos", "nas", "ou",
+    "como", "onde", "qual", "quais", "mapear", "analisar", "verificar",
+    "identificar", "listar", "propor", "sugerir",
+  ]);
+
+  return new Set(
+    text
+      .toLowerCase()
+      .replaceAll(/[^a-z0-9\s-]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 2 && !stopWords.has(w)),
+  );
+}
+
 function truncateTopic(question: string): string {
   const maxLength = 80;
   if (question.length <= maxLength) return question;

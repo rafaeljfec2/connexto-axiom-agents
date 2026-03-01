@@ -190,7 +190,7 @@ describe("buildForgeCodeOutputFromCli", () => {
     assert.ok(output.rollback.includes("src/auth.ts"));
   });
 
-  it("should cap risk at 3 when more than 3 files changed", () => {
+  it("should cap risk at 2 when more than 2 files changed", () => {
     const result: ClaudeCliExecutionResult = {
       success: true,
       status: "SUCCESS",
@@ -205,7 +205,7 @@ describe("buildForgeCodeOutputFromCli", () => {
 
     const output = buildForgeCodeOutputFromCli(result);
 
-    assert.equal(output.risk, 3);
+    assert.equal(output.risk, 2);
     assert.equal(output.files.length, 4);
   });
 
@@ -435,9 +435,19 @@ describe("selectModelForTask", () => {
     assert.equal(model, "sonnet");
   });
 
-  it("should return default model for REFACTOR task type", () => {
+  it("should return fixModel for REFACTOR standard complexity", () => {
     const model = selectModelForTask(baseConfig, "REFACTOR");
+    assert.equal(model, "haiku");
+  });
+
+  it("should return default model for REFACTOR complex complexity", () => {
+    const model = selectModelForTask(baseConfig, "REFACTOR", { complexity: "complex" });
     assert.equal(model, "sonnet");
+  });
+
+  it("should return fixModel for corrections regardless of task type", () => {
+    const model = selectModelForTask(baseConfig, "IMPLEMENT", { isCorrection: true });
+    assert.equal(model, "haiku");
   });
 
   it("should return default model for CREATE task type", () => {

@@ -7,7 +7,7 @@ import { callLLM, createLLMConfig } from "../../llm/client.js";
 import type { KairosDelegation } from "../../orchestration/types.js";
 import { logAudit, hashContent } from "../../state/auditLog.js";
 import { incrementUsedTokens } from "../../state/budgets.js";
-import { saveResearch } from "../../state/nexusResearch.js";
+import { saveResearch, findSimilarResearch } from "../../state/nexusResearch.js";
 import { recordTokenUsage } from "../../state/tokenUsage.js";
 import { validateNexusOutput, NexusValidationError } from "./nexusValidator.js";
 import { sanitizeOutput } from "../shared/outputSanitizer.js";
@@ -34,6 +34,23 @@ export async function executeNexus(
 
   const startTime = performance.now();
   const budgetConfig = loadBudgetConfig();
+
+  const existing = findSimilarResearch(db, delegation.task, delegation.goal_id);
+  if (existing) {
+    const executionTimeMs = Math.round(performance.now() - startTime);
+    logger.info(
+      { existingId: existing.id, question: existing.question, task: delegation.task },
+      "NEXUS dedup: reusing existing similar research (skipping LLM call)",
+    );
+    return {
+      agent: "nexus",
+      task: delegation.task,
+      status: "success",
+      output: `[DEDUP] Reused research (${existing.id}): ${existing.recommendation}`,
+      tokensUsed: 0,
+      executionTimeMs,
+    };
+  }
 
   try {
     const systemPrompt = loadSystemPrompt();

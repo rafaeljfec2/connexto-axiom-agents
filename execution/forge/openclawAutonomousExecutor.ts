@@ -484,11 +484,58 @@ function buildToolResultItems(
   }));
 }
 
+const SLIDING_WINDOW_THRESHOLD = 5;
+const SLIDING_WINDOW_KEEP_RECENT = 3;
+
 interface ToolLoopState {
-  readonly conversationHistory: ResponseItem[];
+  conversationHistory: ResponseItem[];
   totalTokensUsed: number;
   iterationsUsed: number;
   lastResponse: OpenClawToolResponse | null;
+}
+
+function pruneConversationHistory(state: ToolLoopState): void {
+  const history = state.conversationHistory;
+  const minEntriesForPruning = (SLIDING_WINDOW_KEEP_RECENT * 2) + 2;
+  if (history.length <= minEntriesForPruning) return;
+
+  const initialMessages = history.slice(0, 1);
+
+  const recentCount = SLIDING_WINDOW_KEEP_RECENT * 2;
+  const recentMessages = history.slice(-recentCount);
+
+  const middleMessages = history.slice(1, -recentCount);
+
+  const summaryParts: string[] = [];
+  for (const msg of middleMessages) {
+    if (msg.role === "assistant" && msg.tool_calls) {
+      const toolNames = msg.tool_calls.map((tc) => tc.function?.name ?? "unknown").join(", ");
+      summaryParts.push(`Called tools: ${toolNames}`);
+    } else if (msg.role === "tool") {
+      const preview = msg.content.length > 100
+        ? `${msg.content.slice(0, 100)}...`
+        : msg.content;
+      summaryParts.push(`Tool result: ${preview}`);
+    }
+  }
+
+  const summaryContent = [
+    `[CONTEXT SUMMARY: ${middleMessages.length} messages pruned for token efficiency]`,
+    summaryParts.slice(0, 10).join("\n"),
+  ].join("\n");
+
+  const summaryItem: ResponseItem = {
+    role: "user",
+    content: summaryContent,
+  };
+
+  const prunedLength = history.length;
+  state.conversationHistory = [...initialMessages, summaryItem, ...recentMessages];
+
+  logger.info(
+    { before: prunedLength, after: state.conversationHistory.length, pruned: middleMessages.length },
+    "Conversation history pruned (sliding window)",
+  );
 }
 
 async function executeToolCalls(
@@ -1028,6 +1075,10 @@ async function executeOpenClawLoop(params: OpenClawLoopParams): Promise<OpenClaw
 
     const outcome = await processIteration(state, ctx);
     if (outcome.done) return outcome.result;
+
+    if (state.iterationsUsed > 0 && state.iterationsUsed % SLIDING_WINDOW_THRESHOLD === 0) {
+      pruneConversationHistory(state);
+    }
   }
 }
 

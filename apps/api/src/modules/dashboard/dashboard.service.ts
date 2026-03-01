@@ -184,4 +184,88 @@ export class DashboardService {
       )
       .all() as ReadonlyArray<DailyHistory>;
   }
+
+  getTokenUsageStats() {
+    const byAgent = this.db
+      .prepare(
+        `SELECT
+          agent_id,
+          SUM(total_tokens) as total_tokens,
+          SUM(input_tokens) as input_tokens,
+          SUM(output_tokens) as output_tokens,
+          SUM(COALESCE(cache_read_tokens, 0)) as cache_read_tokens,
+          SUM(COALESCE(cache_creation_tokens, 0)) as cache_creation_tokens,
+          SUM(COALESCE(cost_usd, 0)) as total_cost_usd,
+          COUNT(*) as call_count,
+          AVG(total_tokens) as avg_tokens_per_call,
+          MAX(total_tokens) as max_tokens_single_call
+        FROM token_usage
+        WHERE created_at >= datetime('now', '-30 days')
+        GROUP BY agent_id
+        ORDER BY total_tokens DESC`,
+      )
+      .all() as ReadonlyArray<Record<string, unknown>>;
+
+    const topGoals = this.db
+      .prepare(
+        `SELECT
+          task_id,
+          agent_id,
+          SUM(total_tokens) as total_tokens,
+          SUM(COALESCE(cost_usd, 0)) as total_cost_usd,
+          COUNT(*) as call_count,
+          MIN(created_at) as first_call,
+          MAX(created_at) as last_call
+        FROM token_usage
+        WHERE created_at >= datetime('now', '-30 days')
+        GROUP BY task_id, agent_id
+        ORDER BY total_tokens DESC
+        LIMIT 10`,
+      )
+      .all() as ReadonlyArray<Record<string, unknown>>;
+
+    const dailyUsage = this.db
+      .prepare(
+        `SELECT
+          date(created_at) as date,
+          agent_id,
+          SUM(total_tokens) as total_tokens,
+          SUM(COALESCE(cost_usd, 0)) as cost_usd,
+          COUNT(*) as call_count
+        FROM token_usage
+        WHERE created_at >= datetime('now', '-7 days')
+        GROUP BY date(created_at), agent_id
+        ORDER BY date ASC, agent_id`,
+      )
+      .all() as ReadonlyArray<Record<string, unknown>>;
+
+    const totals = this.db
+      .prepare(
+        `SELECT
+          SUM(total_tokens) as total_tokens,
+          SUM(input_tokens) as input_tokens,
+          SUM(output_tokens) as output_tokens,
+          SUM(COALESCE(cache_read_tokens, 0)) as cache_read_tokens,
+          SUM(COALESCE(cost_usd, 0)) as total_cost_usd,
+          COUNT(*) as total_calls
+        FROM token_usage
+        WHERE created_at >= datetime('now', '-30 days')`,
+      )
+      .get() as Record<string, unknown> | undefined;
+
+    const cacheRatio =
+      totals && typeof totals.cache_read_tokens === "number" && typeof totals.input_tokens === "number" && totals.input_tokens > 0
+        ? Math.round(((totals.cache_read_tokens as number) / (totals.input_tokens as number)) * 100)
+        : 0;
+
+    return {
+      totals: {
+        ...(totals ?? {}),
+        cache_hit_ratio_pct: cacheRatio,
+      },
+      byAgent,
+      topGoals,
+      dailyUsage,
+    };
+  }
 }
