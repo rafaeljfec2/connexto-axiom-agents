@@ -106,33 +106,6 @@ function buildFileTree(files: readonly ProjectFile[]): string {
   return lines.join("\n");
 }
 
-function buildContextChunks(
-  files: readonly ProjectFile[],
-  maxChars: number,
-): readonly string[][] {
-  const chunks: string[][] = [];
-  let currentChunk: string[] = [];
-  let currentSize = 0;
-
-  for (const file of files) {
-    const entry = `--- ${file.relativePath} [${file.category}] ---\n${file.content}\n`;
-
-    if (currentSize + entry.length > maxChars && currentChunk.length > 0) {
-      chunks.push(currentChunk);
-      currentChunk = [];
-      currentSize = 0;
-    }
-
-    currentChunk.push(entry);
-    currentSize += entry.length;
-  }
-
-  if (currentChunk.length > 0) {
-    chunks.push(currentChunk);
-  }
-
-  return chunks;
-}
 
 function getLLMConfig(): LLMClientConfig {
   const apiKey = process.env.ANTHROPIC_API_KEY ?? process.env.LLM_API_KEY;
@@ -154,17 +127,35 @@ interface GenerateResult {
   readonly usage: LLMUsage;
 }
 
+function truncateText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return text.slice(0, maxChars) + "\n\n... [truncated due to context limit]";
+}
+
 async function generateDocument(
   llmConfig: LLMClientConfig,
   systemPrompt: string,
   docType: string,
   fileTree: string,
-  contextChunks: readonly string[][],
+  relevantFiles: readonly ProjectFile[],
   existingDocs: string,
 ): Promise<GenerateResult> {
-  const contextText = contextChunks.length > 0
-    ? contextChunks[0].join("\n")
-    : "No source files available.";
+  const { maxContextChars, maxFileTreeChars } = DOCUMENTATION_AGENT_CONFIG;
+
+  const truncatedTree = truncateText(fileTree, maxFileTreeChars);
+
+  let contextText = "";
+  let currentSize = 0;
+  for (const file of relevantFiles) {
+    const entry = `--- ${file.relativePath} [${file.category}] ---\n${file.content}\n`;
+    if (currentSize + entry.length > maxContextChars && currentSize > 0) break;
+    contextText += entry;
+    currentSize += entry.length;
+  }
+
+  if (contextText.length === 0) {
+    contextText = "No relevant source files available for this document type.";
+  }
 
   const existingSection = existingDocs
     ? `\n\n## Existing Documentation (preserve and enhance):\n${existingDocs}`
@@ -173,7 +164,8 @@ async function generateDocument(
   const userMessage = [
     `Generate the "${docType}" documentation for this project.`,
     "",
-    fileTree,
+    "## Project structure (summary):",
+    truncatedTree,
     existingSection,
     "",
     "## Source code context:",
@@ -182,6 +174,11 @@ async function generateDocument(
     "",
     `Output ONLY the markdown content for ${docType}. Do not include any preamble or explanation outside the document.`,
   ].join("\n");
+
+  logger.info(
+    { docType, contextChars: contextText.length, treeChars: truncatedTree.length, filesIncluded: relevantFiles.length },
+    "Prepared LLM prompt",
+  );
 
   const response = await callLLM(llmConfig, {
     system: systemPrompt,
@@ -212,12 +209,9 @@ export async function runDocumentationAgent(
   notify(`Found ${String(files.length)} files to analyze`);
 
   const fileTree = buildFileTree(files);
-  const contextChunks = buildContextChunks(files, DOCUMENTATION_AGENT_CONFIG.chunkSizeChars);
 
   const docsPath = path.join(workspacePath, "docs");
-  const docsExist = fs.existsSync(docsPath);
-
-  if (!docsExist) {
+  if (!fs.existsSync(docsPath)) {
     fs.mkdirSync(docsPath, { recursive: true });
   }
 
@@ -245,14 +239,14 @@ export async function runDocumentationAgent(
     }
 
     try {
-      const relevantChunks = filterChunksForDocType(docType, contextChunks, files);
+      const relevantFiles = filterFilesForDocType(docType, files);
 
       const result = await generateDocument(
         llmConfig,
         systemPrompt,
         docType,
         fileTree,
-        relevantChunks,
+        relevantFiles,
         existingContent,
       );
 
@@ -272,27 +266,51 @@ export async function runDocumentationAgent(
   logger.info({ workspacePath }, "DocumentationAgent completed");
 }
 
-function filterChunksForDocType(
+const CATEGORY_PRIORITY: Record<string, readonly ProjectFile["category"][]> = {
+  architecture: ["implementation", "config", "interface"],
+  implementation: ["implementation", "test"],
+  interfaces: ["interface", "implementation"],
+  config: ["config", "other"],
+  domain: ["implementation", "docs", "interface"],
+  database: ["implementation", "config", "interface"],
+  security: ["implementation", "config", "interface"],
+  frontend: ["implementation", "interface", "config"],
+  backend: ["implementation", "config", "interface"],
+};
+
+const PATH_PATTERNS: Record<string, readonly RegExp[]> = {
+  database: [/migrat/i, /schema/i, /model/i, /entit/i, /repositor/i, /prisma/i, /drizzle/i, /typeorm/i, /\.sql$/i, /seed/i, /database/i, /db\./i],
+  security: [/auth/i, /guard/i, /middlewar/i, /encrypt/i, /hash/i, /jwt/i, /token/i, /permission/i, /role/i, /policy/i, /secur/i, /csrf/i, /cors/i],
+  frontend: [/component/i, /page/i, /hook/i, /context/i, /store/i, /style/i, /\.tsx$/i, /\.css$/i, /\.scss$/i, /layout/i, /view/i, /ui\//i],
+  backend: [/controller/i, /service/i, /module/i, /middlewar/i, /resolver/i, /handler/i, /route/i, /worker/i, /queue/i, /job/i, /cron/i],
+};
+
+function filterFilesForDocType(
   docType: string,
-  allChunks: readonly string[][],
   files: readonly ProjectFile[],
-): readonly string[][] {
-  const categoryPriority: Record<string, readonly ProjectFile["category"][]> = {
-    architecture: ["implementation", "config", "interface"],
-    implementation: ["implementation", "test"],
-    interfaces: ["interface", "implementation"],
-    config: ["config", "other"],
-    domain: ["implementation", "docs", "interface"],
-    database: ["implementation", "config", "interface"],
-    security: ["implementation", "config", "interface"],
-    frontend: ["implementation", "interface", "config"],
-    backend: ["implementation", "config", "interface"],
-  };
+): readonly ProjectFile[] {
+  const priorities = CATEGORY_PRIORITY[docType] ?? ["implementation"];
+  const patterns = PATH_PATTERNS[docType];
 
-  const priorities = categoryPriority[docType] ?? ["implementation"];
-  const relevantFiles = files.filter((f) => priorities.includes(f.category));
+  let filtered: ProjectFile[];
 
-  if (relevantFiles.length === 0) return allChunks;
+  if (patterns) {
+    filtered = files.filter(
+      (f) => patterns.some((p) => p.test(f.relativePath)) || priorities.includes(f.category),
+    );
+  } else {
+    filtered = files.filter((f) => priorities.includes(f.category));
+  }
 
-  return buildContextChunks(relevantFiles, DOCUMENTATION_AGENT_CONFIG.chunkSizeChars);
+  if (filtered.length === 0) return [...files];
+
+  filtered.sort((a, b) => {
+    const aMatch = patterns ? patterns.some((p) => p.test(a.relativePath)) : false;
+    const bMatch = patterns ? patterns.some((p) => p.test(b.relativePath)) : false;
+    if (aMatch && !bMatch) return -1;
+    if (!aMatch && bMatch) return 1;
+    return a.sizeBytes - b.sizeBytes;
+  });
+
+  return filtered;
 }

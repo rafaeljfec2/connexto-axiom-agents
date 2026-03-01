@@ -6,8 +6,9 @@ export const DOCUMENTATION_AGENT_CONFIG = {
   maxOutputTokens: 8192,
   timeoutMs: 120_000,
   maxRetries: 3,
-  maxContextTokens: 100_000,
-  chunkSizeChars: 300_000,
+  maxContextChars: 60_000,
+  maxFileTreeChars: 8_000,
+  chunkSizeChars: 60_000,
   rateLimitInputTokensPerMinute: 30_000,
   rateLimitBufferMs: 5_000,
 } as const;
