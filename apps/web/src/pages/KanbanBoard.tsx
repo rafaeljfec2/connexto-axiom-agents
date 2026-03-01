@@ -290,15 +290,15 @@ export function KanbanBoard() {
               <span className="hidden sm:inline">Novo Objetivo</span>
             </Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-md">
-            <form ref={formRef} onSubmit={handleCreateGoal}>
+          <DialogContent className="sm:max-w-2xl max-h-[90vh] flex flex-col">
+            <form ref={formRef} onSubmit={handleCreateGoal} className="flex flex-col min-h-0">
               <DialogHeader>
                 <DialogTitle>Novo Objetivo</DialogTitle>
                 <DialogDescription>
                   Crie um novo objetivo para os agentes executarem.
                 </DialogDescription>
               </DialogHeader>
-              <div className="mt-4 space-y-4">
+              <div className="mt-4 space-y-4 overflow-y-auto min-h-0 flex-1 pr-1">
                 <div className="space-y-2">
                   <Label htmlFor="goal-title">Título</Label>
                   <Input
@@ -315,7 +315,8 @@ export function KanbanBoard() {
                     id="goal-description"
                     name="description"
                     placeholder="Detalhes adicionais sobre o objetivo..."
-                    rows={3}
+                    rows={10}
+                    className="min-h-[120px] max-h-[50vh] resize-y font-mono text-sm"
                   />
                 </div>
                 <div className="space-y-2">

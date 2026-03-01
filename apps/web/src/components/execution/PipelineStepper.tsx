@@ -77,8 +77,14 @@ function inferPhaseStatus(events: readonly ExecutionEvent[], isLive: boolean, ag
     "forge:validation_passed", "forge:review_passed",
     "forge:cli_completed", "forge:delivery_complete",
     "forge:context_loaded",
+    "forge:pr_created", "forge:push_completed",
+    "forge:commit_success", "forge:change_applied",
   ];
-  const failedTypes = ["forge:validation_failed", "forge:review_failed", "forge:cli_failed"];
+  const failedTypes = [
+    "forge:validation_failed", "forge:review_failed", "forge:cli_failed",
+    "forge:commit_failed", "forge:push_failed", "forge:pr_failed",
+    "forge:path_validation_failed",
+  ];
 
   const lastEvent = events.at(-1);
   if (lastEvent && failedTypes.includes(lastEvent.event_type)) return "error";

@@ -32,7 +32,7 @@ interface ProjectRef {
   readonly project_id: string;
 }
 
-export interface ClaudeCliModeContext {
+export interface ExecutorModeContext {
   readonly db: BetterSqlite3.Database;
   readonly delegation: KairosDelegation;
   readonly projectId: string;
@@ -43,7 +43,7 @@ export interface ClaudeCliModeContext {
   readonly emitter?: ExecutionEventEmitter;
 }
 
-export async function executeWithClaudeCliMode(ctx: ClaudeCliModeContext): Promise<ExecutionResult> {
+export async function executeWithClaudeCliMode(ctx: ExecutorModeContext): Promise<ExecutionResult> {
   const { db, delegation, projectId, workspacePath, project, startTime, traceId, emitter } = ctx;
   const { task } = delegation;
 
@@ -98,6 +98,7 @@ export async function executeWithClaudeCliMode(ctx: ClaudeCliModeContext): Promi
     totalTokensUsed: cliResult.totalTokensUsed, lintOutput: "", startTime,
     commitOptions: { pushEnabled, branchPrefix: "auto", baseBranch: project.base_branch },
     maxFilesOverride: MAX_FILES_PER_CHANGE_CLI,
+    emitter,
   });
 
   if (result.status === "success") {
@@ -110,15 +111,8 @@ export async function executeWithClaudeCliMode(ctx: ClaudeCliModeContext): Promi
   return result;
 }
 
-export async function executeWithOpenClawMode(
-  db: BetterSqlite3.Database,
-  delegation: KairosDelegation,
-  projectId: string,
-  workspacePath: string,
-  project: ProjectRef,
-  startTime: number,
-  traceId?: string,
-): Promise<ExecutionResult> {
+export async function executeWithOpenClawMode(ctx: ExecutorModeContext): Promise<ExecutionResult> {
+  const { db, delegation, projectId, workspacePath, project, startTime, traceId, emitter } = ctx;
   const { task } = delegation;
 
   logger.info({ projectId, mode: "openclaw", task: task.slice(0, 80) }, "Routing to OpenClaw autonomous executor");
@@ -165,18 +159,12 @@ export async function executeWithOpenClawMode(
     db, delegation, projectId, workspacePath, repoSource: project.repo_source, parsed,
     totalTokensUsed: openclawResult.totalTokensUsed, lintOutput: "", startTime,
     commitOptions: { pushEnabled, branchPrefix: "auto", baseBranch: project.base_branch },
+    emitter,
   });
 }
 
-export async function executeWithAgentLoop(
-  db: BetterSqlite3.Database,
-  delegation: KairosDelegation,
-  projectId: string,
-  workspacePath: string,
-  project: { readonly language: string; readonly framework: string; readonly repo_source: string; readonly base_branch: string },
-  startTime: number,
-  traceId?: string,
-): Promise<ExecutionResult> {
+export async function executeWithAgentLoop(ctx: ExecutorModeContext): Promise<ExecutionResult> {
+  const { db, delegation, projectId, workspacePath, project, startTime, traceId, emitter } = ctx;
   const { task } = delegation;
   const agentConfig = loadForgeAgentConfig();
 
@@ -227,5 +215,6 @@ export async function executeWithAgentLoop(
     parsed: agentResult.parsed, totalTokensUsed: agentResult.totalTokensUsed,
     lintOutput: agentResult.lintOutput ?? "", startTime,
     commitOptions: { baseBranch: project.base_branch },
+    emitter,
   });
 }

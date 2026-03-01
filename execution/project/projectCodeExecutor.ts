@@ -38,13 +38,15 @@ interface ExecutorRouteContext {
 async function routeToExecutor(ctx: ExecutorRouteContext): Promise<ExecutionResult> {
   const { executorMode, db, delegation, projectId, workspacePath, project, startTime, traceId, emitter } = ctx;
 
+  const modeCtx = { db, delegation, projectId, workspacePath, project, startTime, traceId, emitter };
+
   switch (executorMode) {
     case "openclaw":
-      return executeWithOpenClawMode(db, delegation, projectId, workspacePath, project, startTime, traceId);
+      return executeWithOpenClawMode(modeCtx);
     case "claude-cli":
-      return executeWithClaudeCliMode({ db, delegation, projectId, workspacePath, project, startTime, traceId, emitter });
+      return executeWithClaudeCliMode(modeCtx);
     default:
-      return executeWithAgentLoop(db, delegation, projectId, workspacePath, project, startTime, traceId);
+      return executeWithAgentLoop(modeCtx);
   }
 }
 

@@ -9,6 +9,7 @@ import {
   updatePullRequestStatus,
 } from "../state/pullRequests.js";
 import { sendTelegramMessage } from "../interfaces/telegram.js";
+import type { ExecutionEventEmitter } from "../execution/shared/executionEventEmitter.js";
 
 const DEFAULT_MAX_AUTO_RISK = 2;
 
@@ -80,6 +81,7 @@ function resolveBaseBranch(db: BetterSqlite3.Database, projectId: string | null)
 export async function createPRForCodeChange(
   db: BetterSqlite3.Database,
   changeId: string,
+  emitter?: ExecutionEventEmitter,
 ): Promise<PRActionResult> {
   const change = getCodeChangeById(db, changeId);
 
@@ -132,6 +134,11 @@ export async function createPRForCodeChange(
   if (change.risk > maxAutoRisk) {
     updatePullRequestStatus(db, prId, { status: "pending_approval" });
 
+    emitter?.warn("forge", "forge:pr_pending_approval", `PR pending approval (risk ${change.risk}/5 > limit ${maxAutoRisk})`, {
+      phase: "delivery",
+      metadata: { prId: prId.slice(0, 8), branchName: change.branch_name, risk: change.risk, maxAutoRisk, baseBranch },
+    });
+
     const message = [
       `*PR Pendente de Aprovacao*`,
       `ID: \`${prId.slice(0, 8)}\``,
@@ -157,7 +164,7 @@ export async function createPRForCodeChange(
     };
   }
 
-  return executePushAndCreatePR(db, prId, baseBranch);
+  return executePushAndCreatePR(db, prId, baseBranch, emitter);
 }
 
 export async function approvePR(
@@ -239,6 +246,7 @@ async function executePushAndCreatePR(
   db: BetterSqlite3.Database,
   prId: string,
   baseBranch = "main",
+  emitter?: ExecutionEventEmitter,
 ): Promise<PRActionResult> {
   const pr = getPullRequestById(db, prId);
 
@@ -246,15 +254,36 @@ async function executePushAndCreatePR(
     return { success: false, message: `PR "${prId}" nao encontrado.` };
   }
 
+  emitter?.info("forge", "forge:push_started", `Pushing branch ${pr.branch_name} to remote`, {
+    phase: "delivery",
+    metadata: { prId: prId.slice(0, 8), branchName: pr.branch_name },
+  });
+
   try {
     await pushBranch(pr.branch_name);
     logger.info({ prId, branchName: pr.branch_name }, "Branch pushed to remote");
+
+    emitter?.info("forge", "forge:push_completed", `Branch ${pr.branch_name} pushed to remote`, {
+      phase: "delivery",
+      metadata: { prId: prId.slice(0, 8), branchName: pr.branch_name },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     updatePullRequestStatus(db, prId, { status: "closed" });
     logger.error({ prId, error: message }, "Failed to push branch");
+
+    emitter?.error("forge", "forge:push_failed", `Push failed: ${message.slice(0, 200)}`, {
+      phase: "delivery",
+      metadata: { prId: prId.slice(0, 8), branchName: pr.branch_name, error: message.slice(0, 300) },
+    });
+
     return { success: false, message: `Erro ao fazer push: ${message}` };
   }
+
+  emitter?.info("forge", "forge:pr_creating", `Creating PR: ${pr.branch_name} → ${baseBranch}`, {
+    phase: "delivery",
+    metadata: { prId: prId.slice(0, 8), head: pr.branch_name, base: baseBranch },
+  });
 
   try {
     const ghPR = await createPullRequest({
@@ -275,6 +304,11 @@ async function executePushAndCreatePR(
       "Pull request created on GitHub",
     );
 
+    emitter?.info("forge", "forge:pr_created", `PR #${ghPR.number} created: ${ghPR.html_url}`, {
+      phase: "delivery",
+      metadata: { prId: prId.slice(0, 8), prNumber: ghPR.number, prUrl: ghPR.html_url, baseBranch },
+    });
+
     return {
       success: true,
       message: `PR #${ghPR.number} criado: ${ghPR.html_url}`,
@@ -284,6 +318,12 @@ async function executePushAndCreatePR(
     const message = error instanceof Error ? error.message : String(error);
     updatePullRequestStatus(db, prId, { status: "closed" });
     logger.error({ prId, error: message }, "Failed to create pull request on GitHub");
+
+    emitter?.error("forge", "forge:pr_failed", `PR creation failed: ${message.slice(0, 200)}`, {
+      phase: "delivery",
+      metadata: { prId: prId.slice(0, 8), error: message.slice(0, 300) },
+    });
+
     return { success: false, message: `Erro ao criar PR no GitHub: ${message}` };
   }
 }

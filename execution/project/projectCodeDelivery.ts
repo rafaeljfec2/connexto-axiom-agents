@@ -11,6 +11,7 @@ import {
 } from "./projectCodeApplier.js";
 import type { CommitOptions } from "./projectCodeApplier.js";
 import type { ExecutionResult } from "../shared/types.js";
+import type { ExecutionEventEmitter } from "../shared/executionEventEmitter.js";
 import { isImplementationTask, buildResult } from "./projectCodeHelpers.js";
 
 const MAX_FILES_PER_CHANGE = 5;
@@ -27,12 +28,13 @@ export interface SuccessfulAgentOutputContext {
   readonly startTime: number;
   readonly commitOptions?: CommitOptions;
   readonly maxFilesOverride?: number;
+  readonly emitter?: ExecutionEventEmitter;
 }
 
 export async function handleSuccessfulAgentOutput(
   ctx: SuccessfulAgentOutputContext,
 ): Promise<ExecutionResult> {
-  const { db, delegation, projectId, workspacePath, repoSource, parsed, totalTokensUsed, lintOutput, startTime } = ctx;
+  const { db, delegation, projectId, workspacePath, repoSource, parsed, totalTokensUsed, lintOutput, startTime, emitter } = ctx;
   const { task, goal_id } = delegation;
 
   if (parsed.files.length === 0) {
@@ -53,17 +55,31 @@ export async function handleSuccessfulAgentOutput(
   const maxFiles = ctx.maxFilesOverride ?? MAX_FILES_PER_CHANGE;
   if (parsed.files.length > maxFiles) {
     const executionTimeMs = Math.round(performance.now() - startTime);
+    emitter?.warn("forge", "forge:file_limit_exceeded", `Too many files: ${String(parsed.files.length)} (max ${String(maxFiles)})`, {
+      phase: "delivery",
+      metadata: { filesCount: parsed.files.length, maxFiles },
+    });
     return buildResult(task, "failed", "", `Too many files: ${String(parsed.files.length)} (max ${String(maxFiles)})`, executionTimeMs, totalTokensUsed);
   }
 
   const riskResult = validateAndCalculateRisk(parsed.files, workspacePath);
   if (!riskResult.valid) {
     const executionTimeMs = Math.round(performance.now() - startTime);
+    emitter?.error("forge", "forge:path_validation_failed", `Path validation failed: ${riskResult.errors.join("; ")}`, {
+      phase: "delivery",
+      metadata: { errors: riskResult.errors },
+    });
     return buildResult(task, "failed", "", `Path validation failed: ${riskResult.errors.join("; ")}`, executionTimeMs, totalTokensUsed);
   }
 
   const effectiveRisk = Math.max(riskResult.risk, parsed.risk);
   const filePaths = parsed.files.map((f) => f.path);
+
+  emitter?.info("forge", "forge:risk_assessed", `Risk assessed: ${String(effectiveRisk)}/5 for ${String(filePaths.length)} files`, {
+    phase: "delivery",
+    metadata: { risk: effectiveRisk, filesCount: filePaths.length, files: filePaths },
+  });
+
   const pendingFilesJson = JSON.stringify(
     parsed.files.map((f) => ({ path: f.path, action: f.action, content: f.content, edits: f.edits })),
   );
@@ -86,6 +102,11 @@ export async function handleSuccessfulAgentOutput(
     runtime: "openclaw",
   });
 
+  emitter?.info("forge", "forge:change_saved", `Code change saved: ${changeId.slice(0, 8)}`, {
+    phase: "delivery",
+    metadata: { changeId: changeId.slice(0, 8), description: parsed.description.slice(0, 120) },
+  });
+
   const commitResult = await commitVerifiedChanges({
     db, changeId, description: parsed.description, filePaths, workspacePath, lintOutput, repoSource,
     options: ctx.commitOptions,
@@ -98,17 +119,37 @@ export async function handleSuccessfulAgentOutput(
       testOutput: commitResult.lintOutput,
       error: commitResult.error ?? "Commit failed after agent loop",
     });
+    emitter?.error("forge", "forge:commit_failed", `Commit failed: ${commitResult.error ?? "unknown"}`, {
+      phase: "delivery",
+      metadata: { changeId: changeId.slice(0, 8), error: commitResult.error },
+    });
     return buildResult(task, "failed", "", `Project code change commit failed: ${commitResult.error ?? "unknown"}`, executionTimeMs, totalTokensUsed);
   }
+
+  emitter?.info("forge", "forge:commit_success", `Changes committed to branch`, {
+    phase: "delivery",
+    metadata: { changeId: changeId.slice(0, 8), filesCount: filePaths.length },
+  });
 
   if (effectiveRisk >= 3) {
     updateCodeChangeStatus(db, changeId, { status: "pending_approval" });
     const approvalMessage = formatApprovalRequest(changeId, parsed, effectiveRisk, projectId);
     await sendTelegramMessage(approvalMessage);
     const executionTimeMs = Math.round(performance.now() - startTime);
+
+    emitter?.warn("forge", "forge:approval_required", `High risk (${String(effectiveRisk)}/5) — awaiting human approval`, {
+      phase: "delivery",
+      metadata: { changeId: changeId.slice(0, 8), risk: effectiveRisk, projectId },
+    });
+
     logger.info({ changeId, risk: effectiveRisk, projectId }, "Project code change committed to branch but requires approval");
     return buildResult(task, "success", `Aguardando aprovacao (risk=${String(effectiveRisk)}, project=${projectId}). Change ID: ${changeId.slice(0, 8)}`, undefined, executionTimeMs, totalTokensUsed);
   }
+
+  emitter?.info("forge", "forge:change_applied", `Change applied automatically (risk ${String(effectiveRisk)}/5)`, {
+    phase: "delivery",
+    metadata: { changeId: changeId.slice(0, 8), risk: effectiveRisk, filesCount: filePaths.length },
+  });
 
   const executionTimeMs = Math.round(performance.now() - startTime);
   logger.info({ changeId, files: filePaths, projectId }, "Project code change committed");
