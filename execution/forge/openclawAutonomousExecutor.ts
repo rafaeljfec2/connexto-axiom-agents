@@ -1,6 +1,4 @@
 import type BetterSqlite3 from "better-sqlite3";
-import fsPromises from "node:fs/promises";
-import path from "node:path";
 import { logger } from "../../config/logger.js";
 import type { KairosDelegation } from "../../orchestration/types.js";
 import type { Project } from "../../state/projects.js";
@@ -9,373 +7,33 @@ import { getGoalById } from "../../state/goals.js";
 import { discoverProjectStructure } from "../discovery/fileDiscovery.js";
 import { buildRepositoryIndex, formatIndexForPrompt } from "../discovery/repositoryIndexer.js";
 import { checkBaselineBuild } from "./forgeValidation.js";
-import { callOpenClawWithTools } from "../shared/openclawResponsesClient.js";
-import type {
-  ResponseItem,
-  OpenClawToolResponse,
-  ToolCall,
-  ToolDefinition,
-} from "../shared/openclawResponsesClient.js";
 import { getAllToolDefinitions } from "./openclawTools.js";
-import { createDefaultConfig, executeTool } from "./openclawToolExecutor.js";
-import type { ToolExecutorConfig } from "./openclawToolExecutor.js";
+import { createDefaultConfig } from "./openclawToolExecutor.js";
 import { buildOpenClawInstructions, classifyTaskType } from "./openclawInstructions.js";
 import { loadAndSelectReferences } from "./referenceLoader.js";
 import { loadManifest } from "../../projects/manifestLoader.js";
 import type { NexusResearchContext, GoalContext, ForgeCodeOutput } from "./forgeTypes.js";
-import { runValidationCycle, DEFAULT_VALIDATIONS } from "./openclawValidation.js";
 import type { ValidationResults, ExecutionStatus } from "./openclawValidation.js";
-import { runHeuristicReview, formatReviewForCorrection } from "./openclawReview.js";
 import type { ReviewResult } from "./openclawReview.js";
 import {
   writeExecutionPlan,
   writeReviewReport,
   writeChangesManifest,
 } from "./openclawArtifacts.js";
+import {
+  copyWorkspaceToSandbox,
+  syncChangesBack,
+  cleanupSandboxProjectFiles,
+} from "./openclawSandboxManager.js";
+import { buildInitialInput, runToolLoop } from "./openclawToolLoop.js";
+import type { LoopContext, ToolLoopState } from "./openclawToolLoop.js";
+import { runCorrectionLoop, runPostCorrectionReview } from "./openclawCorrectionHandler.js";
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 const DEFAULT_MAX_ITERATIONS = 20;
 const DEFAULT_MAX_TASK_TIMEOUT_MS = 300_000;
 const DEFAULT_PER_TASK_TOKEN_LIMIT = 50_000;
 const REPO_INDEX_MAX_CHARS = 3000;
-
-const OPENCLAW_SANDBOX_BASE = path.resolve(process.cwd(), "sandbox", "forge");
-const OPENCLAW_SANDBOX_NESTED = path.join(OPENCLAW_SANDBOX_BASE, "sandbox", "forge");
-
-const SKIP_DIRS = new Set([
-  "node_modules",
-  ".git",
-  "dist",
-  "build",
-  ".next",
-  ".turbo",
-  ".cache",
-  ".pnpm-store",
-  "coverage",
-  ".nyc_output",
-  "sandbox",
-  ".axiom",
-]);
-
-const PROJECT_TREE_FILENAME = "_PROJECT_TREE.txt";
-
-const OPENCLAW_AGENT_FILES = new Set([
-  "AGENTS.md",
-  "BOOTSTRAP.md",
-  "HEARTBEAT.md",
-  "IDENTITY.md",
-  "SOUL.md",
-  "TOOLS.md",
-  "USER.md",
-  "MEMORY.md",
-  "memory",
-  PROJECT_TREE_FILENAME,
-]);
-
-let resolvedAgentWorkspace = OPENCLAW_SANDBOX_NESTED;
-let copiedProjectEntries: string[] = [];
-let preExistingSandboxEntries: Set<string> = new Set();
-
-function getSandboxTargets(): readonly string[] {
-  return [OPENCLAW_SANDBOX_BASE, OPENCLAW_SANDBOX_NESTED];
-}
-
-async function copyWorkspaceToSandbox(workspacePath: string): Promise<void> {
-  const targets = getSandboxTargets();
-
-  copiedProjectEntries = [];
-
-  const entries = await fsPromises.readdir(workspacePath, { withFileTypes: true });
-  const filteredEntries = entries.filter(
-    (e) => !SKIP_DIRS.has(e.name) && !e.isSymbolicLink() && !OPENCLAW_AGENT_FILES.has(e.name),
-  );
-
-  for (const target of targets) {
-    await fsPromises.mkdir(target, { recursive: true });
-  }
-
-  const existingEntries = await fsPromises.readdir(OPENCLAW_SANDBOX_BASE).catch(() => []);
-  const existingNested = await fsPromises.readdir(OPENCLAW_SANDBOX_NESTED).catch(() => []);
-  preExistingSandboxEntries = new Set([...existingEntries, ...existingNested]);
-
-  for (const entry of filteredEntries) {
-    const srcPath = path.join(workspacePath, entry.name);
-
-    for (const target of targets) {
-      const destPath = path.join(target, entry.name);
-
-      if (entry.isDirectory()) {
-        await fsPromises.mkdir(destPath, { recursive: true });
-        await copyDirectoryRecursive(srcPath, destPath);
-      } else if (entry.isFile()) {
-        await fsPromises.copyFile(srcPath, destPath);
-      }
-    }
-
-    copiedProjectEntries.push(entry.name);
-  }
-
-  for (const target of targets) {
-    await generateProjectTreeAt(workspacePath, target);
-  }
-
-  resolvedAgentWorkspace = OPENCLAW_SANDBOX_NESTED;
-
-  logger.info(
-    {
-      targets,
-      source: workspacePath,
-      copiedEntries: copiedProjectEntries.length,
-    },
-    "Copied project workspace to BOTH OpenClaw sandbox locations",
-  );
-}
-
-const PROJECT_TREE_MAX_DEPTH = 5;
-const PROJECT_TREE_MAX_ENTRIES = 500;
-
-async function generateProjectTreeAt(workspacePath: string, targetDir: string): Promise<void> {
-  const lines: string[] = [
-    "# Project Directory Structure",
-    "# Read this file FIRST to understand the project layout.",
-    "# Use exact file paths from this listing when reading files.",
-    "",
-  ];
-
-  let entryCount = 0;
-
-  async function walk(dir: string, prefix: string, depth: number): Promise<void> {
-    if (depth > PROJECT_TREE_MAX_DEPTH || entryCount >= PROJECT_TREE_MAX_ENTRIES) return;
-
-    const entries = await fsPromises.readdir(dir, { withFileTypes: true }).catch(() => []);
-    const filtered = entries
-      .filter(
-        (e) => !SKIP_DIRS.has(e.name) && !e.isSymbolicLink() && !OPENCLAW_AGENT_FILES.has(e.name),
-      )
-      .sort((a, b) => {
-        if (a.isDirectory() && !b.isDirectory()) return -1;
-        if (!a.isDirectory() && b.isDirectory()) return 1;
-        return a.name.localeCompare(b.name);
-      });
-
-    for (const entry of filtered) {
-      if (entryCount >= PROJECT_TREE_MAX_ENTRIES) {
-        lines.push(`${prefix}... (truncated)`);
-        return;
-      }
-
-      const isDir = entry.isDirectory();
-      lines.push(`${prefix}${isDir ? "📁 " : ""}${entry.name}${isDir ? "/" : ""}`);
-      entryCount++;
-
-      if (isDir) {
-        await walk(path.join(dir, entry.name), `${prefix}  `, depth + 1);
-      }
-    }
-  }
-
-  await walk(workspacePath, "", 0);
-
-  const treePath = path.join(targetDir, PROJECT_TREE_FILENAME);
-  await fsPromises.writeFile(treePath, lines.join("\n"), "utf-8");
-
-  logger.debug({ entries: entryCount }, "Generated project tree file for sandbox");
-}
-
-async function copyDirectoryRecursive(src: string, dest: string): Promise<void> {
-  const entries = await fsPromises.readdir(src, { withFileTypes: true });
-
-  for (const entry of entries) {
-    if (SKIP_DIRS.has(entry.name)) continue;
-    if (entry.isSymbolicLink()) continue;
-
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-
-    if (entry.isDirectory()) {
-      await fsPromises.mkdir(destPath, { recursive: true });
-      await copyDirectoryRecursive(srcPath, destPath);
-    } else if (entry.isFile()) {
-      await fsPromises.copyFile(srcPath, destPath);
-    }
-  }
-}
-
-async function syncCopiedEntriesFrom(
-  target: string,
-  workspacePath: string,
-  changedFiles: string[],
-  alreadySynced: Set<string>,
-): Promise<void> {
-  for (const entryName of copiedProjectEntries) {
-    if (alreadySynced.has(entryName)) continue;
-
-    const sandboxPath = path.join(target, entryName);
-    const workspaceEntryPath = path.join(workspacePath, entryName);
-    const stat = await fsPromises.lstat(sandboxPath).catch(() => null);
-    if (!stat) continue;
-
-    if (stat.isDirectory()) {
-      const beforeCount = changedFiles.length;
-      await diffAndCopyBack(sandboxPath, workspaceEntryPath, entryName, changedFiles);
-      if (changedFiles.length > beforeCount) alreadySynced.add(entryName);
-    } else if (stat.isFile()) {
-      const changed = await isFileChanged(sandboxPath, workspaceEntryPath);
-      if (changed) {
-        await fsPromises.copyFile(sandboxPath, workspaceEntryPath);
-        changedFiles.push(entryName);
-        alreadySynced.add(entryName);
-      }
-    }
-  }
-}
-
-async function syncChangesBack(workspacePath: string): Promise<readonly string[]> {
-  const changedFiles: string[] = [];
-  const alreadySynced = new Set<string>();
-
-  try {
-    for (const target of getSandboxTargets()) {
-      await syncCopiedEntriesFrom(target, workspacePath, changedFiles, alreadySynced);
-      await syncNewFilesFrom(target, workspacePath, changedFiles, alreadySynced);
-    }
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    logger.error({ error: msg }, "Failed to sync changes back from sandbox");
-  }
-
-  if (changedFiles.length > 0) {
-    logger.info(
-      { count: changedFiles.length, files: changedFiles.slice(0, 20) },
-      "Synced changed files back from OpenClaw sandbox",
-    );
-  }
-
-  return changedFiles;
-}
-
-const EXCLUDED_ROOT_EXTENSIONS = new Set([".md", ".sh", ".txt", ".log"]);
-
-function isExcludedRootFile(name: string): boolean {
-  const ext = path.extname(name).toLowerCase();
-  return EXCLUDED_ROOT_EXTENSIONS.has(ext);
-}
-
-function isNewSyncableEntry(
-  entry: { readonly name: string; isSymbolicLink(): boolean },
-  known: ReadonlySet<string>,
-  alreadySynced: ReadonlySet<string>,
-): boolean {
-  if (known.has(entry.name)) return false;
-  if (alreadySynced.has(entry.name)) return false;
-  if (SKIP_DIRS.has(entry.name)) return false;
-  if (entry.isSymbolicLink()) return false;
-  if (isExcludedRootFile(entry.name)) return false;
-  if (preExistingSandboxEntries.has(entry.name)) return false;
-  return true;
-}
-
-async function syncNewFilesFrom(
-  sandboxTarget: string,
-  workspacePath: string,
-  changedFiles: string[],
-  alreadySynced: Set<string>,
-): Promise<void> {
-  const sandboxEntries = await fsPromises
-    .readdir(sandboxTarget, { withFileTypes: true })
-    .catch(() => []);
-  const known = new Set([...copiedProjectEntries, ...OPENCLAW_AGENT_FILES]);
-
-  for (const entry of sandboxEntries) {
-    if (!isNewSyncableEntry(entry, known, alreadySynced)) continue;
-
-    const sandboxPath = path.join(sandboxTarget, entry.name);
-    const workspaceEntryPath = path.join(workspacePath, entry.name);
-
-    if (entry.isDirectory()) {
-      await fsPromises.mkdir(workspaceEntryPath, { recursive: true });
-      await copyDirectoryRecursive(sandboxPath, workspaceEntryPath);
-    } else if (entry.isFile()) {
-      await fsPromises.copyFile(sandboxPath, workspaceEntryPath);
-    } else {
-      continue;
-    }
-
-    changedFiles.push(entry.name);
-    alreadySynced.add(entry.name);
-  }
-}
-
-async function diffAndCopyBack(
-  sandboxDir: string,
-  workspaceDir: string,
-  relativePath: string,
-  changedFiles: string[],
-): Promise<void> {
-  const entries = await fsPromises.readdir(sandboxDir, { withFileTypes: true });
-
-  for (const entry of entries) {
-    if (SKIP_DIRS.has(entry.name)) continue;
-    if (entry.isSymbolicLink()) continue;
-
-    const sandboxPath = path.join(sandboxDir, entry.name);
-    const workspacePath = path.join(workspaceDir, entry.name);
-    const relPath = `${relativePath}/${entry.name}`;
-
-    if (entry.isDirectory()) {
-      await fsPromises.mkdir(workspacePath, { recursive: true });
-      await diffAndCopyBack(sandboxPath, workspacePath, relPath, changedFiles);
-      continue;
-    }
-
-    if (!entry.isFile()) continue;
-
-    const changed = await isFileChanged(sandboxPath, workspacePath);
-    if (changed) {
-      await fsPromises.mkdir(path.dirname(workspacePath), { recursive: true });
-      await fsPromises.copyFile(sandboxPath, workspacePath);
-      changedFiles.push(relPath);
-    }
-  }
-}
-
-async function isFileChanged(sandboxFile: string, workspaceFile: string): Promise<boolean> {
-  try {
-    const [sandboxContent, workspaceContent] = await Promise.all([
-      fsPromises.readFile(sandboxFile),
-      fsPromises.readFile(workspaceFile).catch(() => null),
-    ]);
-
-    if (!workspaceContent) return true;
-
-    return !sandboxContent.equals(workspaceContent);
-  } catch {
-    return true;
-  }
-}
-
-async function cleanupSandboxProjectFiles(): Promise<void> {
-  try {
-    for (const target of getSandboxTargets()) {
-      for (const entryName of copiedProjectEntries) {
-        const entryPath = path.join(target, entryName);
-        const stat = await fsPromises.lstat(entryPath).catch(() => null);
-        if (!stat) continue;
-        await fsPromises.rm(entryPath, { recursive: true, force: true });
-      }
-
-      const treeFilePath = path.join(target, PROJECT_TREE_FILENAME);
-      await fsPromises.rm(treeFilePath, { force: true }).catch(() => {});
-    }
-
-    copiedProjectEntries = [];
-    preExistingSandboxEntries = new Set();
-    logger.debug("Removed project files from OpenClaw sandbox (both locations)");
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    logger.warn({ error: msg }, "Failed to clean up sandbox project files");
-  }
-}
 
 export interface OpenClawExecutorConfig {
   readonly maxOutputTokens: number;
@@ -403,6 +61,18 @@ export interface OpenClawExecutionResult {
   readonly error?: string;
 }
 
+export interface OpenClawLoopParams {
+  readonly db: BetterSqlite3.Database;
+  readonly delegation: KairosDelegation;
+  readonly project: Project;
+  readonly workspacePath: string;
+  readonly config: OpenClawExecutorConfig;
+  readonly startTime: number;
+  readonly traceId?: string;
+}
+
+export type OpenClawLoopExecutor = (params: OpenClawLoopParams) => Promise<OpenClawExecutionResult>;
+
 function loadExecutorConfig(): OpenClawExecutorConfig {
   return {
     maxOutputTokens: Number(process.env.OPENCLAW_MAX_OUTPUT_TOKENS ?? DEFAULT_MAX_OUTPUT_TOKENS),
@@ -420,7 +90,6 @@ function loadNexusResearchForGoal(
 ): readonly NexusResearchContext[] {
   const research = getResearchByGoalId(db, goalId);
   if (research.length === 0) return [];
-
   return research.map((r) => ({
     question: r.question,
     recommendation: r.recommendation,
@@ -431,7 +100,6 @@ function loadNexusResearchForGoal(
 function loadGoalContext(db: BetterSqlite3.Database, goalId: string): GoalContext | undefined {
   const goal = getGoalById(db, goalId);
   if (!goal) return undefined;
-
   return { title: goal.title, description: goal.description };
 }
 
@@ -445,288 +113,6 @@ async function buildRepositoryIndexSummary(workspacePath: string): Promise<strin
     logger.warn({ error: msg }, "Failed to build repository index for OpenClaw instructions");
     return "";
   }
-}
-
-function buildInitialInput(task: string, expectedOutput: string): readonly ResponseItem[] {
-  return [
-    {
-      role: "user",
-      content: [
-        "IMPLEMENT the following task by making actual code changes using your tools:",
-        "",
-        task,
-        "",
-        expectedOutput ? `Expected output: ${expectedOutput}` : "",
-        "",
-        "INSTRUCTIONS:",
-        `1. Start by calling read_file("${PROJECT_TREE_FILENAME}") to see the project structure.`,
-        "2. Read the relevant source files to understand the current code.",
-        "3. Use edit_file or write_file to make the required changes.",
-        "4. Verify your changes with run_command.",
-        "",
-        "CRITICAL: You MUST call tools to read and modify files. Do NOT just write a plan or explanation.",
-        "If you respond with only text and no tool calls, the task will be marked as FAILED.",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    },
-  ];
-}
-
-function buildToolResultItems(
-  toolCalls: readonly ToolCall[],
-  toolResults: readonly string[],
-): readonly ResponseItem[] {
-  return toolCalls.map((tc, i) => ({
-    role: "tool" as const,
-    content: toolResults[i],
-    tool_call_id: tc.callId,
-  }));
-}
-
-const SLIDING_WINDOW_THRESHOLD = 5;
-const SLIDING_WINDOW_KEEP_RECENT = 3;
-
-interface ToolLoopState {
-  conversationHistory: ResponseItem[];
-  totalTokensUsed: number;
-  iterationsUsed: number;
-  lastResponse: OpenClawToolResponse | null;
-}
-
-function pruneConversationHistory(state: ToolLoopState): void {
-  const history = state.conversationHistory;
-  const minEntriesForPruning = (SLIDING_WINDOW_KEEP_RECENT * 2) + 2;
-  if (history.length <= minEntriesForPruning) return;
-
-  const initialMessages = history.slice(0, 1);
-
-  const recentCount = SLIDING_WINDOW_KEEP_RECENT * 2;
-  const recentMessages = history.slice(-recentCount);
-
-  const middleMessages = history.slice(1, -recentCount);
-
-  const summaryParts: string[] = [];
-  for (const msg of middleMessages) {
-    if (msg.role === "assistant" && msg.tool_calls) {
-      const toolNames = msg.tool_calls.map((tc) => tc.function?.name ?? "unknown").join(", ");
-      summaryParts.push(`Called tools: ${toolNames}`);
-    } else if (msg.role === "tool") {
-      const preview = msg.content.length > 100
-        ? `${msg.content.slice(0, 100)}...`
-        : msg.content;
-      summaryParts.push(`Tool result: ${preview}`);
-    }
-  }
-
-  const summaryContent = [
-    `[CONTEXT SUMMARY: ${middleMessages.length} messages pruned for token efficiency]`,
-    summaryParts.slice(0, 10).join("\n"),
-  ].join("\n");
-
-  const summaryItem: ResponseItem = {
-    role: "user",
-    content: summaryContent,
-  };
-
-  const prunedLength = history.length;
-  state.conversationHistory = [...initialMessages, summaryItem, ...recentMessages];
-
-  logger.info(
-    { before: prunedLength, after: state.conversationHistory.length, pruned: middleMessages.length },
-    "Conversation history pruned (sliding window)",
-  );
-}
-
-async function executeToolCalls(
-  toolExecutorConfig: ToolExecutorConfig,
-  toolCalls: readonly ToolCall[],
-): Promise<readonly string[]> {
-  const results: string[] = [];
-
-  for (const tc of toolCalls) {
-    const result = await executeTool(toolExecutorConfig, tc);
-    results.push(result);
-
-    logger.debug(
-      { tool: tc.name, callId: tc.callId, resultLen: result.length },
-      "Tool call executed",
-    );
-  }
-
-  return results;
-}
-
-function checkBudgetExceeded(state: ToolLoopState, config: OpenClawExecutorConfig): string | null {
-  if (state.totalTokensUsed >= config.perTaskTokenLimit) {
-    return `Token budget exceeded: ${String(state.totalTokensUsed)} / ${String(config.perTaskTokenLimit)}`;
-  }
-
-  if (state.iterationsUsed >= config.maxIterations) {
-    return `Max iterations reached: ${String(state.iterationsUsed)} / ${String(config.maxIterations)}`;
-  }
-
-  return null;
-}
-
-function extractFinalDescription(response: OpenClawToolResponse): string {
-  return response.text ?? "Task completed (no summary provided by agent)";
-}
-
-interface LoopContext {
-  readonly config: OpenClawExecutorConfig;
-  readonly instructions: string;
-  readonly tools: readonly ToolDefinition[];
-  readonly toolExecutorConfig: ToolExecutorConfig;
-  readonly workspacePath: string;
-  readonly traceId?: string;
-  readonly startTime: number;
-}
-
-type IterationOutcome =
-  | { readonly done: false }
-  | { readonly done: true; readonly result: OpenClawExecutionResult };
-
-function handleFailedResponse(
-  response: OpenClawToolResponse,
-  state: ToolLoopState,
-): IterationOutcome {
-  return {
-    done: true,
-    result: {
-      success: false,
-      status: "FAILURE",
-      description: "",
-      filesChanged: [],
-      totalTokensUsed: state.totalTokensUsed,
-      iterationsUsed: state.iterationsUsed,
-      validations: DEFAULT_VALIDATIONS,
-      correctionCycles: 0,
-      error: response.text ?? "OpenClaw agent returned failed status",
-    },
-  };
-}
-
-async function handleCompletedResponse(
-  response: OpenClawToolResponse,
-  state: ToolLoopState,
-  ctx: LoopContext,
-): Promise<IterationOutcome> {
-  const description = extractFinalDescription(response);
-  const elapsed = Math.round(performance.now() - ctx.startTime);
-
-  logger.info(
-    {
-      iterations: state.iterationsUsed,
-      tokens: state.totalTokensUsed,
-      elapsed,
-    },
-    "OpenClaw autonomous execution completed — file sync will determine final result",
-  );
-
-  return {
-    done: true,
-    result: {
-      success: true,
-      status: "SUCCESS",
-      description,
-      filesChanged: [],
-      totalTokensUsed: state.totalTokensUsed,
-      iterationsUsed: state.iterationsUsed,
-      validations: DEFAULT_VALIDATIONS,
-      correctionCycles: 0,
-    },
-  };
-}
-
-async function handleToolCallResponse(
-  response: OpenClawToolResponse,
-  state: ToolLoopState,
-  ctx: LoopContext,
-): Promise<void> {
-  const toolCalls = response.toolCalls ?? [];
-  const toolResults = await executeToolCalls(ctx.toolExecutorConfig, toolCalls);
-
-  if (response.rawAssistantMessage) {
-    state.conversationHistory.push({
-      role: "assistant",
-      content: response.rawAssistantMessage.content ?? "",
-      tool_calls: response.rawAssistantMessage.tool_calls,
-    });
-  }
-
-  const resultItems = buildToolResultItems(toolCalls, toolResults);
-  state.conversationHistory.push(...resultItems);
-}
-
-async function processIteration(state: ToolLoopState, ctx: LoopContext): Promise<IterationOutcome> {
-  const response = await callOpenClawWithTools({
-    agentId: "forge",
-    input: state.conversationHistory,
-    instructions: ctx.instructions,
-    tools: ctx.tools,
-    maxOutputTokens: ctx.config.maxOutputTokens,
-    traceId: ctx.traceId,
-  });
-
-  state.lastResponse = response;
-  state.iterationsUsed++;
-
-  if (response.usage) {
-    state.totalTokensUsed += response.usage.totalTokens;
-  }
-
-  logger.info(
-    {
-      iteration: state.iterationsUsed,
-      status: response.status,
-      toolCalls: response.toolCalls?.length ?? 0,
-      tokens: state.totalTokensUsed,
-    },
-    "OpenClaw iteration completed",
-  );
-
-  if (response.status === "failed") return handleFailedResponse(response, state);
-  if (response.status === "completed") return handleCompletedResponse(response, state, ctx);
-
-  if (
-    response.status === "requires_action" &&
-    response.toolCalls &&
-    response.toolCalls.length > 0
-  ) {
-    await handleToolCallResponse(response, state, ctx);
-    return { done: false };
-  }
-
-  logger.warn(
-    { status: response.status, iteration: state.iterationsUsed },
-    "Unexpected status, treating as completed",
-  );
-  return {
-    done: true,
-    result: {
-      success: true,
-      status: "SUCCESS",
-      description: response.text ?? "Unexpected completion",
-      filesChanged: [],
-      totalTokensUsed: state.totalTokensUsed,
-      iterationsUsed: state.iterationsUsed,
-      validations: DEFAULT_VALIDATIONS,
-      correctionCycles: 0,
-    },
-  };
-}
-
-const MAX_CORRECTION_CYCLES = 5;
-
-interface OpenClawLoopParams {
-  readonly db: BetterSqlite3.Database;
-  readonly delegation: KairosDelegation;
-  readonly project: Project;
-  readonly workspacePath: string;
-  readonly config: OpenClawExecutorConfig;
-  readonly startTime: number;
-  readonly traceId?: string;
 }
 
 export async function executeWithOpenClaw(
@@ -749,7 +135,6 @@ export async function executeWithOpenClaw(
   );
 
   const startTime = performance.now();
-
   const taskType = classifyTaskType(delegation.task);
 
   await writeExecutionPlan(workspacePath, {
@@ -760,21 +145,16 @@ export async function executeWithOpenClaw(
 
   await copyWorkspaceToSandbox(workspacePath);
   logger.info(
-    { sandboxPath: resolvedAgentWorkspace, workspacePath, taskType },
+    { workspacePath, taskType },
     "OpenClaw sandbox workspace prepared",
   );
 
-  try {
-    const result = await executeOpenClawLoop({
-      db,
-      delegation,
-      project,
-      workspacePath,
-      config,
-      startTime,
-      traceId,
-    });
+  const loopParams: OpenClawLoopParams = {
+    db, delegation, project, workspacePath, config, startTime, traceId,
+  };
 
+  try {
+    const result = await executeOpenClawLoop(loopParams);
     const syncedFiles = await syncChangesBack(workspacePath);
     const mergedResult = mergeWithSyncedFiles(result, syncedFiles);
 
@@ -784,18 +164,15 @@ export async function executeWithOpenClaw(
 
     await writeChangesManifest(workspacePath, [...mergedResult.filesChanged]);
 
-    const loopParams: OpenClawLoopParams = {
-      db,
-      delegation,
-      project,
-      workspacePath,
-      config,
-      startTime,
-      traceId,
-    };
-    const correctedResult = await runCorrectionLoop({ initialResult: mergedResult, loopParams });
+    const correctedResult = await runCorrectionLoop({
+      initialResult: mergedResult,
+      loopParams,
+      loopExecutor: executeOpenClawLoop,
+    });
 
-    const reviewedResult = await runPostCorrectionReview(correctedResult, loopParams);
+    const reviewedResult = await runPostCorrectionReview(
+      correctedResult, loopParams, executeOpenClawLoop,
+    );
 
     if (reviewedResult.review) {
       await writeReviewReport(workspacePath, reviewedResult.review);
@@ -826,175 +203,6 @@ function mergeWithSyncedFiles(
   }
 
   return result;
-}
-
-interface CorrectionLoopContext {
-  readonly initialResult: OpenClawExecutionResult;
-  readonly loopParams: Omit<OpenClawLoopParams, "startTime"> & { readonly startTime: number };
-}
-
-async function runCorrectionLoop(ctx: CorrectionLoopContext): Promise<OpenClawExecutionResult> {
-  const { initialResult, loopParams } = ctx;
-  const { workspacePath, config } = loopParams;
-
-  let currentResult = initialResult;
-  let correctionCycles = 0;
-  let validations = DEFAULT_VALIDATIONS;
-
-  for (let cycle = 0; cycle < MAX_CORRECTION_CYCLES; cycle++) {
-    const validation = await runValidationCycle(workspacePath, currentResult.filesChanged);
-    validations = validation.results;
-
-    if (validation.passed) {
-      logger.info({ cycle, validations }, "All validations passed");
-      return { ...currentResult, status: "SUCCESS", validations, correctionCycles };
-    }
-
-    correctionCycles++;
-    logger.warn(
-      { cycle: correctionCycles, maxCycles: MAX_CORRECTION_CYCLES, validations },
-      "Validation failed, starting correction cycle",
-    );
-
-    const elapsed = performance.now() - loopParams.startTime;
-    if (elapsed >= config.taskTimeoutMs) {
-      logger.warn(
-        { elapsed, timeout: config.taskTimeoutMs },
-        "Timeout reached during correction cycle",
-      );
-      break;
-    }
-
-    await copyWorkspaceToSandbox(workspacePath);
-
-    const correctionResult = await executeCorrectionLoop(
-      loopParams,
-      validation.errorOutput,
-      currentResult.filesChanged,
-    );
-
-    const syncedFiles = await syncChangesBack(workspacePath);
-
-    currentResult = {
-      ...correctionResult,
-      filesChanged: syncedFiles.length > 0 ? syncedFiles : currentResult.filesChanged,
-      totalTokensUsed: currentResult.totalTokensUsed + correctionResult.totalTokensUsed,
-      iterationsUsed: currentResult.iterationsUsed + correctionResult.iterationsUsed,
-    };
-  }
-
-  const anyFailed =
-    validations.lint === "fail" || validations.build === "fail" || validations.tests === "fail";
-  const finalStatus: ExecutionStatus = anyFailed ? "PARTIAL_SUCCESS" : "SUCCESS";
-
-  return { ...currentResult, status: finalStatus, validations, correctionCycles };
-}
-
-const MAX_REVIEW_CORRECTION_ATTEMPTS = 2;
-
-async function runPostCorrectionReview(
-  result: OpenClawExecutionResult,
-  loopParams: OpenClawLoopParams,
-): Promise<OpenClawExecutionResult> {
-  if (!result.success && result.status === "FAILURE") {
-    return result;
-  }
-
-  if (result.filesChanged.length === 0) {
-    return result;
-  }
-
-  const review = await runHeuristicReview(loopParams.workspacePath, result.filesChanged);
-
-  if (review.passed) {
-    return { ...result, review };
-  }
-
-  const correctionContext = formatReviewForCorrection(review);
-  if (!correctionContext) {
-    return { ...result, review };
-  }
-
-  logger.warn(
-    { criticalCount: review.criticalCount, warningCount: review.warningCount },
-    "Heuristic review found CRITICAL issues — triggering correction",
-  );
-
-  for (let attempt = 0; attempt < MAX_REVIEW_CORRECTION_ATTEMPTS; attempt++) {
-    const elapsed = performance.now() - loopParams.startTime;
-    if (elapsed >= loopParams.config.taskTimeoutMs) {
-      logger.warn({ elapsed }, "Timeout during review correction");
-      break;
-    }
-
-    await copyWorkspaceToSandbox(loopParams.workspacePath);
-
-    const correctionResult = await executeReviewCorrectionLoop(
-      loopParams,
-      correctionContext,
-      result.filesChanged,
-    );
-    const syncedFiles = await syncChangesBack(loopParams.workspacePath);
-
-    const updatedResult: OpenClawExecutionResult = {
-      ...result,
-      filesChanged: syncedFiles.length > 0 ? syncedFiles : result.filesChanged,
-      totalTokensUsed: result.totalTokensUsed + correctionResult.totalTokensUsed,
-      iterationsUsed: result.iterationsUsed + correctionResult.iterationsUsed,
-    };
-
-    const retryReview = await runHeuristicReview(
-      loopParams.workspacePath,
-      updatedResult.filesChanged,
-    );
-
-    if (retryReview.passed) {
-      logger.info({ attempt: attempt + 1 }, "Review correction resolved all CRITICAL issues");
-      return { ...updatedResult, review: retryReview };
-    }
-
-    logger.warn(
-      { attempt: attempt + 1, criticalCount: retryReview.criticalCount },
-      "Review correction did not resolve all issues",
-    );
-    result = { ...updatedResult, review: retryReview };
-  }
-
-  return { ...result, review, status: "PARTIAL_SUCCESS" };
-}
-
-async function executeReviewCorrectionLoop(
-  baseParams: OpenClawLoopParams,
-  reviewFindings: string,
-  changedFiles: readonly string[],
-): Promise<OpenClawExecutionResult> {
-  const correctionParams: OpenClawLoopParams = {
-    ...baseParams,
-    delegation: {
-      ...baseParams.delegation,
-      task: `FIX CODE REVIEW FINDINGS in previous changes:\n\n${reviewFindings}\n\nFiles changed: ${changedFiles.join(", ")}`,
-      expected_output: "Fix the critical review findings. Do not change unrelated code.",
-    },
-  };
-
-  return executeOpenClawLoop(correctionParams);
-}
-
-async function executeCorrectionLoop(
-  baseParams: OpenClawLoopParams,
-  validationErrors: string,
-  changedFiles: readonly string[],
-): Promise<OpenClawExecutionResult> {
-  const correctionParams: OpenClawLoopParams = {
-    ...baseParams,
-    delegation: {
-      ...baseParams.delegation,
-      task: `FIX VALIDATION ERRORS in previous changes:\n\n${validationErrors}\n\nFiles changed: ${changedFiles.join(", ")}`,
-      expected_output: "Fix the errors and ensure lint/build/tests pass.",
-    },
-  };
-
-  return executeOpenClawLoop(correctionParams);
 }
 
 async function executeOpenClawLoop(params: OpenClawLoopParams): Promise<OpenClawExecutionResult> {
@@ -1054,60 +262,7 @@ async function executeOpenClawLoop(params: OpenClawLoopParams): Promise<OpenClaw
     lastResponse: null,
   };
 
-  while (true) {
-    const elapsed = performance.now() - startTime;
-    if (elapsed >= config.taskTimeoutMs) {
-      logger.warn(
-        { elapsed, timeout: config.taskTimeoutMs, iterations: state.iterationsUsed },
-        "OpenClaw task timeout reached",
-      );
-      return buildTimeoutResult(state);
-    }
-
-    const budgetError = checkBudgetExceeded(state, config);
-    if (budgetError) {
-      logger.warn(
-        { reason: budgetError, iterations: state.iterationsUsed, tokens: state.totalTokensUsed },
-        "OpenClaw budget limit reached",
-      );
-      return buildBudgetExceededResult(state, budgetError);
-    }
-
-    const outcome = await processIteration(state, ctx);
-    if (outcome.done) return outcome.result;
-
-    if (state.iterationsUsed > 0 && state.iterationsUsed % SLIDING_WINDOW_THRESHOLD === 0) {
-      pruneConversationHistory(state);
-    }
-  }
-}
-
-function buildTimeoutResult(state: ToolLoopState): OpenClawExecutionResult {
-  return {
-    success: false,
-    status: "FAILURE",
-    description: "Task timed out — partial changes will be synced back if any",
-    filesChanged: [],
-    totalTokensUsed: state.totalTokensUsed,
-    iterationsUsed: state.iterationsUsed,
-    validations: DEFAULT_VALIDATIONS,
-    correctionCycles: 0,
-    error: "Task execution timed out",
-  };
-}
-
-function buildBudgetExceededResult(state: ToolLoopState, reason: string): OpenClawExecutionResult {
-  return {
-    success: false,
-    status: "FAILURE",
-    description: `Budget limit: ${reason}. Partial changes will be synced back if any.`,
-    filesChanged: [],
-    totalTokensUsed: state.totalTokensUsed,
-    iterationsUsed: state.iterationsUsed,
-    validations: DEFAULT_VALIDATIONS,
-    correctionCycles: 0,
-    error: reason,
-  };
+  return runToolLoop(state, ctx);
 }
 
 export function buildForgeCodeOutput(result: OpenClawExecutionResult): ForgeCodeOutput {

@@ -7,33 +7,18 @@ import type {
   ClaudeCliLoopParams,
   SpawnOptions,
 } from "./claudeCliTypes.js";
-import { MAX_CORRECTION_CYCLES, MAX_REVIEW_CORRECTION_ATTEMPTS, PHASE_TOOL_SETS, PHASE_MAX_TURNS } from "./claudeCliTypes.js";
+import { MAX_CORRECTION_CYCLES, MAX_REVIEW_CORRECTION_ATTEMPTS } from "./claudeCliTypes.js";
 import { spawnClaudeCli } from "./claudeCliProcess.js";
 import { parseClaudeCliOutput, extractTokensUsed, extractCostUsd } from "./claudeCliOutputParser.js";
-import { detectChangedFiles, buildPrompt, buildPlanningPrompt, buildImplementationPrompt, buildTestingPrompt, writeClaudeMd } from "./claudeCliContext.js";
+import { detectChangedFiles, buildPrompt, writeClaudeMd } from "./claudeCliContext.js";
 import type { ClaudeCliInstructionsContext } from "./claudeCliInstructions.js";
 
-function normalizeErrorSignature(errorOutput: string): string {
-  return errorOutput
-    .split("\n")
-    .map((line) => line.replace(/\d+/g, "N").replace(/\s+/g, " ").trim())
-    .filter((line) => line.length > 10)
-    .sort()
-    .join("|");
-}
-
-function computeErrorSimilarity(prev: string, current: string): number {
-  if (prev === current) return 1;
-  if (!prev || !current) return 0;
-  const prevParts = new Set(prev.split("|"));
-  const currentParts = new Set(current.split("|"));
-  let overlap = 0;
-  for (const part of currentParts) {
-    if (prevParts.has(part)) overlap++;
-  }
-  const total = Math.max(prevParts.size, currentParts.size);
-  return total > 0 ? overlap / total : 0;
-}
+export {
+  executePlanningPhase,
+  executeImplementationWithPlan,
+  executeTestingPhase,
+} from "./claudeCliPhases.js";
+export type { PlanningPhaseResult } from "./claudeCliPhases.js";
 
 export async function executeClaudeCliTask(
   params: ClaudeCliLoopParams,
@@ -65,15 +50,10 @@ export async function executeClaudeCliTask(
 
   logger.info(
     {
-      exitCode: cliResult.exitCode,
-      tokensUsed,
-      costUsd,
-      numTurns: parsed.num_turns,
-      durationMs: parsed.duration_ms,
-      sessionId: parsed.session_id,
-      hasResult: Boolean(parsed.result),
-      elapsed,
-      traceId,
+      exitCode: cliResult.exitCode, tokensUsed, costUsd,
+      numTurns: parsed.num_turns, durationMs: parsed.duration_ms,
+      sessionId: parsed.session_id, hasResult: Boolean(parsed.result),
+      elapsed, traceId,
     },
     "Claude CLI execution completed",
   );
@@ -86,49 +66,14 @@ export async function executeClaudeCliTask(
   }
 
   if (hasFailed) {
-    const errorMessage = parsed.result || cliResult.stderr || "Claude CLI execution failed (no output)";
-    const isTimeout = cliResult.exitCode === 143;
-
-    params.emitter?.error("forge", "forge:cli_failed", isTimeout
-      ? `Claude CLI timed out after ${Math.round(config.timeoutMs / 1000)}s`
-      : `Claude CLI failed (exit ${cliResult.exitCode})`, {
-      phase: "cli_execution",
-      metadata: {
-        exitCode: cliResult.exitCode,
-        isTimeout,
-        tokensUsed,
-        costUsd,
-        elapsedMs: elapsed,
-        error: errorMessage.slice(0, 500),
-      },
-    });
-
-    return {
-      success: false,
-      status: "FAILURE",
-      description: "",
-      filesChanged: [],
-      totalTokensUsed: tokensUsed,
-      totalCostUsd: costUsd,
-      iterationsUsed: 1,
-      validations: DEFAULT_VALIDATIONS,
-      correctionCycles: 0,
-      sessionId: parsed.session_id,
-      error: errorMessage,
-    };
+    return buildFailedCliResult(params, cliResult, parsed, tokensUsed, costUsd, elapsed);
   }
 
   const filesChanged = await detectChangedFiles(workspacePath);
 
   params.emitter?.info("forge", "forge:cli_completed", "Claude CLI execution completed", {
     phase: "cli_execution",
-    metadata: {
-      tokensUsed,
-      costUsd,
-      elapsedMs: elapsed,
-      filesChanged: filesChanged.length,
-      sessionId: parsed.session_id,
-    },
+    metadata: { tokensUsed, costUsd, elapsedMs: elapsed, filesChanged: filesChanged.length, sessionId: parsed.session_id },
   });
 
   if (filesChanged.length > 0) {
@@ -139,216 +84,60 @@ export async function executeClaudeCliTask(
   }
 
   return {
-    success: true,
-    status: "SUCCESS",
-    description: parsed.result ?? "Task completed via Claude CLI",
-    filesChanged,
-    totalTokensUsed: tokensUsed,
-    totalCostUsd: costUsd,
-    iterationsUsed: 1,
-    validations: DEFAULT_VALIDATIONS,
-    correctionCycles: 0,
-    sessionId: parsed.session_id,
-  };
-}
-
-export interface PlanningPhaseResult {
-  readonly success: boolean;
-  readonly plan: string;
-  readonly tokensUsed: number;
-  readonly costUsd: number;
-  readonly sessionId?: string;
-}
-
-export async function executePlanningPhase(
-  params: ClaudeCliLoopParams,
-  spawnOpts?: SpawnOptions,
-): Promise<PlanningPhaseResult> {
-  const { delegation, workspacePath, config, startTime } = params;
-
-  const prompt = buildPlanningPrompt(delegation.task, delegation.expected_output);
-
-  params.emitter?.info("forge", "forge:planning_started", "Planning phase started (read-only analysis)", {
-    phase: "planning",
-    metadata: { model: spawnOpts?.model ?? config.model },
-  });
-
-  const planningConfig = {
-    ...config,
-    maxTurns: PHASE_MAX_TURNS.planning,
-    maxBudgetUsd: Math.min(config.maxBudgetUsd, 2),
-  };
-
-  const cliResult = await spawnClaudeCli(planningConfig, workspacePath, prompt, {
-    ...spawnOpts,
-    allowedTools: PHASE_TOOL_SETS.planning,
-    maxTurnsOverride: PHASE_MAX_TURNS.planning,
-    emitter: params.emitter,
-  });
-
-  const parsed = parseClaudeCliOutput(cliResult.stdout);
-  const tokensUsed = extractTokensUsed(parsed);
-  const costUsd = extractCostUsd(parsed);
-  const elapsed = Math.round(performance.now() - startTime);
-
-  logger.info(
-    { exitCode: cliResult.exitCode, tokensUsed, costUsd, elapsed, phase: "planning" },
-    "Planning phase completed",
-  );
-
-  if (parsed.is_error || (cliResult.exitCode !== 0 && !parsed.result)) {
-    params.emitter?.warn("forge", "forge:planning_failed", "Planning phase failed, proceeding without plan", {
-      phase: "planning",
-      metadata: { exitCode: cliResult.exitCode, error: (parsed.result ?? cliResult.stderr ?? "").slice(0, 300) },
-    });
-
-    return { success: false, plan: "", tokensUsed, costUsd, sessionId: parsed.session_id };
-  }
-
-  const plan = parsed.result ?? "";
-
-  params.emitter?.info("forge", "forge:planning_completed", "Planning phase completed", {
-    phase: "planning",
-    metadata: { planLength: plan.length, tokensUsed, costUsd },
-  });
-
-  return { success: true, plan, tokensUsed, costUsd, sessionId: parsed.session_id };
-}
-
-export async function executeImplementationWithPlan(
-  params: ClaudeCliLoopParams,
-  executionPlan: string,
-  spawnOpts?: SpawnOptions,
-): Promise<ClaudeCliExecutionResult> {
-  const { delegation, workspacePath, config, startTime, traceId } = params;
-
-  const prompt = buildImplementationPrompt(delegation.task, delegation.expected_output, executionPlan);
-
-  params.emitter?.info("forge", "forge:cli_spawned", `Implementation phase (${spawnOpts?.model ?? config.model}) with execution plan`, {
-    phase: "cli_execution",
-    metadata: {
-      model: spawnOpts?.model ?? config.model,
-      maxTurns: config.maxTurns,
-      hasPlan: true,
-    },
-  });
-
-  const cliResult = await spawnClaudeCli(config, workspacePath, prompt, {
-    ...spawnOpts,
-    allowedTools: PHASE_TOOL_SETS.implementation,
-    emitter: params.emitter,
-  });
-
-  const parsed = parseClaudeCliOutput(cliResult.stdout);
-  const tokensUsed = extractTokensUsed(parsed);
-  const costUsd = extractCostUsd(parsed);
-  const elapsed = Math.round(performance.now() - startTime);
-
-  logger.info(
-    { exitCode: cliResult.exitCode, tokensUsed, costUsd, numTurns: parsed.num_turns, sessionId: parsed.session_id, elapsed, traceId },
-    "Implementation phase completed",
-  );
-
-  if (parsed.is_error || (cliResult.exitCode !== 0 && !parsed.result)) {
-    const errorMessage = parsed.result ?? cliResult.stderr ?? "Implementation phase failed";
-    const isTimeout = cliResult.exitCode === 143;
-
-    params.emitter?.error("forge", "forge:cli_failed", isTimeout
-      ? `Implementation timed out after ${Math.round(config.timeoutMs / 1000)}s`
-      : `Implementation failed (exit ${cliResult.exitCode})`, {
-      phase: "cli_execution",
-      metadata: { exitCode: cliResult.exitCode, isTimeout, tokensUsed, costUsd, error: errorMessage.slice(0, 500) },
-    });
-
-    return {
-      success: false, status: "FAILURE", description: "", filesChanged: [],
-      totalTokensUsed: tokensUsed, totalCostUsd: costUsd, iterationsUsed: 1,
-      validations: DEFAULT_VALIDATIONS, correctionCycles: 0, sessionId: parsed.session_id, error: errorMessage,
-    };
-  }
-
-  const filesChanged = await detectChangedFiles(workspacePath);
-
-  params.emitter?.info("forge", "forge:cli_completed", "Implementation phase completed", {
-    phase: "cli_execution",
-    metadata: { tokensUsed, costUsd, elapsedMs: elapsed, filesChanged: filesChanged.length, sessionId: parsed.session_id },
-  });
-
-  return {
     success: true, status: "SUCCESS",
-    description: parsed.result ?? "Task completed via Claude CLI (with plan)",
+    description: parsed.result ?? "Task completed via Claude CLI",
     filesChanged, totalTokensUsed: tokensUsed, totalCostUsd: costUsd,
     iterationsUsed: 1, validations: DEFAULT_VALIDATIONS, correctionCycles: 0,
     sessionId: parsed.session_id,
   };
 }
 
-export async function executeTestingPhase(
+function buildFailedCliResult(
   params: ClaudeCliLoopParams,
-  filesChanged: readonly string[],
-  sessionId?: string,
-  spawnOpts?: SpawnOptions,
-): Promise<ClaudeCliExecutionResult> {
-  const { delegation, workspacePath, config, startTime, traceId } = params;
+  cliResult: { readonly exitCode: number; readonly stderr: string },
+  parsed: { readonly result?: string; readonly session_id?: string },
+  tokensUsed: number,
+  costUsd: number,
+  elapsed: number,
+): ClaudeCliExecutionResult {
+  const errorMessage = parsed.result || cliResult.stderr || "Claude CLI execution failed (no output)";
+  const isTimeout = cliResult.exitCode === 143;
 
-  const prompt = buildTestingPrompt(delegation.task, filesChanged);
-
-  params.emitter?.info("forge", "forge:testing_started", "Testing phase started (writing tests)", {
-    phase: "testing",
-    metadata: { filesCount: filesChanged.length, model: spawnOpts?.model ?? config.model },
-  });
-
-  const testingConfig = {
-    ...config,
-    maxTurns: PHASE_MAX_TURNS.testing,
-    maxBudgetUsd: Math.min(config.maxBudgetUsd, 3),
-  };
-
-  const cliResult = await spawnClaudeCli(testingConfig, workspacePath, prompt, {
-    ...spawnOpts,
-    allowedTools: PHASE_TOOL_SETS.testing,
-    maxTurnsOverride: PHASE_MAX_TURNS.testing,
-    resumeSessionId: sessionId,
-    emitter: params.emitter,
-  });
-
-  const parsed = parseClaudeCliOutput(cliResult.stdout);
-  const tokensUsed = extractTokensUsed(parsed);
-  const costUsd = extractCostUsd(parsed);
-  const elapsed = Math.round(performance.now() - startTime);
-
-  logger.info(
-    { exitCode: cliResult.exitCode, tokensUsed, costUsd, elapsed, phase: "testing", traceId },
-    "Testing phase completed",
-  );
-
-  if (parsed.is_error || (cliResult.exitCode !== 0 && !parsed.result)) {
-    params.emitter?.warn("forge", "forge:testing_failed", "Testing phase failed", {
-      phase: "testing",
-      metadata: { exitCode: cliResult.exitCode, error: (parsed.result ?? cliResult.stderr ?? "").slice(0, 300) },
-    });
-
-    return {
-      success: false, status: "PARTIAL_SUCCESS", description: "", filesChanged: [],
-      totalTokensUsed: tokensUsed, totalCostUsd: costUsd, iterationsUsed: 1,
-      validations: DEFAULT_VALIDATIONS, correctionCycles: 0, sessionId: parsed.session_id,
-    };
-  }
-
-  const testFilesChanged = await detectChangedFiles(workspacePath);
-
-  params.emitter?.info("forge", "forge:testing_completed", "Testing phase completed", {
-    phase: "testing",
-    metadata: { tokensUsed, costUsd, newFiles: testFilesChanged.length },
+  params.emitter?.error("forge", "forge:cli_failed", isTimeout
+    ? `Claude CLI timed out after ${Math.round(params.config.timeoutMs / 1000)}s`
+    : `Claude CLI failed (exit ${cliResult.exitCode})`, {
+    phase: "cli_execution",
+    metadata: { exitCode: cliResult.exitCode, isTimeout, tokensUsed, costUsd, elapsedMs: elapsed, error: errorMessage.slice(0, 500) },
   });
 
   return {
-    success: true, status: "SUCCESS",
-    description: parsed.result ?? "Tests written",
-    filesChanged: testFilesChanged, totalTokensUsed: tokensUsed, totalCostUsd: costUsd,
-    iterationsUsed: 1, validations: DEFAULT_VALIDATIONS, correctionCycles: 0,
-    sessionId: parsed.session_id,
+    success: false, status: "FAILURE", description: "", filesChanged: [],
+    totalTokensUsed: tokensUsed, totalCostUsd: costUsd, iterationsUsed: 1,
+    validations: DEFAULT_VALIDATIONS, correctionCycles: 0,
+    sessionId: parsed.session_id, error: errorMessage,
   };
+}
+
+function normalizeErrorSignature(errorOutput: string): string {
+  return errorOutput
+    .split("\n")
+    .map((line) => line.replaceAll(/\d+/g, "N").replaceAll(/\s+/g, " ").trim())
+    .filter((line) => line.length > 10)
+    .sort((a, b) => a.localeCompare(b))
+    .join("|");
+}
+
+function computeErrorSimilarity(prev: string, current: string): number {
+  if (prev === current) return 1;
+  if (!prev || !current) return 0;
+  const prevParts = new Set(prev.split("|"));
+  const currentParts = new Set(current.split("|"));
+  let overlap = 0;
+  for (const part of currentParts) {
+    if (prevParts.has(part)) overlap++;
+  }
+  const total = Math.max(prevParts.size, currentParts.size);
+  return total > 0 ? overlap / total : 0;
 }
 
 async function executeCorrectionTask(
@@ -365,11 +154,7 @@ async function executeCorrectionTask(
       expected_output: "Fix the errors and ensure lint/build/tests pass.",
     },
   };
-
-  return executeClaudeCliTask(correctionParams, {
-    resumeSessionId: sessionId,
-    model: params.config.fixModel,
-  });
+  return executeClaudeCliTask(correctionParams, { resumeSessionId: sessionId, model: params.config.fixModel });
 }
 
 async function executeReviewCorrectionTask(
@@ -386,11 +171,38 @@ async function executeReviewCorrectionTask(
       expected_output: "Fix the critical review findings. Do not change unrelated code.",
     },
   };
+  return executeClaudeCliTask(correctionParams, { resumeSessionId: sessionId, model: params.config.fixModel });
+}
 
-  return executeClaudeCliTask(correctionParams, {
-    resumeSessionId: sessionId,
-    model: params.config.fixModel,
-  });
+interface CorrectionBreakContext {
+  readonly cycle: number;
+  readonly similarity: number;
+  readonly accumulatedCostUsd: number;
+  readonly initialCostUsd: number;
+  readonly maxCorrectionCostUsd: number;
+  readonly params: ClaudeCliLoopParams;
+}
+
+function shouldStopCorrections(ctx: CorrectionBreakContext): string | null {
+  if (ctx.cycle > 0 && ctx.similarity >= 0.8) {
+    return `circuit_breaker: ${Math.round(ctx.similarity * 100)}% error overlap`;
+  }
+  if (ctx.accumulatedCostUsd >= ctx.params.config.maxTotalCostUsd) {
+    return `cost_ceiling: $${ctx.accumulatedCostUsd.toFixed(2)} >= $${ctx.params.config.maxTotalCostUsd}`;
+  }
+  const correctionCost = ctx.accumulatedCostUsd - ctx.initialCostUsd;
+  if (correctionCost >= ctx.maxCorrectionCostUsd) {
+    return `correction_cost_cap: $${correctionCost.toFixed(2)} >= $${ctx.maxCorrectionCostUsd}`;
+  }
+  const elapsed = performance.now() - ctx.params.startTime;
+  if (elapsed >= ctx.params.config.timeoutMs) {
+    return `timeout: ${Math.round(elapsed)}ms >= ${ctx.params.config.timeoutMs}ms`;
+  }
+  return null;
+}
+
+function hasAnyValidationFailure(validations: { readonly lint: string; readonly build: string; readonly tests: string }): boolean {
+  return validations.lint === "fail" || validations.build === "fail" || validations.tests === "fail";
 }
 
 export async function runCorrectionLoop(
@@ -407,7 +219,6 @@ export async function runCorrectionLoop(
     skipBuild: params.baselineBuildFailed,
     skipTests: params.baselineTestsFailed,
   };
-
   const maxCorrectionCostUsd = Number(process.env.CLAUDE_CLI_MAX_CORRECTION_COST_USD ?? "2");
 
   for (let cycle = 0; cycle < MAX_CORRECTION_CYCLES; cycle++) {
@@ -430,20 +241,6 @@ export async function runCorrectionLoop(
 
     const currentErrorSignature = normalizeErrorSignature(validation.errorOutput);
     const similarity = computeErrorSimilarity(previousErrorSignature, currentErrorSignature);
-
-    if (cycle > 0 && similarity >= 0.8) {
-      params.emitter?.warn("forge", "forge:correction_diminishing_returns",
-        `Correction cycle ${cycle + 1} has ${Math.round(similarity * 100)}% error overlap with previous — stopping`, {
-          phase: "validation",
-          metadata: { similarity, cycle: cycle + 1 },
-        });
-      logger.warn(
-        { similarity, cycle: cycle + 1 },
-        "Correction circuit breaker: same errors persisting, stopping corrections",
-      );
-      break;
-    }
-
     previousErrorSignature = currentErrorSignature;
     correctionCycles++;
 
@@ -452,29 +249,18 @@ export async function runCorrectionLoop(
       metadata: { cycle: correctionCycles, lint: validations.lint, build: validations.build, tests: validations.tests, accumulatedCostUsd },
     });
 
-    if (accumulatedCostUsd >= params.config.maxTotalCostUsd) {
-      params.emitter?.warn("forge", "forge:cost_ceiling_reached", "Cost ceiling reached during corrections", {
-        phase: "validation",
-        metadata: { accumulatedCostUsd, maxTotalCostUsd: params.config.maxTotalCostUsd },
-      });
-      logger.warn(
-        { accumulatedCostUsd, maxTotalCostUsd: params.config.maxTotalCostUsd },
-        "Total cost ceiling reached — stopping correction cycles",
-      );
-      break;
-    }
+    const stopReason = shouldStopCorrections({
+      cycle, similarity, accumulatedCostUsd,
+      initialCostUsd: initialResult.totalCostUsd,
+      maxCorrectionCostUsd, params,
+    });
 
-    const correctionCost = accumulatedCostUsd - initialResult.totalCostUsd;
-    if (correctionCost >= maxCorrectionCostUsd) {
-      params.emitter?.warn("forge", "forge:correction_cost_cap",
-        `Correction cost cap reached ($${correctionCost.toFixed(2)} >= $${maxCorrectionCostUsd})`, {
-          phase: "validation",
-          metadata: { correctionCost, maxCorrectionCostUsd },
-        });
-      logger.warn(
-        { correctionCost, maxCorrectionCostUsd },
-        "Correction cost cap reached — stopping correction cycles",
-      );
+    if (stopReason) {
+      params.emitter?.warn("forge", "forge:correction_stopped", `Stopping corrections: ${stopReason}`, {
+        phase: "validation",
+        metadata: { reason: stopReason, cycle: correctionCycles },
+      });
+      logger.warn({ reason: stopReason, cycle: correctionCycles }, "Correction loop stopped");
       break;
     }
 
@@ -483,26 +269,12 @@ export async function runCorrectionLoop(
       "Validation failed, starting Claude CLI correction cycle",
     );
 
-    const elapsed = performance.now() - params.startTime;
-    if (elapsed >= params.config.timeoutMs) {
-      logger.warn({ elapsed, timeout: params.config.timeoutMs }, "Timeout reached during correction cycle");
-      break;
-    }
-
     if (params.instructionsCtx) {
-      const correctionCtx: ClaudeCliInstructionsContext = {
-        ...params.instructionsCtx,
-        executionPhase: "correction",
-      };
+      const correctionCtx: ClaudeCliInstructionsContext = { ...params.instructionsCtx, executionPhase: "correction" };
       await writeClaudeMd(params.workspacePath, correctionCtx);
     }
 
-    const correctionResult = await executeCorrectionTask(
-      params,
-      validation.errorOutput,
-      currentResult.filesChanged,
-      sessionId,
-    );
+    const correctionResult = await executeCorrectionTask(params, validation.errorOutput, currentResult.filesChanged, sessionId);
 
     accumulatedCostUsd += correctionResult.totalCostUsd;
     const updatedFiles = await detectChangedFiles(params.workspacePath);
@@ -517,10 +289,7 @@ export async function runCorrectionLoop(
     };
   }
 
-  const anyFailed =
-    validations.lint === "fail" || validations.build === "fail" || validations.tests === "fail";
-  const finalStatus: ExecutionStatus = anyFailed ? "PARTIAL_SUCCESS" : "SUCCESS";
-
+  const finalStatus: ExecutionStatus = hasAnyValidationFailure(validations) ? "PARTIAL_SUCCESS" : "SUCCESS";
   return { ...currentResult, status: finalStatus, validations, correctionCycles };
 }
 
@@ -528,13 +297,8 @@ export async function runPostCorrectionReview(
   result: ClaudeCliExecutionResult,
   params: ClaudeCliLoopParams,
 ): Promise<ClaudeCliExecutionResult> {
-  if (!result.success && result.status === "FAILURE") {
-    return result;
-  }
-
-  if (result.filesChanged.length === 0) {
-    return result;
-  }
+  if (!result.success && result.status === "FAILURE") return result;
+  if (result.filesChanged.length === 0) return result;
 
   params.emitter?.info("forge", "forge:review_started", "Heuristic review started", {
     phase: "review",
@@ -545,16 +309,12 @@ export async function runPostCorrectionReview(
   const review = await runHeuristicReview(params.workspacePath, result.filesChanged, stackContext);
 
   if (review.passed) {
-    params.emitter?.info("forge", "forge:review_passed", "Heuristic review passed", {
-      phase: "review",
-    });
+    params.emitter?.info("forge", "forge:review_passed", "Heuristic review passed", { phase: "review" });
     return { ...result, review };
   }
 
   const correctionContext = formatReviewForCorrection(review);
-  if (!correctionContext) {
-    return { ...result, review };
-  }
+  if (!correctionContext) return { ...result, review };
 
   params.emitter?.warn("forge", "forge:review_failed", "Review found CRITICAL issues", {
     phase: "review",
@@ -563,7 +323,7 @@ export async function runPostCorrectionReview(
 
   logger.warn(
     { criticalCount: review.criticalCount, warningCount: review.warningCount },
-    "Heuristic review found CRITICAL issues — triggering Claude CLI correction",
+    "Heuristic review found CRITICAL issues",
   );
 
   let current = result;
@@ -580,17 +340,12 @@ export async function runPostCorrectionReview(
     if (accumulatedCostUsd >= params.config.maxTotalCostUsd) {
       logger.warn(
         { accumulatedCostUsd, maxTotalCostUsd: params.config.maxTotalCostUsd },
-        "Total cost ceiling reached — stopping review corrections",
+        "Total cost ceiling reached",
       );
       break;
     }
 
-    const correctionResult = await executeReviewCorrectionTask(
-      params,
-      correctionContext,
-      current.filesChanged,
-      sessionId,
-    );
+    const correctionResult = await executeReviewCorrectionTask(params, correctionContext, current.filesChanged, sessionId);
 
     accumulatedCostUsd += correctionResult.totalCostUsd;
     const updatedFiles = await detectChangedFiles(params.workspacePath);
