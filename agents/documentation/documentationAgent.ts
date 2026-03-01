@@ -213,7 +213,16 @@ export async function runDocumentationAgent(
   const llmConfig = getLLMConfig();
   const systemPrompt = loadSystemPrompt();
 
-  for (const docFile of DOC_FILES) {
+  for (let i = 0; i < DOC_FILES.length; i++) {
+    if (i > 0 && DOCUMENTATION_AGENT_CONFIG.delayBetweenCallsMs > 0) {
+      const waitSec = DOCUMENTATION_AGENT_CONFIG.delayBetweenCallsMs / 1_000;
+      notify(`Waiting ${String(waitSec)}s before next document (rate limit)...`);
+      await new Promise((resolve) =>
+        setTimeout(resolve, DOCUMENTATION_AGENT_CONFIG.delayBetweenCallsMs),
+      );
+    }
+
+    const docFile = DOC_FILES[i];
     const docType = docFile.replace(".md", "");
     notify(`Generating ${docType} documentation...`);
 

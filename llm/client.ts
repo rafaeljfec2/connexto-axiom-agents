@@ -47,6 +47,24 @@ export function createLLMConfig(): LLMClientConfig {
   };
 }
 
+const BASE_RETRY_DELAY_MS = 2_000;
+const RATE_LIMIT_DELAY_MS = 60_000;
+
+function isRateLimitError(error: Error): boolean {
+  return error.message.includes("429") || error.message.includes("rate_limit");
+}
+
+function getRetryDelay(attempt: number, error: Error): number {
+  if (isRateLimitError(error)) {
+    return RATE_LIMIT_DELAY_MS;
+  }
+  return BASE_RETRY_DELAY_MS * 2 ** (attempt - 1);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function callLLM(config: LLMClientConfig, request: LLMRequest): Promise<LLMResponse> {
   let lastError: Error | undefined;
 
@@ -71,6 +89,12 @@ export async function callLLM(config: LLMClientConfig, request: LLMRequest): Pro
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       logger.warn({ attempt, error: lastError.message }, "LLM call failed");
+
+      if (attempt < config.maxRetries) {
+        const waitMs = getRetryDelay(attempt, lastError);
+        logger.info({ waitMs, attempt }, "Waiting before retry");
+        await delay(waitMs);
+      }
     }
   }
 

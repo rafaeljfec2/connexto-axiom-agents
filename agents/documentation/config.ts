@@ -5,9 +5,10 @@ export const DOCUMENTATION_AGENT_CONFIG = {
   model: "claude-sonnet-4-20250514",
   maxOutputTokens: 8192,
   timeoutMs: 120_000,
-  maxRetries: 2,
+  maxRetries: 3,
   maxContextTokens: 100_000,
   chunkSizeChars: 300_000,
+  delayBetweenCallsMs: 15_000,
 } as const;
 
 export const DOC_FILES = [
