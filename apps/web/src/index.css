@@ -160,22 +160,22 @@
 
 .kanban-prio-low {
   background-color: #f3f4f6;
-  color: #6b7280;
+  color: #4b5563;
 }
 
 .kanban-prio-medium {
   background-color: #eff6ff;
-  color: #2563eb;
+  color: #1d4ed8;
 }
 
 .kanban-prio-high {
   background-color: #fffbeb;
-  color: #d97706;
+  color: #b45309;
 }
 
 .kanban-prio-critical {
   background-color: #fef2f2;
-  color: #dc2626;
+  color: #b91c1c;
 }
 
 .dark {
